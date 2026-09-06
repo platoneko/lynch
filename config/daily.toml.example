@@ -1,0 +1,12 @@
+# Optional. Default webhook resolution order:
+#   1) env FEISHU_ALERT_WEBHOOK  (same as ../invest)
+#   2) this file [feishu].webhook
+#   3) ../invest/config/policies.toml [alerts].feishu_webhook
+# Prefer (1) or (3); only copy this file if you need a lynch-only override.
+
+[feishu]
+# webhook = "https://open.feishu.cn/open-apis/bot/v2/hook/<TOKEN>"
+
+[notify]
+# Daily digest always sent. Zone change vs previous bands JSON → @所有人
+# (handled in scripts/daily_bands.py; no knobs required)

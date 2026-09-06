@@ -2,11 +2,14 @@
 .mcp.json
 config/mcporter.json
 
+# Daily cron secrets (see config/daily.toml.example)
+config/daily.toml
+
 # Personal scratch — never track
 _local/
 
-# Eval output cache
-output/bands/
+# Eval output cache / daily artifacts
+output/
 
 # Python
 __pycache__/

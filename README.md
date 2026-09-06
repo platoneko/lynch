@@ -47,6 +47,30 @@ Agent 应加载 skill **`sediment-framework`**：**先持续对话**对齐分类
 
 细则与语义见 `AGENTS.md`。单票如何得到 L/M/H 写在各自 `frameworks/*.md`（如 `INTC.US` 为不对称 SOTP）。
 
-## 尚未做
+## 日报价带 + 飞书
 
-Cron 定期演算价带、飞书跨带推送、完整 `eval/` 脚本——见 `_local/drafts/2026-08-30/lynch-design.md`。
+每天扫 `frameworks/*.md` 的 \(L/M/H\)，用 Longbridge 常规 `last` 归 zone，写入 `output/bands/<TICKER>.json`（gitignore），并飞书推送：
+
+- **每天**：一条飞书 **post 富文本**全池日报，形如  
+  `🟢  0700.HK   stalwart              深度折价`
+- **跨带**（相对上次 bands 的 `zone` 变化，且非首次）：另发一条 post，带 `@所有人`
+
+```bash
+# dry-run：不写盘、不 POST
+python3 scripts/daily_bands.py --dry-run
+
+# 实跑：默认复用 ../invest 的飞书 webhook（policies.toml [alerts].feishu_webhook）
+# 也可设 FEISHU_ALERT_WEBHOOK，或在 config/daily.toml 覆盖（见 example）
+python3 scripts/daily_bands.py
+
+# 只算价带、不推飞书
+python3 scripts/daily_bands.py --no-notify
+```
+
+安装工作日 cron（默认 `7:30` 本机时区，脚本内 as_of 用 `Asia/Shanghai`）：
+
+```bash
+./_local/tmp/install-lynch-daily-cron.sh
+```
+
+**MUST NOT** 让日报改写 `frameworks/*.md`。单票完整公式校验仍用 `python3 eval/<TICKER>.py`。

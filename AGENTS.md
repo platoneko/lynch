@@ -61,6 +61,8 @@
 标的文档 **MUST** 输出锚点 \(L/M/H\)、切点 \(A/B\)、以及**填入本票数字的五档价格区间表**与现行 `zone` id。  
 **MUST NOT** 在标的文档重复本节约语义长文；规则真源在本节，标的文档只落数字区间。
 
+日报：`scripts/daily_bands.py` 只读框架锚点 + Longbridge 现价 → 写 `output/bands/` → 飞书（**每天都发**；跨带 `@所有人`）。**MUST NOT** 回写框架 MD。
+
 ## 密钥与本地
 
 - **MUST NOT** 提交 `.mcp.json`、`config/mcporter.json`、`_local/`
