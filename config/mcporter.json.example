@@ -1,0 +1,11 @@
+{
+    "mcpServers": {
+        "wisburg": {
+            "baseUrl": "https://mcp.wisburg.com/mcp",
+            "headers": {
+                "Authorization": "Bearer <WISBURG_MCP_TOKEN>"
+            }
+        }
+    },
+    "imports": []
+}

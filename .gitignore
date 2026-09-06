@@ -1,0 +1,13 @@
+# Local MCP credentials (see .mcp.json.example)
+.mcp.json
+config/mcporter.json
+
+# Personal scratch — never track
+_local/
+
+# Eval output cache
+output/bands/
+
+# Python
+__pycache__/
+*.py[cod]

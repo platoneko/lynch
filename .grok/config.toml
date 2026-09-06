@@ -1,0 +1,10 @@
+# Project-scoped Grok config for lynch
+
+[skills]
+# Also discovered via .claude/skills/ symlinks; explicit path as belt-and-suspenders
+paths = ["/home/neko/plat1ko/agent/finance-skills/skills"]
+
+# Do NOT declare [mcp_servers.wisburg] here without headers.
+# Project TOML fully replaces user TOML / .mcp.json for the same name (no field merge).
+# A headerless project entry makes handshake succeed but tools/call return
+# "No API key provided". Auth lives in gitignored .mcp.json and/or ~/.grok/config.toml.

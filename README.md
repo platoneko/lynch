@@ -1,0 +1,52 @@
+# lynch
+
+长线投资的**估值框架沉淀**仓库：林奇分类 → 专属属性与可证伪假设 → 可复现演算块。  
+标的由你指定；挖掘在 [`../invest`](../invest)。
+
+## 怎么沉淀一只票
+
+在本仓库打开 Claude / Grok / Codex，然后任选：
+
+- 说：`给 INTC.US 写估值框架` / `按林奇沉淀紫金的框架` / `财报后更新 INTC.US 假设`
+- 或显式：`/sediment-framework` · `/lynch-framework`
+
+Agent 应加载 skill **`sediment-framework`**：**先持续对话**对齐分类 / thesis / 主尺 / 假设 / 价带公式；你明确说「可以落盘」后，才按模板写入：
+
+- `frameworks/<TICKER>.md` — 真源（题头含林奇类 + 主尺一行）
+
+模板：`frameworks/_TEMPLATE.md`。协作硬约束：`AGENTS.md`。  
+标的池 = 扫 `frameworks/*.md`（排除 `_` 前缀）；**不**维护 `universe.yaml`。
+
+## 目录
+
+| 路径 | 说明 |
+|------|------|
+| `frameworks/` | 单票框架（题头索引 + 现行结论 + Assumptions + Changelog） |
+| `.claude/skills/sediment-framework/` | 落盘流程 skill（中文） |
+| `.claude/skills/*` | finance-skills 软链（取数） |
+| `.mcp.json` | Wisburg MCP（本地，gitignore） |
+| `_local/` | 个人草稿，不入库 |
+
+## 林奇六类
+
+`slow_grower` · `stalwart` · `fast_grower` · `cyclical` · `turnaround` · `asset_play`  
+
+主类必填；次类可选且仍属六类。专属叙事只写在框架正文。
+
+## 五档价带（项目统一）
+
+框架算出锚点 \(L < M < H\)，用中点切成五档 zone：
+
+| zone | 中文 | 区间 |
+|------|------|------|
+| `deep_discount` | 深度折价 | \(P < L\) |
+| `conservative` | 保守 | \([L,(L+M)/2)\) |
+| `neutral` | 中性 | \([(L+M)/2,(M+H)/2)\) |
+| `optimistic` | 乐观 | \([(M+H)/2,H]\) |
+| `stretched` | 叙事溢价 | \(P > H\) |
+
+细则与语义见 `AGENTS.md`。单票如何得到 L/M/H 写在各自 `frameworks/*.md`（如 `INTC.US` 为不对称 SOTP）。
+
+## 尚未做
+
+Cron 定期演算价带、飞书跨带推送、完整 `eval/` 脚本——见 `_local/drafts/2026-08-30/lynch-design.md`。
