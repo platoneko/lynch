@@ -8,6 +8,9 @@ config/daily.toml
 # Personal scratch — never track
 _local/
 
+# neige session state when `just start` runs with cwd = this repo
+.neige/
+
 # Eval output cache / daily artifacts
 output/
 
