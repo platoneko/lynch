@@ -79,10 +79,10 @@ def _pad_display(s: str, width: int) -> str:
     return s + " " * max(1, width - _display_width(s))
 
 
-def format_pool_row(r: Row) -> str:
+def format_pool_row(r: Row, *, sym_width: int = 22) -> str:
     """🟢  腾讯控股（0700.HK）  绩优              深度折价"""
     emoji = zone_emoji(r.zone)
-    sym_col = _pad_display(row_symbol(r.meta), 22)
+    sym_col = _pad_display(row_symbol(r.meta), sym_width)
     lynch_col = _pad_display(r.meta.lynch_label_cn, 16)
     return f"{emoji}  {sym_col}{lynch_col} {zone_label(r.zone)}"
 
@@ -90,7 +90,17 @@ def format_pool_row(r: Row) -> str:
 def build_daily_post(rows: list[Row], *, as_of_local: str) -> tuple[str, list[str]]:
     """Rich-text daily digest lines (Feishu post body)."""
     title = f"lynch 价带日报 · {as_of_local}"
-    return title, [format_pool_row(r) for r in rows]
+    # Column width follows this run's widest name; a fixed 22 shifted the
+    # Lynch column on long names like 阿里巴巴集团（9988.HK）.
+    width = max((_display_width(row_symbol(r.meta)) for r in rows), default=20) + 2
+    lines = [format_pool_row(r, sym_width=width) for r in rows]
+    first_run = sum(1 for r in rows if "first_run" in r.notes)
+    if first_run:
+        lines.append("")
+        lines.append(
+            f"⚠️ first_run {first_run}/{len(rows)}——本机无历史 bands，跨带告警本次不会触发"
+        )
+    return title, lines
 
 
 def build_cross_post(crosses: list[Row], *, as_of_local: str) -> tuple[str, list[str]]:
@@ -127,16 +137,35 @@ def _send_post(title: str, lines: list[str], *, at_all: bool, dry_run: bool) -> 
 
 
 def run(*, dry_run: bool, notify: bool, bands_dir: Path | None) -> int:
-    metas = load_all_frameworks()
-    symbols = [m.ticker for m in metas]
-    quotes = fetch_quotes(symbols)
+    # A parse failure or a quote failure used to kill the cron before it could
+    # say so; both now degrade to an alert / per-ticker error instead.
+    try:
+        metas = load_all_frameworks()
+    except Exception as e:  # noqa: BLE001
+        log.error("framework parse failed: %s", e)
+        _send_post(
+            f"lynch 价带日报 · 解析失败 · {datetime.now(TZ).strftime('%Y-%m-%d %H:%M %Z')}",
+            ["【框架解析失败，本次未出日报】", str(e)],
+            at_all=False,
+            dry_run=dry_run or not notify,
+        )
+        return 2
 
+    symbols = [m.ticker for m in metas]
     rows: list[Row] = []
     errors: list[str] = []
+    try:
+        quotes = fetch_quotes(symbols, allow_missing=True)
+    except Exception as e:  # noqa: BLE001
+        log.error("quote fetch failed: %s", e)
+        quotes = {}
+        errors.append(f"报价整体失败: {e}")
 
     for meta in metas:
         notes: list[str] = []
         try:
+            if meta.ticker not in quotes:
+                raise KeyError("longbridge 未返回报价（停牌/代码变更/接口异常）")
             q = quotes[meta.ticker]
             price = q.last
             zone = zone_of(price, meta.L, meta.M, meta.H)
