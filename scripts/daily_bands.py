@@ -24,7 +24,8 @@ from eval.lib.bands_io import build_record, read_previous, write_bands  # noqa: 
 from eval.lib.feishu import send_post  # noqa: E402
 from eval.lib.frameworks import FrameworkMeta, load_all_frameworks  # noqa: E402
 from eval.lib.price import fetch_quotes  # noqa: E402
-from eval.lib.zones import zone_emoji, zone_label, zone_of  # noqa: E402
+from eval.lib.zones import zone_bound_edges, zone_emoji, zone_label, zone_of  # noqa: E402
+
 
 log = logging.getLogger("daily_bands")
 TZ = ZoneInfo("Asia/Shanghai")
@@ -45,12 +46,33 @@ def _as_of_iso() -> str:
     return datetime.now(TZ).isoformat(timespec="seconds")
 
 
-def _fmt_price(price: float, currency: str) -> str:
+def _fmt_num(price: float) -> str:
+    """Same precision as Feishu price display (≥100 → 1dp, else 2dp)."""
     if price >= 100:
-        s = f"{price:.1f}"
-    else:
-        s = f"{price:.2f}"
-    return f"{s} {currency}"
+        return f"{price:.1f}"
+    return f"{price:.2f}"
+
+
+def _fmt_price(price: float, currency: str) -> str:
+    return f"{_fmt_num(price)} {currency}"
+
+
+def format_zone_interval(price: float, L: float, M: float, H: float, zone: str, currency: str) -> str:
+    """Current-zone bounds as Feishu tail: `435.4 < 470.2 HKD` / `L ≤ P < A HKD`."""
+    shape, lo, hi = zone_bound_edges(zone, L, M, H)
+    p = _fmt_num(price)
+    if shape == "open_below":
+        assert hi is not None
+        return f"{p} < {_fmt_num(hi)} {currency}"
+    if shape == "open_above":
+        assert lo is not None
+        return f"{_fmt_num(lo)} < {p} {currency}"
+    assert lo is not None and hi is not None
+    if shape == "half_open":
+        return f"{_fmt_num(lo)} ≤ {p} < {_fmt_num(hi)} {currency}"
+    if shape == "closed":
+        return f"{_fmt_num(lo)} ≤ {p} ≤ {_fmt_num(hi)} {currency}"
+    raise ValueError(f"unknown shape: {shape}")
 
 
 _HA_SUFFIXES = (".HK", ".SH", ".SZ", ".SS")
@@ -80,11 +102,14 @@ def _pad_display(s: str, width: int) -> str:
 
 
 def format_pool_row(r: Row, *, sym_width: int = 22) -> str:
-    """🟢  腾讯控股（0700.HK）  绩优              深度折价"""
+    """🟢  腾讯控股（0700.HK）  绩优  深度折价  ·  435.4 < 470.2 HKD"""
     emoji = zone_emoji(r.zone)
     sym_col = _pad_display(row_symbol(r.meta), sym_width)
     lynch_col = _pad_display(r.meta.lynch_label_cn, 16)
-    return f"{emoji}  {sym_col}{lynch_col} {zone_label(r.zone)}"
+    interval = format_zone_interval(
+        r.price, r.meta.L, r.meta.M, r.meta.H, r.zone, r.meta.currency
+    )
+    return f"{emoji}  {sym_col}{lynch_col} {zone_label(r.zone)}  ·  {interval}"
 
 
 def build_daily_post(rows: list[Row], *, as_of_local: str) -> tuple[str, list[str]]:

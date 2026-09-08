@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from eval.lib.frameworks import load_all_frameworks, load_framework
-from eval.lib.zones import cut_points, zone_of
+from eval.lib.zones import cut_points, zone_bound_edges, zone_of
 
 
 class ZoneTests(unittest.TestCase):
@@ -24,6 +24,15 @@ class ZoneTests(unittest.TestCase):
         self.assertEqual(zone_of(30.0, L, M, H), "optimistic")
         self.assertEqual(zone_of(40.0, L, M, H), "optimistic")
         self.assertEqual(zone_of(40.01, L, M, H), "stretched")
+
+    def test_zone_bound_edges(self) -> None:
+        L, M, H = 10.0, 20.0, 40.0
+        A, B = cut_points(L, M, H)
+        self.assertEqual(zone_bound_edges("deep_discount", L, M, H), ("open_below", None, L))
+        self.assertEqual(zone_bound_edges("conservative", L, M, H), ("half_open", L, A))
+        self.assertEqual(zone_bound_edges("neutral", L, M, H), ("half_open", A, B))
+        self.assertEqual(zone_bound_edges("optimistic", L, M, H), ("closed", B, H))
+        self.assertEqual(zone_bound_edges("stretched", L, M, H), ("open_above", H, None))
 
 
 class ParseTests(unittest.TestCase):
