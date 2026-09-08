@@ -28,6 +28,10 @@ _ANCHOR_SLASH = re.compile(
 )
 
 _CURRENCY = re.compile(r"（(USD|HKD|CNY|TWD)[^）]*）|\((USD|HKD|CNY|TWD)[^)]*\)")
+# 中文写法也认，否则「（人民币）」会退回全文扫描并被无关括注劫持
+_CURRENCY_CN = {"人民币": "CNY", "港元": "HKD", "港币": "HKD", "美元": "USD", "新台币": "TWD"}
+# 文件名后缀兜底：市场决定计价币种
+_SUFFIX_CCY = {".HK": "HKD", ".US": "USD", ".SH": "CNY", ".SZ": "CNY", ".SS": "CNY"}
 _TITLE = re.compile(r"^#\s+(\S+)\s+[—–-]\s+(.+)$", re.MULTILINE)
 _EVAL_PTR = re.compile(r"eval:\s*(eval/\S+\.py)")
 _LYNCH = re.compile(
@@ -100,33 +104,47 @@ def _parse_anchors(md: str) -> tuple[float, float, float]:
         if nxt:
             outputs = outputs[: nxt.start() + 1]
 
-    for block in (outputs, md):
-        matches = list(_ANCHOR_BOLD.finditer(block))
-        if matches:
-            g = matches[-1]
-            return float(g.group(1)), float(g.group(2)), float(g.group(3))
-        matches = list(_ANCHOR_SLASH.finditer(block))
-        if matches:
-            g = matches[-1]
-            return float(g.group(1)), float(g.group(2)), float(g.group(3))
+    # An Outputs section carrying two L/M/H triples (e.g. a sensitivity row) is
+    # ambiguous: silently taking one of them is how the daily digest would
+    # broadcast the wrong band. Refuse instead.
+    for block, where in ((outputs, "### Outputs"), (md, "whole document")):
+        for rx in (_ANCHOR_BOLD, _ANCHOR_SLASH):
+            matches = list(rx.finditer(block))
+            if len(matches) > 1:
+                found = ", ".join(f"{m.group(1)}/{m.group(2)}/{m.group(3)}" for m in matches)
+                raise ValueError(
+                    f"ambiguous L/M/H anchors in {where}: {len(matches)} triples ({found})"
+                )
+            if matches:
+                g = matches[0]
+                return float(g.group(1)), float(g.group(2)), float(g.group(3))
     raise ValueError("cannot parse L/M/H anchors")
 
 
 def _parse_currency(md: str) -> str:
-    # Prefer 价带锚点 line
+    """Currency of the anchors. Never guesses USD — an unlabelled band is an error."""
+    tm = re.search(r"^#\s+(\S+)", md, re.M)
+    ticker = tm.group(1) if tm else ""
+
+    # 1) the 价带锚点 / 五档区间 line is the authoritative label
     for line in md.splitlines():
-        if "价带锚点" in line or "本票价格区间（USD）" in line:
+        if "价带锚点" in line or "本票价格区间" in line:
             m = _CURRENCY.search(line)
             if m:
                 return m.group(1) or m.group(2)
-    m = _CURRENCY.search(md)
-    if m:
-        return m.group(1) or m.group(2)
-    if ".HK" in (re.search(r"^#\s+(\S+)", md, re.M).group(1) if re.search(r"^#\s+(\S+)", md, re.M) else ""):
-        return "HKD"
-    if ".US" in (re.search(r"^#\s+(\S+)", md, re.M).group(1) if re.search(r"^#\s+(\S+)", md, re.M) else ""):
-        return "USD"
-    return "USD"
+            for cn, code in _CURRENCY_CN.items():
+                if cn in line:
+                    return code
+
+    # 2) market suffix — a Shanghai listing is priced in CNY whatever the prose says
+    for suffix, code in _SUFFIX_CCY.items():
+        if ticker.endswith(suffix):
+            return code
+
+    raise ValueError(
+        f"{ticker or md[:40]!r}: cannot determine currency — label the 价带锚点 line "
+        f"(e.g. 「价带锚点（CNY）」) or use a market-suffixed ticker"
+    )
 
 
 def load_framework(path: Path) -> FrameworkMeta:
