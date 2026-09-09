@@ -40,6 +40,7 @@ class Row:
     crossed: bool
     notes: list[str]
     record: dict
+    option_zone: str | None = None
 
 
 def _as_of_iso() -> str:
@@ -102,14 +103,22 @@ def _pad_display(s: str, width: int) -> str:
 
 
 def format_pool_row(r: Row, *, sym_width: int = 22) -> str:
-    """🟢  腾讯控股（0700.HK）  绩优  深度折价  ·  435.4 < 470.2 HKD"""
+    """🟢  腾讯控股（0700.HK）  绩优  深度折价  ·  435.4 < 470.2 HKD
+
+    Tickers carrying an option get a second verdict appended (`+V 🟡中性`):
+    the base deck says whether the price is dear without the option, the
+    corrected one says whether it still is once the option is paid for.
+    """
     emoji = zone_emoji(r.zone)
     sym_col = _pad_display(row_symbol(r.meta), sym_width)
     lynch_col = _pad_display(r.meta.lynch_label_cn, 16)
     interval = format_zone_interval(
         r.price, r.meta.L, r.meta.M, r.meta.H, r.zone, r.meta.currency
     )
-    return f"{emoji}  {sym_col}{lynch_col} {zone_label(r.zone)}  ·  {interval}"
+    row = f"{emoji}  {sym_col}{lynch_col} {zone_label(r.zone)}  ·  {interval}"
+    if r.option_zone:
+        row += f"  ·  +V {zone_emoji(r.option_zone)}{zone_label(r.option_zone)}"
+    return row
 
 
 def build_daily_post(rows: list[Row], *, as_of_local: str) -> tuple[str, list[str]]:
@@ -194,6 +203,8 @@ def run(*, dry_run: bool, notify: bool, bands_dir: Path | None) -> int:
             q = quotes[meta.ticker]
             price = q.last
             zone = zone_of(price, meta.L, meta.M, meta.H)
+            option_band = meta.option_band
+            option_zone = zone_of(price, *option_band) if option_band else None
         except Exception as e:  # noqa: BLE001
             errors.append(f"{meta.ticker}: {e}")
             continue
@@ -235,6 +246,7 @@ def run(*, dry_run: bool, notify: bool, bands_dir: Path | None) -> int:
                 crossed=crossed,
                 notes=notes,
                 record=record,
+                option_zone=option_zone,
             )
         )
 

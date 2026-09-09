@@ -27,6 +27,15 @@ _ANCHOR_SLASH = re.compile(
     re.IGNORECASE,
 )
 
+# Option ceiling: `\(V_{opt}\) = **35.25**`, also `**\(V_{opt}\) = +35.25**`
+_V_OPT = re.compile(r"V_\{?opt\}?\\?\)?\s*[≈=]\s*\*{0,2}\s*\+?([0-9]+(?:\.[0-9]+)?)")
+
+# Per-tier option credit: `\(p_L/p_M/p_H\) = **0 / 0.25 / 1.0**`
+_P_TIERS = re.compile(
+    r"p_L\s*/\s*p_M\s*/\s*p_H\\?\)?\s*[≈=]\s*\*{0,2}\s*"
+    r"([0-9]*\.?[0-9]+)\s*/\s*([0-9]*\.?[0-9]+)\s*/\s*([0-9]*\.?[0-9]+)"
+)
+
 _CURRENCY = re.compile(r"（(USD|HKD|CNY|TWD)[^）]*）|\((USD|HKD|CNY|TWD)[^)]*\)")
 # 中文写法也认，否则「（人民币）」会退回全文扫描并被无关括注劫持
 _CURRENCY_CN = {"人民币": "CNY", "港元": "HKD", "港币": "HKD", "美元": "USD", "新台币": "TWD"}
@@ -70,6 +79,24 @@ class FrameworkMeta:
     eval_script: Path | None
     lynch_primary: str
     lynch_secondary: str | None
+    v_opt: float | None = None
+    p_tiers: tuple[float, float, float] | None = None
+
+    @property
+    def option_band(self) -> tuple[float, float, float] | None:
+        """L/M/H with per-tier option credit, or None if this ticker has no option.
+
+        Needs both V_opt and all three p_k: a ceiling without the per-tier
+        credit says nothing about where the corrected band sits.
+        """
+        if self.v_opt is None or self.p_tiers is None:
+            return None
+        p_l, p_m, p_h = self.p_tiers
+        return (
+            self.L + p_l * self.v_opt,
+            self.M + p_m * self.v_opt,
+            self.H + p_h * self.v_opt,
+        )
 
     @property
     def lynch_label(self) -> str:
@@ -121,6 +148,17 @@ def _parse_anchors(md: str) -> tuple[float, float, float]:
     raise ValueError("cannot parse L/M/H anchors")
 
 
+def _parse_option(md: str) -> tuple[float | None, tuple[float, float, float] | None]:
+    """V_opt and the three per-tier credits; both absent is the common case."""
+    vm = _V_OPT.search(md)
+    pm = _P_TIERS.search(md)
+    v_opt = float(vm.group(1)) if vm else None
+    p_tiers = (
+        (float(pm.group(1)), float(pm.group(2)), float(pm.group(3))) if pm else None
+    )
+    return v_opt, p_tiers
+
+
 def _parse_currency(md: str) -> str:
     """Currency of the anchors. Never guesses USD — an unlabelled band is an error."""
     tm = re.search(r"^#\s+(\S+)", md, re.M)
@@ -158,6 +196,11 @@ def load_framework(path: Path) -> FrameworkMeta:
     L, M, H = _parse_anchors(md)
     if not (L < M < H):
         raise ValueError(f"{ticker}: need L < M < H, got {L}, {M}, {H}")
+    v_opt, p_tiers = _parse_option(md)
+    if p_tiers is not None and v_opt is None:
+        raise ValueError(f"{ticker}: p_L/p_M/p_H given without V_opt")
+    if p_tiers is not None and not all(0.0 <= p <= 1.0 for p in p_tiers):
+        raise ValueError(f"{ticker}: p_L/p_M/p_H out of [0,1], got {p_tiers}")
     currency = _parse_currency(md)
     lm = _LYNCH.search(md)
     if not lm:
@@ -185,6 +228,8 @@ def load_framework(path: Path) -> FrameworkMeta:
         eval_script=ev,
         lynch_primary=lynch_primary,
         lynch_secondary=lynch_secondary,
+        v_opt=v_opt,
+        p_tiers=p_tiers,
     )
 
 
