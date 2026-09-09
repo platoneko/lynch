@@ -10,6 +10,7 @@ Reads frameworks/*.md only. Writes nothing.
 """
 from __future__ import annotations
 
+import math
 import re
 import statistics
 import sys
@@ -23,6 +24,8 @@ from eval.lib.frameworks import FrameworkMeta, lynch_cn, load_all_frameworks  # 
 
 
 _PE_ROW = re.compile(r"^\|\s*(pe_[lmh])\s*\|\s*([0-9.]+)\s*\|", re.MULTILINE)
+_GAMMA_ROW = re.compile(r"^\|\s*gamma_pe\s*\|\s*(-?[0-9.]+)\s*\|", re.MULTILINE)
+_R_ROW = re.compile(r"^\|\s*(r_[a-z0-9_]+)\s*\|\s*([0-9.]+)\s*\|", re.MULTILINE)
 
 
 def _ratios(m: FrameworkMeta) -> tuple[float, float, float]:
@@ -45,6 +48,45 @@ def _pe_ratios(m: FrameworkMeta) -> tuple[float, float] | None:
     return pe_l / pe_m, pe_h / pe_m
 
 
+def _r_tiers(m: FrameworkMeta) -> str:
+    """Which discount-rate tiers this framework's legs sit in (AGENTS.md「永续增长口径」).
+
+    r is picked by the leg's cash-flow nature, so a ticker carrying a contracted
+    leg discounts part of itself at 7% while its neighbours sit at 10%.  That has
+    to be visible here, or its L/M gets read as a scenario difference when it is
+    really a discount-rate one.  Frameworks on a direct pe band name no r and
+    print a blank.  `r_disc` is year-drift discounting, not the perpetuity rate.
+    """
+    rows = _R_ROW.findall(m.path.read_text(encoding="utf-8"))
+    tiers = sorted({float(v) for k, v in rows if not k.startswith("r_disc")})
+    return "/".join(f"{t * 100:.0f}" for t in tiers) if tiers else "—"
+
+
+def _gamma_measured(m: FrameworkMeta) -> float | None:
+    """The framework's measured d log(PE) / d log(EPS), when it has one.
+
+    Present only where someone actually fitted log P on log EPS for that ticker
+    (`600309.SH` A6 is the worked example).  Absent is the common case and is
+    printed as a blank, not a zero — no measurement is not the same claim as a
+    flat one.
+    """
+    hit = _GAMMA_ROW.search(m.path.read_text(encoding="utf-8"))
+    return float(hit.group(1)) if hit else None
+
+
+def _gamma_implied(num_ratio: float, pe_ratio: float) -> float | None:
+    """The gamma the band itself embeds on one side: ln(pe_x/pe_M) / ln(eps_x/eps_M).
+
+    This is the number to read against a measured gamma — a flat band embeds 0,
+    an inverse band a negative, a same-direction band a positive.  It says what
+    the author's multiple policy *assumes* about the market, in the same unit
+    the data can be measured in.
+    """
+    if num_ratio <= 0.0 or abs(math.log(num_ratio)) < 1e-9:
+        return None
+    return math.log(pe_ratio) / math.log(num_ratio)
+
+
 def main() -> int:
     metas = load_all_frameworks()
 
@@ -58,8 +100,8 @@ def main() -> int:
 
         print(f"\n{primary}（{lynch_cn(primary)}）— 同类 L/M 中位 {lm_median:.2f}")
         print(
-            f"  {'ticker':12} {'L/M':>6} {'H/M':>6} {'neutral宽/M':>11}"
-            f"  {'分子比L':>7} {'分子比H':>7}  次类"
+            f"  {'ticker':12} {'L/M':>6} {'H/M':>6} {'neutral宽/M':>11} {'r档':>6}"
+            f"  {'分子比L':>7} {'分子比H':>7}  {'γ隐含L':>7} {'γ隐含H':>7} {'γ实测':>6}  次类"
         )
         for m in group:
             lm, hm, width = _ratios(m)
@@ -68,10 +110,18 @@ def main() -> int:
             # the authors' multiple habits as much as their scenarios (A2e-5).
             num_l = f"{lm / pe[0]:7.2f}" if pe else f"{'—':>7}"
             num_h = f"{hm / pe[1]:7.2f}" if pe else f"{'—':>7}"
+            # ...and the gammas say whether that multiple policy matches what the
+            # market has actually done to this ticker, or only what the author
+            # assumed.  A blank γ实测 means nobody has fitted it yet.
+            g_l = _gamma_implied(lm / pe[0], pe[0]) if pe else None
+            g_h = _gamma_implied(hm / pe[1], pe[1]) if pe else None
+            g_meas = _gamma_measured(m)
+            fmt = lambda g: f"{g:+7.2f}" if g is not None else f"{'—':>7}"  # noqa: E731
+            meas = f"{g_meas:+6.2f}" if g_meas is not None else f"{'—':>6}"
             sub = m.lynch_secondary or "—"
             print(
-                f"  {m.ticker:12} {lm:6.2f} {hm:6.2f} {width:10.0%}"
-                f" {num_l} {num_h}  {sub}"
+                f"  {m.ticker:12} {lm:6.2f} {hm:6.2f} {width:10.0%} {_r_tiers(m):>6}"
+                f" {num_l} {num_h}  {fmt(g_l)} {fmt(g_h)} {meas}  {sub}"
             )
 
     all_lm = [_ratios(m)[0] for m in metas]
@@ -82,6 +132,10 @@ def main() -> int:
         f"H/M {min(all_hm):.2f}–{max(all_hm):.2f}（中位 {statistics.median(all_hm):.2f}）"
     )
     print("散布 MUST 可归因到基本面或林奇分类，MUST NOT 来自构造手法（AGENTS.md「锚点语义」）")
+    print(
+        "γ = dlog(PE)/dlog(EPS)：隐含值是该票倍数政策所假设的（flat=0、反向<0、同向>0），"
+        "实测值来自 §3 `gamma_pe`。两者异号或隐含幅度超出实测，说明倍数政策与实证不符"
+    )
     return 0
 
 
