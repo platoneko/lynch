@@ -51,9 +51,11 @@ Agent 应加载 skill **`sediment-framework`**：**先持续对话**对齐分类
 
 每天扫 `frameworks/*.md` 的 \(L/M/H\)，用 Longbridge 常规 `last` 归 zone，写入 `output/bands/<TICKER>.json`（gitignore），并飞书推送：
 
-- **每天**：一条飞书 **post 富文本**全池日报，形如  
-  `🟢  0700.HK   stalwart              深度折价`
-- **跨带**（相对上次 bands 的 `zone` 变化，且非首次）：另发一条 post，带 `@所有人`
+- **每天**：一条飞书 **post 富文本**全池日报，每票 2–3 行，形如  
+  `🟡 603993.SH 洛阳钼业 19.01 CNY`  
+  `「中性」 L/M/H = 13.51/19.63/23.24`  
+  有 \(V_{opt}>0\) 时再加一行修正带：`「乐观」 +V(66.6) L/M/H = 27.2/71.17/113`
+- **跨带**（相对上次 bands 的底牌 `zone` **或** `option_zone` 变化，且两侧都已有上次读数）：另发一条 post，带 `@所有人`；底牌跨带写 `「中性」 → 「乐观」`，期权跨带写 `+V 「中性」 → 「乐观」`（可同时出现）
 
 ```bash
 # dry-run：不写盘、不 POST

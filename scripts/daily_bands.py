@@ -24,7 +24,7 @@ from eval.lib.bands_io import build_record, read_previous, write_bands  # noqa: 
 from eval.lib.feishu import send_post  # noqa: E402
 from eval.lib.frameworks import FrameworkMeta, load_all_frameworks  # noqa: E402
 from eval.lib.price import fetch_quotes  # noqa: E402
-from eval.lib.zones import zone_bound_edges, zone_emoji, zone_label, zone_of  # noqa: E402
+from eval.lib.zones import zone_emoji, zone_label, zone_of  # noqa: E402
 
 
 log = logging.getLogger("daily_bands")
@@ -41,6 +41,12 @@ class Row:
     notes: list[str]
     record: dict
     option_zone: str | None = None
+    previous_option_zone: str | None = None
+    option_crossed: bool = False
+
+    @property
+    def any_crossed(self) -> bool:
+        return self.crossed or self.option_crossed
 
 
 def _as_of_iso() -> str:
@@ -58,25 +64,29 @@ def _fmt_price(price: float, currency: str) -> str:
     return f"{_fmt_num(price)} {currency}"
 
 
-def format_zone_interval(price: float, L: float, M: float, H: float, zone: str, currency: str) -> str:
-    """Current-zone bounds as Feishu tail: `435.4 < 470.2 HKD` / `L ≤ P < A HKD`."""
-    shape, lo, hi = zone_bound_edges(zone, L, M, H)
-    p = _fmt_num(price)
-    if shape == "open_below":
-        assert hi is not None
-        return f"{p} < {_fmt_num(hi)} {currency}"
-    if shape == "open_above":
-        assert lo is not None
-        return f"{_fmt_num(lo)} < {p} {currency}"
-    assert lo is not None and hi is not None
-    if shape == "half_open":
-        return f"{_fmt_num(lo)} ≤ {p} < {_fmt_num(hi)} {currency}"
-    if shape == "closed":
-        return f"{_fmt_num(lo)} ≤ {p} ≤ {_fmt_num(hi)} {currency}"
-    raise ValueError(f"unknown shape: {shape}")
+def _fmt_anchor(x: float) -> str:
+    """Two decimals, trailing zeros stripped (`27.2`, `246.44`, `113`)."""
+    s = f"{x:.2f}"
+    return s.rstrip("0").rstrip(".") if "." in s else s
 
 
-_HA_SUFFIXES = (".HK", ".SH", ".SZ", ".SS")
+def format_lmh(L: float, M: float, H: float) -> str:
+    return f"L/M/H = {_fmt_anchor(L)}/{_fmt_anchor(M)}/{_fmt_anchor(H)}"
+
+
+def zone_changed(previous: str | None, current: str | None) -> bool:
+    """True only when both sides are known and differ. None = first observation, no alert."""
+    return previous is not None and current is not None and previous != current
+
+
+def credited_option_zone(
+    price: float, meta: FrameworkMeta
+) -> str | None:
+    """Zone on the V-credited band, or None when this ticker has no option to report."""
+    band = meta.option_band
+    if band is None or meta.v_opt is None or meta.v_opt <= 0:
+        return None
+    return zone_of(price, *band)
 
 
 def _short_name(meta: FrameworkMeta) -> str:
@@ -87,47 +97,52 @@ def _short_name(meta: FrameworkMeta) -> str:
     return name or meta.ticker
 
 
-def row_symbol(meta: FrameworkMeta) -> str:
-    """H/A: 简称（code）内联；美股等：裸 code。"""
-    if meta.ticker.endswith(_HA_SUFFIXES):
-        return f"{_short_name(meta)}（{meta.ticker}）"
-    return meta.ticker
+def format_pool_lines(r: Row) -> list[str]:
+    """Per-ticker Feishu block.
 
+    🟡 603993.SH 洛阳钼业 19.01 CNY
+    「中性」 L/M/H = 13.51/19.63/23.24
 
-def _display_width(s: str) -> int:
-    return sum(2 if ord(ch) > 0x7F else 1 for ch in s)
-
-
-def _pad_display(s: str, width: int) -> str:
-    return s + " " * max(1, width - _display_width(s))
-
-
-def format_pool_row(r: Row, *, sym_width: int = 22) -> str:
-    """🟢  腾讯控股（0700.HK）  绩优  深度折价  ·  435.4 < 470.2 HKD
-
-    Tickers carrying an option get a second verdict appended (`+V 🟡中性`):
-    the base deck says whether the price is dear without the option, the
-    corrected one says whether it still is once the option is paid for.
+    Tickers with V_opt > 0 get a third line on the credited band:
+    「乐观」 +V(66.6) L/M/H = 27.2/71.17/113
     """
     emoji = zone_emoji(r.zone)
-    sym_col = _pad_display(row_symbol(r.meta), sym_width)
-    lynch_col = _pad_display(r.meta.lynch_label_cn, 16)
-    interval = format_zone_interval(
-        r.price, r.meta.L, r.meta.M, r.meta.H, r.zone, r.meta.currency
-    )
-    row = f"{emoji}  {sym_col}{lynch_col} {zone_label(r.zone)}  ·  {interval}"
-    if r.option_zone:
-        row += f"  ·  +V {zone_emoji(r.option_zone)}{zone_label(r.option_zone)}"
-    return row
+    title = r.meta.ticker
+    if not r.meta.ticker.endswith(".US"):
+        title = f"{r.meta.ticker} {_short_name(r.meta)}"
+    header = f"{emoji} {title} {_fmt_price(r.price, r.meta.currency)}"
+    lines = [
+        header,
+        f"「{zone_label(r.zone)}」 {format_lmh(r.meta.L, r.meta.M, r.meta.H)}",
+    ]
+    band = r.meta.option_band
+    v_opt = r.meta.v_opt
+    if (
+        band is not None
+        and v_opt is not None
+        and v_opt > 0
+        and r.option_zone
+    ):
+        L2, M2, H2 = band
+        lines.append(
+            f"「{zone_label(r.option_zone)}」 +V({_fmt_anchor(v_opt)}) {format_lmh(L2, M2, H2)}"
+        )
+    return lines
+
+
+def _join_ticker_blocks(blocks: list[list[str]]) -> list[str]:
+    lines: list[str] = []
+    for i, block in enumerate(blocks):
+        if i:
+            lines.append("")
+        lines.extend(block)
+    return lines
 
 
 def build_daily_post(rows: list[Row], *, as_of_local: str) -> tuple[str, list[str]]:
     """Rich-text daily digest lines (Feishu post body)."""
     title = f"lynch 价带日报 · {as_of_local}"
-    # Column width follows this run's widest name; a fixed 22 shifted the
-    # Lynch column on long names like 阿里巴巴集团（9988.HK）.
-    width = max((_display_width(row_symbol(r.meta)) for r in rows), default=20) + 2
-    lines = [format_pool_row(r, sym_width=width) for r in rows]
+    lines = _join_ticker_blocks([format_pool_lines(r) for r in rows])
     first_run = sum(1 for r in rows if "first_run" in r.notes)
     if first_run:
         lines.append("")
@@ -138,19 +153,24 @@ def build_daily_post(rows: list[Row], *, as_of_local: str) -> tuple[str, list[st
 
 
 def build_cross_post(crosses: list[Row], *, as_of_local: str) -> tuple[str, list[str]]:
-    """Zone-change alert lines; caller @所有人 via send_post."""
+    """Zone-change alert lines; caller @所有人 via send_post.
+
+    Base-deck and +V-deck crosses are independent: either one (or both) emits
+    a transition line under the same snapshot block.
+    """
     title = f"lynch 跨带 · {as_of_local}"
-    lines: list[str] = []
+    blocks: list[list[str]] = []
     for r in crosses:
-        prev = r.previous_zone or "?"
-        lines.append(format_pool_row(r))
-        lines.append(
-            f"  {prev} → {r.zone}（{zone_label(prev)} → {zone_label(r.zone)}）· "
-            f"{_fmt_price(r.price, r.meta.currency)}"
-        )
-        L, M, H = r.meta.L, r.meta.M, r.meta.H
-        lines.append(f"  L/M/H = {L:g}/{M:g}/{H:g}")
-    return title, lines
+        block = format_pool_lines(r)
+        if r.crossed:
+            prev = r.previous_zone or "?"
+            block.append(f"「{zone_label(prev)}」 → 「{zone_label(r.zone)}」")
+        if r.option_crossed:
+            prev_o = r.previous_option_zone or "?"
+            cur_o = r.option_zone or "?"
+            block.append(f"+V 「{zone_label(prev_o)}」 → 「{zone_label(cur_o)}」")
+        blocks.append(block)
+    return title, _join_ticker_blocks(blocks)
 
 
 def _send_post(title: str, lines: list[str], *, at_all: bool, dry_run: bool) -> dict:
@@ -203,17 +223,20 @@ def run(*, dry_run: bool, notify: bool, bands_dir: Path | None) -> int:
             q = quotes[meta.ticker]
             price = q.last
             zone = zone_of(price, meta.L, meta.M, meta.H)
-            option_band = meta.option_band
-            option_zone = zone_of(price, *option_band) if option_band else None
+            option_zone = credited_option_zone(price, meta)
         except Exception as e:  # noqa: BLE001
             errors.append(f"{meta.ticker}: {e}")
             continue
 
         prev = read_previous(meta.ticker, bands_dir)
         previous_zone = None
+        previous_option_zone = None
         if prev and isinstance(prev.get("zone"), str):
             previous_zone = prev["zone"]
-        crossed = previous_zone is not None and previous_zone != zone
+        if prev and isinstance(prev.get("option_zone"), str):
+            previous_option_zone = prev["option_zone"]
+        crossed = zone_changed(previous_zone, zone)
+        option_crossed = zone_changed(previous_option_zone, option_zone)
         if previous_zone is None:
             notes.append("first_run")
 
@@ -227,6 +250,8 @@ def run(*, dry_run: bool, notify: bool, bands_dir: Path | None) -> int:
             H=meta.H,
             zone=zone,
             previous_zone=previous_zone,
+            option_zone=option_zone,
+            previous_option_zone=previous_option_zone,
             notes=notes,
             inputs_used={
                 "price_source": "longbridge",
@@ -247,6 +272,8 @@ def run(*, dry_run: bool, notify: bool, bands_dir: Path | None) -> int:
                 notes=notes,
                 record=record,
                 option_zone=option_zone,
+                previous_option_zone=previous_option_zone,
+                option_crossed=option_crossed,
             )
         )
 
@@ -254,7 +281,7 @@ def run(*, dry_run: bool, notify: bool, bands_dir: Path | None) -> int:
         log.error("no rows computed: %s", "; ".join(errors))
         return 2
 
-    crosses = [r for r in rows if r.crossed]
+    crosses = [r for r in rows if r.any_crossed]
     as_of_local = datetime.now(TZ).strftime("%Y-%m-%d %H:%M %Z")
     daily_title, daily_lines = build_daily_post(rows, as_of_local=as_of_local)
     if errors:
