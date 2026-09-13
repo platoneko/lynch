@@ -12,6 +12,12 @@ from pathlib import Path
 FRAMEWORKS_DIR = Path(__file__).resolve().parents[2] / "frameworks"
 AXIS_COWOS = FRAMEWORKS_DIR / "_AXIS.cowos-capacity.md"
 AXIS_CAPEX = FRAMEWORKS_DIR / "_AXIS.ai-capex.md"
+AXIS_AU_CU = FRAMEWORKS_DIR / "_AXIS.fed-path-gold-copper.md"
+AXIS_AL = FRAMEWORKS_DIR / "_AXIS.fed-path-aluminium.md"
+AXIS_LI2CO3 = FRAMEWORKS_DIR / "_AXIS.lithium-carbonate.md"
+AXIS_PHOS = FRAMEWORKS_DIR / "_AXIS.phosphate-chain.md"
+AXIS_AFRICA = FRAMEWORKS_DIR / "_AXIS.africa-corridor.md"
+AXIS_OPTICAL = FRAMEWORKS_DIR / "_AXIS.optical-comms.md"
 
 # §2 column order: 状态 | 分配规则 | NVDA | AMD | AVGO | 其余
 COWOS_PLAYERS = ("NVDA", "AMD", "AVGO", "OTHER")
@@ -150,3 +156,452 @@ def check_capex_constituent(guide_low: float, guide_high: float) -> list[str]:
 def capex_constituent_share(guide_low: float, guide_high: float) -> tuple[float, float]:
     """Printable share-of-pool range for a constituent mount."""
     return guide_low / CAPEX_BASE_2026, guide_high / CAPEX_BASE_2026
+
+
+# --- _AXIS.fed-path-gold-copper ----------------------------------------------
+# §1 rung rows: | **L** | 加息 | **3,942** | **9,431.05** | source_au | source_cu | as-of |
+# Column 2 = gold $/oz, column 3 = copper $/t (0-based).
+_AU_CU_ROW = re.compile(r"^\|\s*\*\*([LMH])\*\*\s*\|")
+
+
+def load_au_cu_rungs(path: Path | None = None) -> dict[str, dict[str, float]]:
+    """{metal: {tier: USD}} for metal in ('au','cu') from the axis §1 table."""
+    md = (path or AXIS_AU_CU).read_text(encoding="utf-8")
+
+    au: dict[str, float] = {}
+    cu: dict[str, float] = {}
+    for line in md.splitlines():
+        m = _AU_CU_ROW.match(line)
+        if not m:
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if len(cells) < 4:
+            raise ValueError(f"gold-copper axis rung {m.group(1)}: expected >=4 columns")
+        tier = m.group(1)
+        # Skip aluminium-style rows that somehow match — require numeric gold col.
+        try:
+            au[tier] = float(cells[2].strip("* ").replace(",", ""))
+            cu[tier] = float(cells[3].strip("* ").replace(",", ""))
+        except ValueError:
+            continue
+
+    for metal, rungs in (("au", au), ("cu", cu)):
+        missing = {"L", "M", "H"} - rungs.keys()
+        if missing:
+            raise ValueError(f"gold-copper axis {metal} rungs missing: {sorted(missing)}")
+        if not (rungs["L"] < rungs["M"] < rungs["H"]):
+            raise ValueError(f"gold-copper axis {metal} rungs not ordered: {rungs}")
+    return {"au": au, "cu": cu}
+
+
+def copper_upside_ratio(path: Path | None = None) -> float:
+    """Copper H/M from the gold-copper axis — aluminium upside must stay below."""
+    cu = load_au_cu_rungs(path)["cu"]
+    return cu["H"] / cu["M"]
+
+
+def check_au_cu_mount(
+    stated_au: tuple[float, float, float],
+    stated_cu: tuple[float, float, float],
+    path: Path | None = None,
+) -> list[str]:
+    """Verify a mounted ticker restates the gold and copper USD rungs."""
+    rungs = load_au_cu_rungs(path)
+    errors: list[str] = []
+    for tier, got in zip(("L", "M", "H"), stated_au):
+        want = rungs["au"][tier]
+        if abs(got - want) > 1e-6:
+            errors.append(f"{tier} gold rung: stated {got:g} vs axis {want:g}")
+    for tier, got in zip(("L", "M", "H"), stated_cu):
+        want = rungs["cu"][tier]
+        if abs(got - want) > 1e-6:
+            errors.append(f"{tier} copper rung: stated {got:g} vs axis {want:g}")
+    return errors
+
+
+# --- _AXIS.lithium-carbonate -------------------------------------------------
+# §1 rung rows: | **L** | 供应过剩回归 | **120,000** | sources | as-of |
+_LI2CO3_ROW = re.compile(r"^\|\s*\*\*([LMH])\*\*\s*\|")
+
+
+def load_li2co3_rungs(path: Path | None = None) -> dict[str, float]:
+    """{tier: battery-grade Li2CO3 CNY per tonne} from the axis §1 table."""
+    md = (path or AXIS_LI2CO3).read_text(encoding="utf-8")
+    rungs: dict[str, float] = {}
+    for line in md.splitlines():
+        m = _LI2CO3_ROW.match(line)
+        if not m:
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if len(cells) < 3:
+            continue
+        try:
+            rungs[m.group(1)] = float(cells[2].strip("* ").replace(",", ""))
+        except ValueError:
+            continue
+    missing = {"L", "M", "H"} - rungs.keys()
+    if missing:
+        raise ValueError(f"lithium-carbonate axis rungs missing: {sorted(missing)}")
+    if not (rungs["L"] < rungs["M"] < rungs["H"]):
+        raise ValueError(f"lithium-carbonate axis rungs not ordered: {rungs}")
+    return rungs
+
+
+def check_li2co3_mount(
+    stated: tuple[float, float, float],
+    path: Path | None = None,
+) -> list[str]:
+    """Verify a mounted ticker restates the Li2CO3 CNY rungs."""
+    rungs = load_li2co3_rungs(path)
+    errors: list[str] = []
+    for tier, got in zip(("L", "M", "H"), stated):
+        want = rungs[tier]
+        if abs(got - want) > 1e-6:
+            errors.append(f"{tier} li2co3 rung: stated {got:g} vs axis {want:g}")
+    return errors
+
+
+# --- _AXIS.fed-path-aluminium ------------------------------------------------
+# §1 rung rows: | **L** | 供应过剩兑现 × … | **4,250** | 19,512 | 2,713 | source | as-of |
+# Column 2 (0-based) is the SHFE smelting spread every mounted ticker reads.
+# Column 3 is the same rung translated to SHFE spot with the cost basket frozen
+# (§1); it is kept only for the copper-upside inequality, which is a statement
+# about price, not margin.  Parse by column: the bolding differs across rows.
+_AL_ROW = re.compile(r"^\|\s*\*\*([LMH])\*\*\s*\|")
+AL_COST_BASKET = 15262.0  # CNY/t, §1: 2026H1 spot 24,141 − GS 2026H1 spread 8,879
+
+
+def load_al_rungs(path: Path | None = None) -> dict[str, dict[str, float]]:
+    """{'spread': {tier: CNY/t}, 'price': {tier: CNY/t}} from the axis §1 table.
+
+    Raises if the two columns do not differ by the frozen cost basket on every
+    rung — the price column is a translation of the spread column, and a rung
+    where they drift apart has been edited on one side only.
+    """
+    md = (path or AXIS_AL).read_text(encoding="utf-8")
+
+    spread: dict[str, float] = {}
+    price: dict[str, float] = {}
+    for line in md.splitlines():
+        m = _AL_ROW.match(line)
+        if not m:
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if len(cells) < 4:
+            raise ValueError(f"axis rung {m.group(1)}: expected >=4 columns")
+        spread[m.group(1)] = float(cells[2].strip("* ").replace(",", ""))
+        price[m.group(1)] = float(cells[3].strip("* ").replace(",", ""))
+
+    missing = {"L", "M", "H"} - spread.keys()
+    if missing:
+        raise ValueError(f"aluminium axis rungs missing: {sorted(missing)}")
+    if not (spread["L"] < spread["M"] < spread["H"]):
+        raise ValueError(f"aluminium spread rungs not ordered: {spread}")
+    for tier in ("L", "M", "H"):
+        if abs(price[tier] - spread[tier] - AL_COST_BASKET) > 1.0:
+            raise ValueError(
+                f"aluminium rung {tier}: price {price[tier]:g} − spread "
+                f"{spread[tier]:g} ≠ cost basket {AL_COST_BASKET:g} (§1)"
+            )
+    return {"spread": spread, "price": price}
+
+
+def check_al_mount(stated: tuple[float, float, float]) -> list[str]:
+    """Verify a mounted ticker restates the axis spread rungs, and that the
+    axis keeps aluminium's modelled price upside below copper's.
+
+    The second check is the whole reason this axis is separate from the gold /
+    copper ladder despite sharing the same Fed-path regimes: aluminium's supply
+    is restartable (EGA has already relit 315 of 1,262 pots) and its deficit is
+    0.68% of demand, so a copper-sized H would be an unearned upside.
+    """
+    rungs = load_al_rungs()
+    spread, price = rungs["spread"], rungs["price"]
+    errors = [
+        f"{tier} smelting spread: stated {got:g} vs axis {spread[tier]:g}"
+        for tier, got in zip(("L", "M", "H"), stated)
+        if abs(got - spread[tier]) > 0.5
+    ]
+
+    cu_ratio = copper_upside_ratio()
+    upside = price["H"] / price["M"]
+    if upside >= cu_ratio:
+        errors.append(
+            f"aluminium price H/M {upside:.4f} >= copper's {cu_ratio:.4f} — "
+            "axis §1 says aluminium's shortage is the softer one"
+        )
+    return errors
+
+
+# --- _AXIS.phosphate-chain ---------------------------------------------------
+# §1 rung rows: | **L** | 管制回归 / 涨价回吐 | **3,330** | 3,536 | source | as-of |
+# Column 2 (0-based) is the MAP rung both mounts read; the DAP column is a
+# parallel observation only.
+_PHOS_ROW = re.compile(r"^\|\s*\*\*([LMH])\*\*\s*\|")
+
+# Axis §2: the two mounts read this ladder through completely different second
+# layers.  Yuntianhua's measured elasticity is 0.049 — a mount claiming to be
+# driven by this ladder while measuring near-zero response would be misreading
+# the axis, so mounts declare their own beta and this ceiling catches drift.
+PHOS_INERT_BETA_CEILING = 0.20
+
+
+def load_phosphate_rungs(path: Path | None = None) -> dict[str, float]:
+    """{tier: MAP 55% domestic price, CNY per tonne} from the axis §1 table."""
+    md = (path or AXIS_PHOS).read_text(encoding="utf-8")
+
+    rungs: dict[str, float] = {}
+    for line in md.splitlines():
+        m = _PHOS_ROW.match(line)
+        if not m:
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if len(cells) < 3:
+            raise ValueError(f"axis rung {m.group(1)}: expected >=3 columns")
+        rungs[m.group(1)] = float(cells[2].strip("* ").replace(",", ""))
+
+    missing = {"L", "M", "H"} - rungs.keys()
+    if missing:
+        raise ValueError(f"phosphate axis rungs missing: {sorted(missing)}")
+    if not (rungs["L"] < rungs["M"] < rungs["H"]):
+        raise ValueError(f"phosphate rungs not ordered: {rungs}")
+    return rungs
+
+
+def check_phosphate_mount(
+    stated: tuple[float, float, float], peer_md: str | None = None
+) -> list[str]:
+    """Verify a mount restates the axis rungs, and agrees with its peer mount.
+
+    Both mounts are checked against the axis file *and* against each other:
+    the axis is the source of truth, but a peer comparison is what catches the
+    case where someone edits both the axis and one mount and forgets the other.
+    """
+    rungs = load_phosphate_rungs()
+    errors = [
+        f"{tier} MAP rung: stated {got:g} vs axis {rungs[tier]:g}"
+        for tier, got in zip(("L", "M", "H"), stated)
+        if abs(got - rungs[tier]) > 0.5
+    ]
+    if peer_md is not None:
+        # Imported lazily: lib.inputs imports nothing from here, but keeping the
+        # dependency local documents that this is a cross-file read, not a parse.
+        from .inputs import parse_inputs
+
+        peer = parse_inputs(peer_md)
+        for tier, field, got in zip(
+            ("L", "M", "H"), ("map_l", "map_m", "map_h"), stated
+        ):
+            if field not in peer:
+                errors.append(f"peer mount missing {field}")
+            elif abs(peer[field] - got) > 0.5:
+                errors.append(
+                    f"{tier} MAP rung drift vs peer: ours {got:g} vs peer {peer[field]:g}"
+                )
+    return errors
+
+
+# --- _AXIS.africa-corridor ---------------------------------------------------
+# §1 rung rows: | **L** | 在建项目投产即止 | **0%** | 依据 | as-of |
+# Column 2 (0-based) is the nominal perpetual g every mounted ticker reads.
+_AFRICA_ROW = re.compile(r"^\|\s*\*\*([LMH])\*\*\s*\|")
+_PCT = re.compile(r"([+-]?[0-9]+(?:\.[0-9]+)?)\s*%")
+
+# The axis caps its own upside on purpose (§1): at r=10% a nominal g of +7%
+# would put the perpetual factor at 33x, which is extrapolating a ramp forever.
+AFRICA_G_CAP = 0.06
+
+
+def load_africa_rungs(path: Path | None = None) -> dict[str, float]:
+    """{tier: nominal perpetual g} from _AXIS.africa-corridor.md §1."""
+    md = (path or AXIS_AFRICA).read_text(encoding="utf-8")
+
+    rungs: dict[str, float] = {}
+    for line in md.splitlines():
+        m = _AFRICA_ROW.match(line)
+        if not m:
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if len(cells) < 3:
+            raise ValueError(f"axis rung {m.group(1)}: expected >=3 columns")
+        pct = _PCT.search(cells[2])
+        if pct is None:
+            raise ValueError(f"axis rung {m.group(1)}: no percentage in column 3")
+        rungs[m.group(1)] = float(pct.group(1)) / 100.0
+
+    missing = {"L", "M", "H"} - rungs.keys()
+    if missing:
+        raise ValueError(f"africa axis rungs missing: {sorted(missing)}")
+    if not (rungs["L"] < rungs["M"] < rungs["H"]):
+        raise ValueError(f"africa rungs not ordered: {rungs}")
+    if rungs["H"] > AFRICA_G_CAP:
+        raise ValueError(
+            f"africa H rung {rungs['H']:.1%} above the axis's own cap "
+            f"{AFRICA_G_CAP:.0%} — that is a ramp extrapolated forever (§1)"
+        )
+    return rungs
+
+
+def check_africa_mount(stated: tuple[float, float, float]) -> list[str]:
+    """Verify a mounted ticker restates the axis's nominal Africa g ladder.
+
+    The axis locks the NOMINAL perpetual g for tickets whose Africa cash flows
+    are perpetual (Huaxin's and Keda's own plants).  Jiayou's concession leg
+    uses a *window* g derived from PV parity — see
+    `check_africa_jiayou_window` — and MUST NOT call this helper with those
+    window rates.
+    """
+    rungs = load_africa_rungs()
+    return [
+        f"{tier} Africa nominal g: stated {got:+.2%} vs axis {rungs[tier]:+.2%}"
+        for tier, got in zip(("L", "M", "H"), stated)
+        if abs(got - rungs[tier]) > 1e-9
+    ]
+
+
+def africa_window_from_perp(g_perp: float, r: float, n: float) -> float:
+    """Window growth g_w over n years whose annuity PV equals 1/(r − g_perp).
+
+    Solves F(g_w, r, n) = 1/(r − g_perp).  When the perpetual factor reaches
+    the g→r limit n/(1+r), g_w returns r (Jiayou then applies an H cap so the
+    singular point is never evaluated inside `annuity_factor`).
+    """
+    if r - g_perp <= 0:
+        raise ValueError(f"perpetual factor undefined: g_perp={g_perp} >= r={r}")
+    target = 1.0 / (r - g_perp)
+    f_lim = n / (1.0 + r)
+    if target >= f_lim - 1e-12:
+        return r
+
+    def _f(g: float) -> float:
+        return (1.0 - ((1.0 + g) / (1.0 + r)) ** n) / (r - g)
+
+    lo, hi = -0.5, r - 1e-12
+    for _ in range(100):
+        mid = (lo + hi) / 2.0
+        if _f(mid) < target:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2.0
+
+
+def check_africa_jiayou_window(
+    stated: tuple[float, float, float],
+    *,
+    r: float,
+    n: float,
+    h_cap: float,
+) -> list[str]:
+    """Jiayou second layer: window g from axis PV parity, H capped below r.
+
+    L/M window rates MUST match `africa_window_from_perp(axis_rung)`.
+    H MUST equal min(parity_solve(axis_H), h_cap).  After the usual n-year
+    conversion, g_eq then equals the axis rung on L/M and sits just under it
+    on H — Africa-leg value aligns with perpetual peers without assuming
+    concession renewal.
+    """
+    rungs = load_africa_rungs()
+    expected = {
+        "L": africa_window_from_perp(rungs["L"], r, n),
+        "M": africa_window_from_perp(rungs["M"], r, n),
+        "H": min(africa_window_from_perp(rungs["H"], r, n), h_cap),
+    }
+    errors = [
+        f"{tier} Africa window g: stated {got:+.4%} vs PV-parity {expected[tier]:+.4%}"
+        for tier, got in zip(("L", "M", "H"), stated)
+        if abs(got - expected[tier]) > 5e-5
+    ]
+    if h_cap >= r - 1e-12:
+        errors.append(f"africa_window_h_cap={h_cap:.2%} must be < r={r:.2%}")
+    if abs(stated[2] - h_cap) > 5e-5 and abs(expected["H"] - h_cap) < 5e-5:
+        # H is at the cap; stated must equal the cap
+        errors.append(
+            f"H window g stated {stated[2]:+.4%} but cap binds at {h_cap:+.4%}"
+        )
+    return errors
+
+
+# --- _AXIS.optical-comms -----------------------------------------------------
+# §1 rung rows: | **L** | **39** | **3.9e5** | ...
+# Column 2 (0-based) is OE units (scientific); mounted tickers read that column.
+_OPTICAL_ROW = re.compile(r"^\|\s*\*\*([LMH])\*\*\s*\|")
+_OE_SCI = re.compile(r"\*\*([0-9]+(?:\.[0-9]+)?e[+-]?[0-9]+)\*\*")
+
+# Cross-check unit (axis §1): GS CPO switch OE BoM ASP — not an axis rung.
+OPTICAL_OE_ASP_USD = 450.0
+
+
+def load_optical_oe_rungs(path: Path | None = None) -> dict[str, float]:
+    """{tier: OE units} from _AXIS.optical-comms.md §1 (actual shipments)."""
+    md = (path or AXIS_OPTICAL).read_text(encoding="utf-8")
+    rungs: dict[str, float] = {}
+    for line in md.splitlines():
+        m = _OPTICAL_ROW.match(line)
+        if not m:
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if len(cells) < 3:
+            raise ValueError(f"optical axis rung {m.group(1)}: expected >=3 columns")
+        sci = _OE_SCI.search(cells[2])
+        if sci is None:
+            raise ValueError(
+                f"optical axis rung {m.group(1)}: no scientific OE count in column 3"
+            )
+        rungs[m.group(1)] = float(sci.group(1))
+    missing = {"L", "M", "H"} - rungs.keys()
+    if missing:
+        raise ValueError(f"optical axis rungs missing: {sorted(missing)}")
+    if not (rungs["L"] < rungs["M"] < rungs["H"]):
+        raise ValueError(f"optical OE rungs not ordered: {rungs}")
+    return rungs
+
+
+def check_optical_oe_mount(stated: tuple[float, float, float]) -> list[str]:
+    """Mounted ticker MUST restate the axis OE shipment ladder (units)."""
+    rungs = load_optical_oe_rungs()
+    return [
+        f"{tier} optical OE: stated {got:.6g} vs axis {rungs[tier]:.6g}"
+        for tier, got in zip(("L", "M", "H"), stated)
+        if abs(got - rungs[tier]) / rungs[tier] > 1e-6
+    ]
+
+
+def optical_oe_bom_pool(tier: str) -> float:
+    """Whole-OE BoM pool (USD) = oe_tier × $450 — axis §4 reference, not revenue."""
+    return load_optical_oe_rungs()[tier] * OPTICAL_OE_ASP_USD
+
+
+def optical_narrow_rev(
+    oe: float, laser_usd_per_oe: float, laser_share: float
+) -> float:
+    """LITE-style narrow proxy: OE units × laser $/OE × share (axis §4a)."""
+    return oe * laser_usd_per_oe * laser_share
+
+
+def optical_attachment(rev_usd: float, tier: str) -> float:
+    """rev / (oe_tier × $450); axis §4a."""
+    pool = optical_oe_bom_pool(tier)
+    if pool <= 0:
+        raise ValueError(f"optical BoM pool for {tier} is non-positive")
+    return rev_usd / pool
+
+
+def check_optical_narrow_attach(
+    rev_by_tier: dict[str, float], *, max_attach: float = 1.0
+) -> list[str]:
+    """Narrow-scope revenue must not exceed the whole-OE BoM pool without a flag.
+
+    Broad (pluggable/ASIC) diagnostics are reported separately in the axis §4b
+    and MUST NOT be passed here.
+    """
+    errors: list[str] = []
+    for tier, rev in rev_by_tier.items():
+        att = optical_attachment(rev, tier)
+        if att > max_attach + 1e-9:
+            errors.append(
+                f"{tier} optical narrow attach {att:.1%} > {max_attach:.0%} "
+                f"(rev ${rev/1e9:.3f}B vs pool ${optical_oe_bom_pool(tier)/1e9:.3f}B) "
+                f"— use §4b broad label or cut the numerator"
+            )
+    return errors

@@ -36,6 +36,17 @@ _P_TIERS = re.compile(
     r"([0-9]*\.?[0-9]+)\s*/\s*([0-9]*\.?[0-9]+)\s*/\s*([0-9]*\.?[0-9]+)"
 )
 
+# Consensus-upgrade candidate band (AGENTS.md「共识升级候选带」): the base deck's
+# next version previewed before a 待补 input arrives.  Primed anchors keep it out
+# of the base L/M/H regexes; the label in （…） is what the digest prints.
+#   - 候选带（FY28·Piper单家）：L′ = **7.23** · M′ = **15.54** · H′ = **16.29** · 门槛 A22
+_CANDIDATE = re.compile(
+    r"候选带（([^）]+)）[^\n]*?"
+    r"L′\s*[≈=]\s*\*\*([0-9]+(?:\.[0-9]+)?)\*\*[^\n]*?"
+    r"M′\s*[≈=]\s*\*\*([0-9]+(?:\.[0-9]+)?)\*\*[^\n]*?"
+    r"H′\s*[≈=]\s*\*\*([0-9]+(?:\.[0-9]+)?)\*\*"
+)
+
 _CURRENCY = re.compile(r"（(USD|HKD|CNY|TWD)[^）]*）|\((USD|HKD|CNY|TWD)[^)]*\)")
 # 中文写法也认，否则「（人民币）」会退回全文扫描并被无关括注劫持
 _CURRENCY_CN = {"人民币": "CNY", "港元": "HKD", "港币": "HKD", "美元": "USD", "新台币": "TWD"}
@@ -81,6 +92,9 @@ class FrameworkMeta:
     lynch_secondary: str | None
     v_opt: float | None = None
     p_tiers: tuple[float, float, float] | None = None
+    # Not an option: no p_k, never feeds the base zone (AGENTS.md「共识升级候选带」).
+    candidate: tuple[float, float, float] | None = None
+    candidate_label: str | None = None
 
     @property
     def option_band(self) -> tuple[float, float, float] | None:
@@ -159,6 +173,20 @@ def _parse_option(md: str) -> tuple[float | None, tuple[float, float, float] | N
     return v_opt, p_tiers
 
 
+def _parse_candidate(md: str) -> tuple[str, tuple[float, float, float]] | None:
+    """(label, (L′, M′, H′)) or None.  Two candidate lines are as ambiguous as two decks."""
+    matches = list(_CANDIDATE.finditer(md))
+    if not matches:
+        return None
+    if len(matches) > 1:
+        raise ValueError(f"ambiguous candidate bands: {len(matches)} 候选带 lines")
+    m = matches[0]
+    band = (float(m.group(2)), float(m.group(3)), float(m.group(4)))
+    if not (band[0] < band[1] < band[2]):
+        raise ValueError(f"candidate band needs L′ < M′ < H′, got {band}")
+    return m.group(1).strip(), band
+
+
 def _parse_currency(md: str) -> str:
     """Currency of the anchors. Never guesses USD — an unlabelled band is an error."""
     tm = re.search(r"^#\s+(\S+)", md, re.M)
@@ -197,6 +225,7 @@ def load_framework(path: Path) -> FrameworkMeta:
     if not (L < M < H):
         raise ValueError(f"{ticker}: need L < M < H, got {L}, {M}, {H}")
     v_opt, p_tiers = _parse_option(md)
+    candidate = _parse_candidate(md)
     if p_tiers is not None and v_opt is None:
         raise ValueError(f"{ticker}: p_L/p_M/p_H given without V_opt")
     if p_tiers is not None and not all(0.0 <= p <= 1.0 for p in p_tiers):
@@ -230,6 +259,8 @@ def load_framework(path: Path) -> FrameworkMeta:
         lynch_secondary=lynch_secondary,
         v_opt=v_opt,
         p_tiers=p_tiers,
+        candidate=candidate[1] if candidate else None,
+        candidate_label=candidate[0] if candidate else None,
     )
 
 

@@ -42,6 +42,8 @@ def build_record(
     inputs_used: dict[str, Any] | None = None,
     option_zone: str | None = None,
     previous_option_zone: str | None = None,
+    candidate_zone: str | None = None,
+    previous_candidate_zone: str | None = None,
 ) -> dict[str, Any]:
     A, B = cut_points(L, M, H)
     return {
@@ -61,6 +63,8 @@ def build_record(
         "previous_zone": previous_zone,
         "option_zone": option_zone,
         "previous_option_zone": previous_option_zone,
+        "candidate_zone": candidate_zone,
+        "previous_candidate_zone": previous_candidate_zone,
         "inputs_used": inputs_used or {"price_source": "longbridge", "anchors_source": "frameworks"},
         "formula_id": formula_id,
         "notes": notes or [],
