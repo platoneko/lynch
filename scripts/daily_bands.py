@@ -43,10 +43,13 @@ class Row:
     option_zone: str | None = None
     previous_option_zone: str | None = None
     option_crossed: bool = False
+    candidate_zone: str | None = None
+    previous_candidate_zone: str | None = None
+    candidate_crossed: bool = False
 
     @property
     def any_crossed(self) -> bool:
-        return self.crossed or self.option_crossed
+        return self.crossed or self.option_crossed or self.candidate_crossed
 
 
 def _as_of_iso() -> str:
@@ -97,6 +100,13 @@ def _short_name(meta: FrameworkMeta) -> str:
     return name or meta.ticker
 
 
+def candidate_zone(price: float, meta: FrameworkMeta) -> str | None:
+    """Zone on the consensus-upgrade candidate band, or None when the ticker has none."""
+    if meta.candidate is None:
+        return None
+    return zone_of(price, *meta.candidate)
+
+
 def format_pool_lines(r: Row) -> list[str]:
     """Per-ticker Feishu block.
 
@@ -105,6 +115,8 @@ def format_pool_lines(r: Row) -> list[str]:
 
     Tickers with V_opt > 0 get a third line on the credited band:
     「乐观」 +V(66.6) L/M/H = 27.2/71.17/113
+    Tickers carrying a candidate band get one more, last:
+    「叙事溢价」 候选(FY28·Piper单家) L/M/H = 7.23/15.54/16.29
     """
     emoji = zone_emoji(r.zone)
     title = r.meta.ticker
@@ -126,6 +138,11 @@ def format_pool_lines(r: Row) -> list[str]:
         L2, M2, H2 = band
         lines.append(
             f"「{zone_label(r.option_zone)}」 +V({_fmt_anchor(v_opt)}) {format_lmh(L2, M2, H2)}"
+        )
+    if r.meta.candidate is not None and r.candidate_zone:
+        lines.append(
+            f"「{zone_label(r.candidate_zone)}」 候选({r.meta.candidate_label}) "
+            f"{format_lmh(*r.meta.candidate)}"
         )
     return lines
 
@@ -169,6 +186,10 @@ def build_cross_post(crosses: list[Row], *, as_of_local: str) -> tuple[str, list
             prev_o = r.previous_option_zone or "?"
             cur_o = r.option_zone or "?"
             block.append(f"+V 「{zone_label(prev_o)}」 → 「{zone_label(cur_o)}」")
+        if r.candidate_crossed:
+            prev_c = r.previous_candidate_zone or "?"
+            cur_c = r.candidate_zone or "?"
+            block.append(f"候选 「{zone_label(prev_c)}」 → 「{zone_label(cur_c)}」")
         blocks.append(block)
     return title, _join_ticker_blocks(blocks)
 
@@ -224,6 +245,7 @@ def run(*, dry_run: bool, notify: bool, bands_dir: Path | None) -> int:
             price = q.last
             zone = zone_of(price, meta.L, meta.M, meta.H)
             option_zone = credited_option_zone(price, meta)
+            cand_zone = candidate_zone(price, meta)
         except Exception as e:  # noqa: BLE001
             errors.append(f"{meta.ticker}: {e}")
             continue
@@ -235,8 +257,12 @@ def run(*, dry_run: bool, notify: bool, bands_dir: Path | None) -> int:
             previous_zone = prev["zone"]
         if prev and isinstance(prev.get("option_zone"), str):
             previous_option_zone = prev["option_zone"]
+        previous_candidate_zone = None
+        if prev and isinstance(prev.get("candidate_zone"), str):
+            previous_candidate_zone = prev["candidate_zone"]
         crossed = zone_changed(previous_zone, zone)
         option_crossed = zone_changed(previous_option_zone, option_zone)
+        candidate_crossed = zone_changed(previous_candidate_zone, cand_zone)
         if previous_zone is None:
             notes.append("first_run")
 
@@ -252,6 +278,8 @@ def run(*, dry_run: bool, notify: bool, bands_dir: Path | None) -> int:
             previous_zone=previous_zone,
             option_zone=option_zone,
             previous_option_zone=previous_option_zone,
+            candidate_zone=cand_zone,
+            previous_candidate_zone=previous_candidate_zone,
             notes=notes,
             inputs_used={
                 "price_source": "longbridge",
@@ -274,6 +302,9 @@ def run(*, dry_run: bool, notify: bool, bands_dir: Path | None) -> int:
                 option_zone=option_zone,
                 previous_option_zone=previous_option_zone,
                 option_crossed=option_crossed,
+                candidate_zone=cand_zone,
+                previous_candidate_zone=previous_candidate_zone,
+                candidate_crossed=candidate_crossed,
             )
         )
 
