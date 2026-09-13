@@ -73,8 +73,22 @@ class PoolLinesTests(unittest.TestCase):
             daily_bands.format_pool_lines(r),
             [
                 "🟡 603993.SH 洛阳钼业 19.01 CNY",
-                "「中性」 L/M/H = 13.51/19.63/23.24",
+                "「中性」 [16.57, 21.43) · L/M/H = 13.51/19.63/23.24",
             ],
+        )
+
+    def test_zone_bounds_open_ends(self) -> None:
+        self.assertEqual(
+            daily_bands.format_zone_bounds("deep_discount", 13.51, 19.63, 23.24),
+            "P < 13.51",
+        )
+        self.assertEqual(
+            daily_bands.format_zone_bounds("stretched", 13.51, 19.63, 23.24),
+            "P > 23.24",
+        )
+        self.assertEqual(
+            daily_bands.format_zone_bounds("optimistic", 13.51, 19.63, 23.24),
+            "[21.43, 23.24]",
         )
 
     def test_v_opt_zero_skips_plus_v_line(self) -> None:
@@ -108,8 +122,8 @@ class PoolLinesTests(unittest.TestCase):
             daily_bands.format_pool_lines(r),
             [
                 "🔴 INTC.US 106.2 USD",
-                "「叙事溢价」 L/M/H = 27.2/36.8/46.4",
-                "「乐观」 +V(66.6) L/M/H = 27.2/71.17/113",
+                "「叙事溢价」 P > 46.4 · L/M/H = 27.2/36.8/46.4",
+                "「乐观」 +V(66.6) [92.08, 113] · L/M/H = 27.2/71.17/113",
             ],
         )
 
@@ -139,10 +153,10 @@ class DailyPostTests(unittest.TestCase):
             lines,
             [
                 "🟡 603993.SH 洛阳钼业 19.01 CNY",
-                "「中性」 L/M/H = 13.51/19.63/23.24",
+                "「中性」 [16.57, 21.43) · L/M/H = 13.51/19.63/23.24",
                 "",
                 "🟢 0700.HK 腾讯控股 435.4 HKD",
-                "「深度折价」 L/M/H = 400/500/600",
+                "「深度折价」 P < 400 · L/M/H = 400/500/600",
             ],
         )
 
@@ -200,7 +214,7 @@ class CrossPostTests(unittest.TestCase):
             lines,
             [
                 "🟠 603993.SH 洛阳钼业 22.00 CNY",
-                "「乐观」 L/M/H = 13.51/19.63/23.24",
+                "「乐观」 [21.43, 23.24] · L/M/H = 13.51/19.63/23.24",
                 "「中性」 → 「乐观」",
             ],
         )
@@ -230,8 +244,8 @@ class CrossPostTests(unittest.TestCase):
             lines,
             [
                 "🔴 INTC.US 106.2 USD",
-                "「叙事溢价」 L/M/H = 27.2/36.8/46.4",
-                "「乐观」 +V(66.6) L/M/H = 27.2/71.17/113",
+                "「叙事溢价」 P > 46.4 · L/M/H = 27.2/36.8/46.4",
+                "「乐观」 +V(66.6) [92.08, 113] · L/M/H = 27.2/71.17/113",
                 "「乐观」 → 「叙事溢价」",
             ],
         )
@@ -263,8 +277,8 @@ class CrossPostTests(unittest.TestCase):
             lines,
             [
                 "🔴 INTC.US 106.2 USD",
-                "「叙事溢价」 L/M/H = 27.2/36.8/46.4",
-                "「乐观」 +V(66.6) L/M/H = 27.2/71.17/113",
+                "「叙事溢价」 P > 46.4 · L/M/H = 27.2/36.8/46.4",
+                "「乐观」 +V(66.6) [92.08, 113] · L/M/H = 27.2/71.17/113",
                 "+V 「中性」 → 「乐观」",
             ],
         )
@@ -287,7 +301,7 @@ class CrossPostTests(unittest.TestCase):
             lines,
             [
                 "🟠 603993.SH 洛阳钼业 22.00 CNY",
-                "「乐观」 L/M/H = 13.51/19.63/23.24",
+                "「乐观」 [21.43, 23.24] · L/M/H = 13.51/19.63/23.24",
                 "「中性」 → 「乐观」",
                 "+V 「保守」 → 「中性」",
             ],

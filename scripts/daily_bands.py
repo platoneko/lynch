@@ -24,7 +24,7 @@ from eval.lib.bands_io import build_record, read_previous, write_bands  # noqa: 
 from eval.lib.feishu import send_post  # noqa: E402
 from eval.lib.frameworks import FrameworkMeta, load_all_frameworks  # noqa: E402
 from eval.lib.price import fetch_quotes  # noqa: E402
-from eval.lib.zones import zone_emoji, zone_label, zone_of  # noqa: E402
+from eval.lib.zones import zone_bound_edges, zone_emoji, zone_label, zone_of  # noqa: E402
 
 
 log = logging.getLogger("daily_bands")
@@ -77,6 +77,24 @@ def format_lmh(L: float, M: float, H: float) -> str:
     return f"L/M/H = {_fmt_anchor(L)}/{_fmt_anchor(M)}/{_fmt_anchor(H)}"
 
 
+def format_zone_bounds(zone: str, L: float, M: float, H: float) -> str:
+    """Current-zone lo/hi in AGENTS bracket notation (`[A, B)` / `P < L`)."""
+    shape, lo, hi = zone_bound_edges(zone, L, M, H)
+    if shape == "open_below":
+        assert hi is not None
+        return f"P < {_fmt_anchor(hi)}"
+    if shape == "open_above":
+        assert lo is not None
+        return f"P > {_fmt_anchor(lo)}"
+    assert lo is not None and hi is not None
+    lo_s, hi_s = _fmt_anchor(lo), _fmt_anchor(hi)
+    if shape == "half_open":
+        return f"[{lo_s}, {hi_s})"
+    if shape == "closed":
+        return f"[{lo_s}, {hi_s}]"
+    raise ValueError(f"unknown shape: {shape}")
+
+
 def zone_changed(previous: str | None, current: str | None) -> bool:
     """True only when both sides are known and differ. None = first observation, no alert."""
     return previous is not None and current is not None and previous != current
@@ -111,21 +129,22 @@ def format_pool_lines(r: Row) -> list[str]:
     """Per-ticker Feishu block.
 
     🟡 603993.SH 洛阳钼业 19.01 CNY
-    「中性」 L/M/H = 13.51/19.63/23.24
+    「中性」 [16.57, 21.44) · L/M/H = 13.51/19.63/23.24
 
     Tickers with V_opt > 0 get a third line on the credited band:
-    「乐观」 +V(66.6) L/M/H = 27.2/71.17/113
+    「乐观」 +V(66.6) [71.17, 113] · L/M/H = 27.2/71.17/113
     Tickers carrying a candidate band get one more, last:
-    「叙事溢价」 候选(FY28·Piper单家) L/M/H = 7.23/15.54/16.29
+    「叙事溢价」 候选(FY28·Piper单家) P > 16.29 · L/M/H = 7.23/15.54/16.29
     """
     emoji = zone_emoji(r.zone)
     title = r.meta.ticker
     if not r.meta.ticker.endswith(".US"):
         title = f"{r.meta.ticker} {_short_name(r.meta)}"
     header = f"{emoji} {title} {_fmt_price(r.price, r.meta.currency)}"
+    bounds = format_zone_bounds(r.zone, r.meta.L, r.meta.M, r.meta.H)
     lines = [
         header,
-        f"「{zone_label(r.zone)}」 {format_lmh(r.meta.L, r.meta.M, r.meta.H)}",
+        f"「{zone_label(r.zone)}」 {bounds} · {format_lmh(r.meta.L, r.meta.M, r.meta.H)}",
     ]
     band = r.meta.option_band
     v_opt = r.meta.v_opt
@@ -136,13 +155,16 @@ def format_pool_lines(r: Row) -> list[str]:
         and r.option_zone
     ):
         L2, M2, H2 = band
+        ob = format_zone_bounds(r.option_zone, L2, M2, H2)
         lines.append(
-            f"「{zone_label(r.option_zone)}」 +V({_fmt_anchor(v_opt)}) {format_lmh(L2, M2, H2)}"
+            f"「{zone_label(r.option_zone)}」 +V({_fmt_anchor(v_opt)}) {ob} · {format_lmh(L2, M2, H2)}"
         )
     if r.meta.candidate is not None and r.candidate_zone:
+        L3, M3, H3 = r.meta.candidate
+        cb = format_zone_bounds(r.candidate_zone, L3, M3, H3)
         lines.append(
             f"「{zone_label(r.candidate_zone)}」 候选({r.meta.candidate_label}) "
-            f"{format_lmh(*r.meta.candidate)}"
+            f"{cb} · {format_lmh(L3, M3, H3)}"
         )
     return lines
 
