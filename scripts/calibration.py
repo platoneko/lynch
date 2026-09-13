@@ -21,11 +21,14 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from eval.lib.frameworks import FrameworkMeta, lynch_cn, load_all_frameworks  # noqa: E402
+from eval.lib.gordon import G_CAP  # noqa: E402
 
 
 _PE_ROW = re.compile(r"^\|\s*(pe_[lmh])\s*\|\s*([0-9.]+)\s*\|", re.MULTILINE)
 _GAMMA_ROW = re.compile(r"^\|\s*gamma_pe\s*\|\s*(-?[0-9.]+)\s*\|", re.MULTILINE)
 _R_ROW = re.compile(r"^\|\s*(r_[a-z0-9_]+)\s*\|\s*([0-9.]+)\s*\|", re.MULTILINE)
+# `g2` or `g2_<leg>` only — `g200_units` is a unit count, not a growth rate.
+_G2_ROW = re.compile(r"^\|\s*(g2(?:_[a-z0-9_]+)?)\s*\|\s*(-?[0-9.]+)\s*\|", re.MULTILINE)
 
 
 def _ratios(m: FrameworkMeta) -> tuple[float, float, float]:
@@ -60,6 +63,21 @@ def _r_tiers(m: FrameworkMeta) -> str:
     rows = _R_ROW.findall(m.path.read_text(encoding="utf-8"))
     tiers = sorted({float(v) for k, v in rows if not k.startswith("r_disc")})
     return "/".join(f"{t * 100:.0f}" for t in tiers) if tiers else "—"
+
+
+def _g2_max(m: FrameworkMeta) -> str:
+    """Highest perpetual g the framework names, read from its `g2*` inputs.
+
+    AGENTS.md caps the perpetuity at G_CAP; anything above it is flagged with
+    "!" so the dial shows up in the cross-ticker table instead of hiding in
+    one file's Inputs.  Frameworks that name their perpetual g under another
+    key (`g_sw`, `g_bank`, ...) print a blank, not a zero.
+    """
+    rows = _G2_ROW.findall(m.path.read_text(encoding="utf-8"))
+    if not rows:
+        return "—"
+    top = max(float(v) for _, v in rows)
+    return f"{top * 100:.1f}{'!' if top > G_CAP + 1e-9 else ''}"
 
 
 def _gamma_measured(m: FrameworkMeta) -> float | None:
@@ -100,7 +118,7 @@ def main() -> int:
 
         print(f"\n{primary}（{lynch_cn(primary)}）— 同类 L/M 中位 {lm_median:.2f}")
         print(
-            f"  {'ticker':12} {'L/M':>6} {'H/M':>6} {'neutral宽/M':>11} {'r档':>6}"
+            f"  {'ticker':12} {'L/M':>6} {'H/M':>6} {'neutral宽/M':>11} {'r档':>6} {'g2%':>6}"
             f"  {'分子比L':>7} {'分子比H':>7}  {'γ隐含L':>7} {'γ隐含H':>7} {'γ实测':>6}  次类"
         )
         for m in group:
@@ -120,7 +138,7 @@ def main() -> int:
             meas = f"{g_meas:+6.2f}" if g_meas is not None else f"{'—':>6}"
             sub = m.lynch_secondary or "—"
             print(
-                f"  {m.ticker:12} {lm:6.2f} {hm:6.2f} {width:10.0%} {_r_tiers(m):>6}"
+                f"  {m.ticker:12} {lm:6.2f} {hm:6.2f} {width:10.0%} {_r_tiers(m):>6} {_g2_max(m):>6}"
                 f" {num_l} {num_h}  {fmt(g_l)} {fmt(g_h)} {meas}  {sub}"
             )
 

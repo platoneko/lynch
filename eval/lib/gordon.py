@@ -47,6 +47,28 @@ def check_r(r: float, where: str) -> list[str]:
     return []
 
 
+# AGENTS.md「永续增长口径」: a perpetual g above this is a dial, not a state.
+# Between r - g = 2% and 4% the multiple's elasticity to g passes 25x (1pp of g
+# moved MRVL.US's M by ~30%), so growth beyond the cap has to be named as a
+# finite transition -- two_stage_pe with n bounded by the years a consensus
+# exists for -- and never left in the perpetuity.
+G_CAP = 0.06
+
+
+def check_g_cap(g: float, where: str) -> list[str]:
+    """A perpetual g must sit at or below G_CAP; the excess belongs in g1."""
+    if g > G_CAP + 1e-9:
+        return [f"{where}: g2={g:.4f} > cap {G_CAP:.2f} (AGENTS.md「永续增长口径」) — move the excess into a named g1"]
+    return []
+
+
+def check_transition_years(n: int, consensus_years: int, where: str) -> list[str]:
+    """Stage 1 may run only as long as a consensus exists for each year."""
+    if n > consensus_years:
+        return [f"{where}: n_stage={n} > consensus years {consensus_years} — a transition year without a consensus is a story, not an input"]
+    return []
+
+
 def payout(g: float, roe: float) -> float:
     """Fraction of earnings distributable while funding growth g, capped at 1."""
     if roe <= 0:
@@ -59,6 +81,43 @@ def perpetual_pe(g: float, roe: float, r: float) -> float:
     if r - g <= 0:
         raise ValueError(f"perpetuity diverges: g={g} >= r={r}")
     return payout(g, roe) / (r - g)
+
+
+def annuity_factor(g: float, r: float, n: float) -> float:
+    """PV of n years of a stream growing at g, discounted at r, per unit of NI_1.
+
+    The finite-life twin of `1/(r - g)`, sharing the same r tiers.  Use it
+    wherever the cash flow has a named end and Gordon's perpetual premise
+    therefore fails: a concession that reverts to the host state, a supply
+    contract with a stated term.  `n → ∞` recovers `1/(r - g)` for g < r, and
+    unlike the perpetual form this stays finite for g > r -- a stream that
+    outgrows the discount rate for a bounded number of years is not divergent.
+
+    Returns a PURE PV factor with no retention haircut, so it is not the
+    annuity analogue of `perpetual_pe`.  Callers either run it at g = 0 (a
+    stream that funds no growth retains nothing) or convert to an equivalent
+    perpetual g and route that through `perpetual_pe`, which is where the
+    payout term belongs.
+    """
+    if r == g:
+        raise ValueError(f"annuity undefined at r == g == {r}")
+    return (1.0 - ((1.0 + g) / (1.0 + r)) ** n) / (r - g)
+
+
+def justified_pb(g: float, roe: float, r: float) -> float:
+    """Clean-surplus P/B on current book: (ROE - g) / (r - g).
+
+    Equivalent to `roe * perpetual_pe(g, roe, r)` when `g > 0` (payout below the
+    100% cap).  Banks and other book-anchored rulers call this directly so the
+    multiple is stated in PB space rather than PE × ROE.
+    """
+    if roe <= 0:
+        raise ValueError(f"roe must be positive, got {roe}")
+    if r - g <= 0:
+        raise ValueError(f"perpetuity diverges: g={g} >= r={r}")
+    if roe <= g:
+        raise ValueError(f"roe={roe} must exceed g={g} for a finite P/B")
+    return (roe - g) / (r - g)
 
 
 def two_stage_pe(g1: float, n: int, g2: float, roe: float, r: float) -> float:
