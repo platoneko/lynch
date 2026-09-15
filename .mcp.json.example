@@ -6,6 +6,10 @@
       "headers": {
         "Authorization": "Bearer <WISBURG_MCP_TOKEN>"
       }
+    },
+    "longbridge": {
+      "type": "http",
+      "url": "https://openapi.longbridge.com/mcp"
     }
   }
 }

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Generate frameworks/_INDEX.md from framework titles.
+"""Generate frameworks/_INDEX.md from framework + axis titles.
 
 Derived view only — not a second source of truth (AGENTS.md: pool = scan
-frameworks/*.md). US rows are ticker links; HK/A rows add the Chinese name
-parsed from `# TICKER — 中文 / English`.
+frameworks/*.md; axes = frameworks/axes/<name>.md, logical id `_AXIS.<name>`).
+US rows are ticker links; HK/A rows add the Chinese name parsed from
+`# TICKER — 中文 / English`. Axis rows link under ./axes/ and list mounts.
 """
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from eval.lib.axes import list_axis_paths  # noqa: E402
 from eval.lib.frameworks import FRAMEWORKS_DIR, list_framework_paths  # noqa: E402
 
 _TITLE = re.compile(r"^#\s+(\S+)\s+[—–-]\s+(.+)$")
@@ -68,6 +70,37 @@ def _parse_title(path: Path) -> tuple[str, str | None]:
     return ticker, _chinese_name(rest)
 
 
+def _parse_axis(path: Path) -> tuple[str, str, str]:
+    """Return (logical_id, title_rest, mounts_blob)."""
+    logical = f"_AXIS.{path.stem}"
+    title_rest = path.stem
+    mounts = ""
+    with path.open(encoding="utf-8") as f:
+        for i, line in enumerate(f):
+            if i == 0:
+                m = _TITLE.match(line.rstrip("\n"))
+                if m:
+                    logical = m.group(1)
+                    title_rest = m.group(2).strip()
+                continue
+            s = line.strip()
+            if not s:
+                if mounts:
+                    break
+                continue
+            if s.startswith(">"):
+                body = s.lstrip("> ").strip()
+                if "挂载票" in body:
+                    # Keep from first 挂载票 onwards; drop leading meta before it.
+                    idx = body.find("挂载票")
+                    mounts = body[idx:].strip()
+                    # Later quote lines may continue mounts (rare); keep first hit.
+                    break
+            elif mounts or i > 8:
+                break
+    return logical, title_rest, mounts
+
+
 def build_index(frameworks_dir: Path | None = None) -> str:
     buckets: dict[str, list[tuple[str, str | None]]] = {k: [] for _, k in _SECTIONS}
     unknown: list[str] = []
@@ -86,9 +119,10 @@ def build_index(frameworks_dir: Path | None = None) -> str:
         items.sort(key=lambda t: t[0])
 
     lines: list[str] = [
-        "# 标的索引",
+        "# 标的与轴索引",
         "",
-        "> 由 `scripts/gen_index.py` 从 `frameworks/*.md` 题头生成；勿手改。",
+        "> 由 `scripts/gen_index.py` 从 `frameworks/*.md` 与 `frameworks/axes/*.md` 题头生成；勿手改。",
+        "> 轴的稳定引用写逻辑 id `` `_AXIS.<名>` ``；文件在 `axes/<名>.md`。",
         "",
     ]
     for heading, key in _SECTIONS:
@@ -114,14 +148,39 @@ def build_index(frameworks_dir: Path | None = None) -> str:
             lines.append(f"- [{ticker}](./{ticker}.md)")
         lines.append("")
 
+    axes = list_axis_paths()
+    lines.append("## 共享情景轴")
+    lines.append("")
+    if not axes:
+        lines.append("_（尚无 `frameworks/axes/*.md`）_")
+        lines.append("")
+    else:
+        for path in axes:
+            logical, title_rest, mounts = _parse_axis(path)
+            link = f"[`{logical}`](./axes/{path.name})"
+            if mounts:
+                lines.append(f"- {link} — {title_rest} · {mounts}")
+            else:
+                lines.append(f"- {link} — {title_rest}")
+        lines.append("")
+
     return "\n".join(lines)
 
 
 def main() -> int:
     text = build_index()
     _INDEX_PATH.write_text(text, encoding="utf-8")
-    n = sum(1 for line in text.splitlines() if line.startswith("- "))
-    print(f"wrote {_INDEX_PATH.relative_to(REPO_ROOT)} ({n} tickers)", file=sys.stderr)
+    n_tickers = sum(
+        1
+        for line in text.splitlines()
+        if line.startswith("- [") and "./axes/" not in line
+    )
+    n_axes = sum(1 for line in text.splitlines() if "./axes/" in line)
+    print(
+        f"wrote {_INDEX_PATH.relative_to(REPO_ROOT)} "
+        f"({n_tickers} tickers, {n_axes} axes)",
+        file=sys.stderr,
+    )
     return 0
 
 

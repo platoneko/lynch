@@ -1,8 +1,9 @@
-"""Read shared scenario axes from frameworks/_AXIS.*.md.
+"""Read shared scenario axes from frameworks/axes/<name>.md.
 
-A shared axis is the one place a driver's scenario ladder is written down; every
-mounted ticker's eval reads it from here rather than restating the numbers, so
-editing one side alone turns the other side's eval red (AGENTS.md「锚点语义」).
+Logical id in docs stays `_AXIS.<name>` (stable across path moves). Files live
+under frameworks/axes/; resolve with axis_path(). Every mounted ticker's eval
+reads ladder values from here rather than restating them, so editing one side
+alone turns the other side's eval red (valuation-rules.md「共享情景轴」).
 """
 from __future__ import annotations
 
@@ -10,14 +11,35 @@ import re
 from pathlib import Path
 
 FRAMEWORKS_DIR = Path(__file__).resolve().parents[2] / "frameworks"
-AXIS_COWOS = FRAMEWORKS_DIR / "_AXIS.cowos-capacity.md"
-AXIS_CAPEX = FRAMEWORKS_DIR / "_AXIS.ai-capex.md"
-AXIS_AU_CU = FRAMEWORKS_DIR / "_AXIS.fed-path-gold-copper.md"
-AXIS_AL = FRAMEWORKS_DIR / "_AXIS.fed-path-aluminium.md"
-AXIS_LI2CO3 = FRAMEWORKS_DIR / "_AXIS.lithium-carbonate.md"
-AXIS_PHOS = FRAMEWORKS_DIR / "_AXIS.phosphate-chain.md"
-AXIS_AFRICA = FRAMEWORKS_DIR / "_AXIS.africa-corridor.md"
-AXIS_OPTICAL = FRAMEWORKS_DIR / "_AXIS.optical-comms.md"
+AXES_DIR = FRAMEWORKS_DIR / "axes"
+
+
+def axis_path(axis_id: str) -> Path:
+    """Resolve `_AXIS.foo`, `_AXIS.foo.md`, or bare `foo` → frameworks/axes/foo.md."""
+    name = axis_id.strip().removeprefix("_AXIS.").removesuffix(".md")
+    if not name or "/" in name or name.startswith("."):
+        raise ValueError(f"invalid axis id: {axis_id!r}")
+    return AXES_DIR / f"{name}.md"
+
+
+def list_axis_paths(axes_dir: Path | None = None) -> list[Path]:
+    d = axes_dir or AXES_DIR
+    if not d.is_dir():
+        return []
+    return sorted(p for p in d.glob("*.md") if not p.name.startswith("_"))
+
+
+AXIS_COWOS = axis_path("cowos-capacity")
+AXIS_CAPEX = axis_path("ai-capex")
+AXIS_AU_CU = axis_path("fed-path-gold-copper")
+AXIS_AL = axis_path("fed-path-aluminium")
+AXIS_LI2CO3 = axis_path("lithium-carbonate")
+AXIS_PHOS = axis_path("phosphate-chain")
+AXIS_AFRICA = axis_path("africa-corridor")
+AXIS_OPTICAL = axis_path("optical-comms")
+AXIS_COAL = axis_path("coal-price")
+AXIS_BRENT = axis_path("brent-oil")
+AXIS_SOUTHBOUND = axis_path("southbound-repricing")
 
 # §2 column order: 状态 | 分配规则 | NVDA | AMD | AVGO | 其余
 COWOS_PLAYERS = ("NVDA", "AMD", "AVGO", "OTHER")
@@ -333,6 +355,84 @@ def check_al_mount(stated: tuple[float, float, float]) -> list[str]:
     return errors
 
 
+# --- shared perpetual g2 (valuation-rules.md「g2 来源优先序」第 2 层 · 共享轴) -----------
+# A commodity axis names the driver's long-run growth ONCE, as a labelled row
+#   | **永续 g2（2026-09-14）** | **0%** | 来源 | as-of |
+# and, for its cyclical mounts, the tier shape (skill A2e-5: flat or reverse):
+#   | **g_L** | **0%** | 低位 regime 持续（与平台同）：… | as-of |
+# Every mounted ticker's Gordon tiers read these values from here, so a g edited
+# on one side turns the other side's eval red — the same rule as the price rungs.
+_AXIS_G2_ROW = re.compile(
+    r"永续 g2（(\d{4}-\d{2}-\d{2})）\*{0,2}\s*[：:|]\s*\*{0,2}([+-]?[0-9]+(?:\.[0-9]+)?)\s*%"
+)
+_AXIS_G_TIER_ROW = re.compile(
+    r"^\|\s*\*\*g_([LMH])\*\*\s*\|\s*\*{0,2}([+-]?[0-9]+(?:\.[0-9]+)?)\s*%"
+)
+
+
+def load_axis_g2(path: Path) -> float:
+    """The axis's labelled `永续 g2（date）` value — the M-tier perpetual g."""
+    labelled = _AXIS_G2_ROW.search(path.read_text(encoding="utf-8"))
+    if labelled is None:
+        raise ValueError(f"{path.name}: no labelled 永续 g2（YYYY-MM-DD） row")
+    return float(labelled.group(2)) / 100.0
+
+
+def check_axis_g2_mount(path: Path, g2_m: float) -> list[str]:
+    """Verify a mount's M-tier g equals the axis's labelled g2 (mounts whose
+    L/H tiers are ticker-specific — e.g. a realised-recovery two-stage L —
+    check only this row)."""
+    want = load_axis_g2(path)
+    if abs(g2_m - want) > 1e-9:
+        return [f"M perpetual g: stated {g2_m:+.2%} vs axis 永续 g2 {want:+.2%}"]
+    return []
+
+
+def load_axis_g_tiers(path: Path) -> dict[str, float]:
+    """{tier: perpetual g} from an axis file's 永续 g2 block.
+
+    The labelled `永续 g2（date）` row is the M tier — the driver's long-run
+    growth with a named source.  The g_L / g_H rows are the cyclical tier
+    shape and must be flat-or-reverse around it: a same-direction shape would
+    re-price the cycle a second time on top of the numerator (skill A2e-5).
+    """
+    md = path.read_text(encoding="utf-8")
+    g2 = load_axis_g2(path)
+
+    tiers: dict[str, float] = {}
+    for line in md.splitlines():
+        m = _AXIS_G_TIER_ROW.match(line)
+        if m:
+            tiers[m.group(1)] = float(m.group(2)) / 100.0
+    missing = {"L", "M", "H"} - tiers.keys()
+    if missing:
+        raise ValueError(f"{path.name}: g tier rows missing: {sorted(missing)}")
+    if abs(tiers["M"] - g2) > 1e-9:
+        raise ValueError(
+            f"{path.name}: g_M row {tiers['M']:.4f} ≠ labelled 永续 g2 {g2:.4f}"
+        )
+    if not (tiers["L"] >= tiers["M"] >= tiers["H"]):
+        raise ValueError(
+            f"{path.name}: g tiers {tiers} are not flat-or-reverse (g_L ≥ g_M ≥ g_H)"
+        )
+    return tiers
+
+
+def check_axis_g_mount(path: Path, stated: dict[str, float]) -> list[str]:
+    """Verify a mounted ticker restates the axis g rows it reads, exactly.
+
+    `stated` maps tier → the mount's perpetual g for that tier.  A mount whose
+    L tier walks its own realised recovery (valuation-rules「谷底档」) reads no
+    axis g for L and states only M / H.
+    """
+    tiers = load_axis_g_tiers(path)
+    return [
+        f"{tier} perpetual g: stated {got:+.2%} vs axis {tiers[tier]:+.2%}"
+        for tier, got in stated.items()
+        if abs(got - tiers[tier]) > 1e-9
+    ]
+
+
 # --- _AXIS.phosphate-chain ---------------------------------------------------
 # §1 rung rows: | **L** | 管制回归 / 涨价回吐 | **3,330** | 3,536 | source | as-of |
 # Column 2 (0-based) is the MAP rung both mounts read; the DAP column is a
@@ -605,3 +705,76 @@ def check_optical_narrow_attach(
                 f"— use §4b broad label or cut the numerator"
             )
     return errors
+
+
+# --- _AXIS.coal-price --------------------------------------------------------
+# §1 rung rows: | **L** | 长协 regime 内的实测谷底回归 | **703** | sources | as-of |
+# Column 2 (0-based) is the QHD 5500 annual-average coal price every mount reads.
+# §1 base series rows: | FY2019 | **588** | main source | cross | diff |
+_COAL_ROW = re.compile(r"^\|\s*\*\*([LMH])\*\*\s*\|")
+_COAL_SERIES_ROW = re.compile(r"^\|\s*FY(\d{4})\s*\|\s*\*\*([0-9,]+)\*\*")
+
+# Axis §3: the axis is zero-sum and NON-monotonic — the same coal state is a
+# miner's good year and a generator's bad one, so the two sides read the rungs
+# in opposite order.  A mount that "takes the bad side" on its own would break
+# the mirror (both sides assuming they lose).
+_COAL_SIDES = {"miner": ("L", "M", "H"), "generator": ("H", "M", "L")}
+
+
+def load_coal_rungs(path: Path | None = None) -> dict[str, float]:
+    """{tier: QHD 5500 CNY/t annual average} from _AXIS.coal-price.md §1."""
+    md = (path or AXIS_COAL).read_text(encoding="utf-8")
+    rungs: dict[str, float] = {}
+    for line in md.splitlines():
+        m = _COAL_ROW.match(line)
+        if not m:
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if len(cells) < 3 or m.group(1) in rungs:
+            continue
+        # §2 (regime prose) rows share the **L**/**M**/**H** prefix; only the
+        # §1 rung table carries a number in column 2, and it comes first.
+        try:
+            rungs[m.group(1)] = float(cells[2].strip("* ").replace(",", ""))
+        except ValueError:
+            continue
+    missing = {"L", "M", "H"} - rungs.keys()
+    if missing:
+        raise ValueError(f"coal axis rungs missing: {sorted(missing)}")
+    if not (rungs["L"] < rungs["M"] < rungs["H"]):
+        raise ValueError(f"coal axis rungs not ordered: {rungs}")
+    return rungs
+
+
+def load_coal_series(path: Path | None = None) -> dict[int, float]:
+    """{fiscal year: QHD 5500 annual average} from the axis §1 base series —
+    the one series every mount's `coal_fy*` rows must restate (axis 4c-2)."""
+    md = (path or AXIS_COAL).read_text(encoding="utf-8")
+    series = {
+        int(m.group(1)): float(m.group(2).replace(",", ""))
+        for m in (_COAL_SERIES_ROW.match(line) for line in md.splitlines())
+        if m
+    }
+    if not series:
+        raise ValueError("coal axis base series not found")
+    return series
+
+
+def check_coal_mount(
+    stated: tuple[float, float, float], side: str, path: Path | None = None
+) -> list[str]:
+    """Verify a mount's coal_l/m/h are the axis rungs read from its own side.
+
+    `side` is "miner" (L = axis L = 703) or "generator" (L = axis H = 965):
+    a generator's worst world is the miner's best, and the axis §3 mirror is
+    what this check enforces — a rung edited on one side turns the other
+    side's eval red.
+    """
+    if side not in _COAL_SIDES:
+        raise ValueError(f"side must be one of {sorted(_COAL_SIDES)}, got {side!r}")
+    rungs = load_coal_rungs(path)
+    return [
+        f"{tier} coal rung ({side} reads axis {axis_tier}): stated {got:g} vs axis {rungs[axis_tier]:g}"
+        for tier, axis_tier, got in zip(("L", "M", "H"), _COAL_SIDES[side], stated)
+        if abs(got - rungs[axis_tier]) > 0.5
+    ]

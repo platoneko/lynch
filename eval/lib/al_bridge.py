@@ -17,6 +17,21 @@ an anchor: the `*_ref` inputs exist only to pin k, and 2025H1 itself is read
 back into each framework as a reference coordinate (a different corner of the
 aluminium/alumina grid), not as L.
 
+The multiple is generated, not typed (valuation-rules.md「永续增长口径」).  Each
+tier names a perpetual g written once in the axis file (g_L / g_M / g_H —
+currently all 0%: the axis L rung 4,250 is a GS 2027E supply-glut *level*
+that may persist, not a trough that mean-reverts; IAI 3.3% is sensitivity /
+stretched only) and the tier's forward ROE = NP_x / equity turns it into
+`perpetual_pe`.  The L world is the axis's L rung — a nameable regime
+(「低位 regime 持续」), not the ticker's own trough year — so it takes the
+steady g on ROE_L (valuation-rules「谷底档」适用范围); the 谷底档's recovery stage
+(`recovery_two_stage_pe`) applies only to an own realised trough year, and
+running it on an axis rung lets L converge on M.  Each ticker's own printed
+trough × 1/r is only the deep_discount pressure coordinate.  The ticker's own
+realised PE band is only a guardrail: a generated multiple outside it is
+answered by reverse-solving that tier's g to the nearest band edge (裁决顺序
+③), and a band no legal g can reach stops the ticker rather than being clipped.
+
 Only the per-ticker inputs differ, so the arithmetic lives here rather than in
 four copies.  What does not live here is each ticker's own guard — Chalco's
 minority drain, Tianshan's volume basis, Hongqiao's integration shape —
@@ -25,10 +40,14 @@ because those are the parts that are genuinely not shared.
 
 from __future__ import annotations
 
+from .axes import AXIS_AL, check_axis_g_mount
+from .gordon import check_g_cap, check_r, perpetual_pe
+
 REQUIRED = [
     "price", "shares",
     "rev_m", "gm_m", "rev_ref", "gm_ref", "np_m", "np_ref",
-    "vol_al", "spread_l", "spread_m", "spread_h", "pe",
+    "vol_al", "spread_l", "spread_m", "spread_h",
+    "equity", "r_perp", "g2_l", "g2_m", "g2_h", "pe_own_min", "pe_own_max",
     "bps", "pb_low",
 ]
 
@@ -61,6 +80,20 @@ def bridge(inp: dict[str, float]) -> dict[str, object]:
     }
 
 
+def multiples(inp: dict[str, float]) -> tuple[list[float], list[float]]:
+    """(PE per tier, forward ROE per tier), both generated from the Inputs.
+
+    ROE_x = NP_x / equity is the tier's own return on today's book, so the
+    retention Gordon charges for g_x is the tier's, not a company average.
+    """
+    nps = bridge(inp)["np"]
+    roes = [np_ / inp["equity"] for np_ in nps]
+    r = inp["r_perp"]
+    return [
+        perpetual_pe(inp[f"g2_{tag}"], roe, r) for tag, roe in zip("lmh", roes)
+    ], roes
+
+
 def anchors(inp: dict[str, float], fx: float = 1.0) -> tuple[list[float], list[float]]:
     """(anchors in quote currency, EPS in reporting currency).
 
@@ -69,7 +102,41 @@ def anchors(inp: dict[str, float], fx: float = 1.0) -> tuple[list[float], list[f
     """
     nps = bridge(inp)["np"]
     eps = [np_ / inp["shares"] for np_ in nps]
-    return [e * inp["pe"] / fx for e in eps], eps
+    pes, _ = multiples(inp)
+    return [e * pe / fx for e, pe in zip(eps, pes)], eps
+
+
+def check_gordon(inp: dict[str, float]) -> list[str]:
+    """Everything valuation-rules.md asks of a generated multiple, in one place.
+
+    r on a tier; every g under the cap; the tier shape flat-or-reverse and
+    equal to the axis's shared g rows; and the guardrail — each generated PE
+    inside the band this stock has actually printed.  A guardrail miss is
+    reported, never clipped: widening the band or bending g to pass is the
+    exact move the rule exists to forbid.
+    """
+    errors = check_r(inp["r_perp"], "r_perp")
+    stated = {"L": inp["g2_l"], "M": inp["g2_m"], "H": inp["g2_h"]}
+    for tag, g in stated.items():
+        errors += check_g_cap(g, f"g2_{tag.lower()}")
+    errors += check_axis_g_mount(AXIS_AL, stated)
+    if errors:
+        return errors
+
+    pes, _ = multiples(inp)
+    if not (pes[0] >= pes[1] >= pes[2]):
+        errors.append(
+            f"cyclical multiple policy violated: PE {pes[0]:.2f}/{pes[1]:.2f}/{pes[2]:.2f} "
+            "must be flat or reverse (skill A2e-5)"
+        )
+    lo, hi = inp["pe_own_min"], inp["pe_own_max"]
+    for tag, pe in zip("LMH", pes):
+        if not (lo <= pe <= hi):
+            errors.append(
+                f"{tag} generated PE {pe:.2f} outside own realised band [{lo}, {hi}] — "
+                "reverse-solve that tier's g to the nearest edge (裁决顺序 ③), do not force r or widen the band"
+            )
+    return errors
 
 
 def check_regression(

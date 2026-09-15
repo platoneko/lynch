@@ -4,7 +4,7 @@
 The five zone ids are broadcast side by side by `daily_bands.py`, so they are only
 comparable when the three anchors were built the same way. This prints the repo's
 current distribution so a framework's ratios can be read against its own class
-(see AGENTS.md「锚点语义」and skill sediment-framework A2e).
+(see skill sediment-framework references/valuation-rules.md「锚点语义」and A2e).
 
 Reads frameworks/*.md only. Writes nothing.
 """
@@ -52,7 +52,7 @@ def _pe_ratios(m: FrameworkMeta) -> tuple[float, float] | None:
 
 
 def _r_tiers(m: FrameworkMeta) -> str:
-    """Which discount-rate tiers this framework's legs sit in (AGENTS.md「永续增长口径」).
+    """Which discount-rate tiers this framework's legs sit in (valuation-rules.md「永续增长口径」).
 
     r is picked by the leg's cash-flow nature, so a ticker carrying a contracted
     leg discounts part of itself at 7% while its neighbours sit at 10%.  That has
@@ -68,7 +68,7 @@ def _r_tiers(m: FrameworkMeta) -> str:
 def _g2_max(m: FrameworkMeta) -> str:
     """Highest perpetual g the framework names, read from its `g2*` inputs.
 
-    AGENTS.md caps the perpetuity at G_CAP; anything above it is flagged with
+    valuation-rules.md「永续增长口径」caps the perpetuity at G_CAP; anything above it is flagged with
     "!" so the dial shows up in the cross-ticker table instead of hiding in
     one file's Inputs.  Frameworks that name their perpetual g under another
     key (`g_sw`, `g_bank`, ...) print a blank, not a zero.
@@ -149,7 +149,7 @@ def main() -> int:
         f"（中位 {statistics.median(all_lm):.2f}）· "
         f"H/M {min(all_hm):.2f}–{max(all_hm):.2f}（中位 {statistics.median(all_hm):.2f}）"
     )
-    print("散布 MUST 可归因到基本面或林奇分类，MUST NOT 来自构造手法（AGENTS.md「锚点语义」）")
+    print("散布 MUST 可归因到基本面或林奇分类，MUST NOT 来自构造手法（valuation-rules.md「锚点语义」）")
     print(
         "γ = dlog(PE)/dlog(EPS)：隐含值是该票倍数政策所假设的（flat=0、反向<0、同向>0），"
         "实测值来自 §3 `gamma_pe`。两者异号或隐含幅度超出实测，说明倍数政策与实证不符"

@@ -8,3 +8,20 @@ paths = ["/home/neko/plat1ko/agent/finance-skills/skills"]
 # Project TOML fully replaces user TOML / .mcp.json for the same name (no field merge).
 # A headerless project entry makes handshake succeed but tools/call return
 # "No API key provided". Auth lives in gitignored .mcp.json and/or ~/.grok/config.toml.
+
+# longbridge is OAuth (no static secret) — safe to declare at project scope.
+[mcp_servers.longbridge]
+url = "https://openapi.longbridge.com/mcp"
+enabled = true
+
+# Full auto-allow for research tools in this repo (also mirrored in
+# .claude/settings.local.json for Claude Code / Grok Claude-compat).
+[permission]
+allow = [
+    "mcp__wisburg__*",
+    "mcp__longbridge__*",
+    "MCPTool(wisburg__*)",
+    "MCPTool(longbridge__*)",
+    "WebSearch",
+    "WebFetch",
+]
