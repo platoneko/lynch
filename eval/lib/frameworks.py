@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from eval.lib.inputs import parse_baskets
+from .inputs import parse_baskets
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FRAMEWORKS_DIR = REPO_ROOT / "frameworks"
@@ -80,7 +80,7 @@ LYNCH_CN: dict[str, str] = {
 
 def basket_label(meta: "FrameworkMeta") -> str:
     """Human label for the index / digest: `篮 4 10%`, per leg when several."""
-    from eval.lib.gordon import BASKET_R  # local import: gordon does not depend on frameworks
+    from .gordon import BASKET_R  # local import: gordon does not depend on frameworks
 
     if not meta.baskets:
         return "—"
