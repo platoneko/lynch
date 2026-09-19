@@ -1,8 +1,8 @@
 """Perpetual-growth multiples with reinvestment.
 
-The repo prices a business as `PE = 1/(r - g)` with `r = 10%`, so a no-growth
-business is worth 10x (skill sediment-framework, references/valuation-rules.md
-「永续增长口径」).  That form silently assumes
+The repo prices a business as `PE = 1/(r - g)` with `r` set by the leg's basket
+(skill sediment-framework, references/valuation-rules.md「§r 篮子」), so a
+no-growth business is worth `1/r` (10x in the 龙头制造 basket).  That form silently assumes
 a 100% payout — growth arriving free of reinvestment, i.e. an infinite return
 on incremental capital.  It overstates the multiple for any `g > 0`, and
 inverting it therefore understates the growth a market price is paying for.
@@ -28,38 +28,63 @@ from __future__ import annotations
 # that regime produces a number, not a reading.
 _ROE_NEAR_R = 0.03
 
-# valuation-rules.md「永续增长口径」: r is picked by the leg's cash-flow nature, never by
-# ticker, so the same kind of cash flow discounts the same way everywhere and the
-# cross-ticker bands stay comparable.  Three tiers, nothing in between -- a free
-# dial would make r a price knob, which is exactly what the old flat 10% guarded
-# against.  The grounding is standard corporate finance, not a repo invention:
-# a single company-wide rate overvalues the risky leg and undervalues the safe one
-# (Brealey/Myers/Allen, "Company and Project Costs of Capital").
-R_CONTRACTED = 0.07  # payer, rate and term fixed in a signed contract
-R_OPERATING = 0.10  # default
-R_CONDITIONAL = 0.13  # revenue contingent on unclosed financing or unsigned customers
-R_TIERS = (R_CONTRACTED, R_OPERATING, R_CONDITIONAL)
+# valuation-rules.md「§r 篮子」: r is set by the nature of the business the leg
+# belongs to -- seven baskets, repo-level, never a per-ticker dial.  A framework
+# names the basket and the reason; the value lives here so the same kind of
+# business discounts the same way everywhere and cross-ticker bands stay
+# comparable.  Changing a basket value is a repo-level decision taken on two
+# quarters of basket-level implied-r evidence, never inside one ticker.  The
+# grounding is standard corporate finance: a single company-wide rate overvalues
+# the risky leg and undervalues the safe one (Brealey/Myers/Allen, "Company and
+# Project Costs of Capital").
+BASKET_R: dict[int, tuple[str, float]] = {
+    1: ("固定合约年金", 0.065),
+    2: ("管制公用事业", 0.075),
+    3: ("按量专利许可", 0.085),
+    4: ("龙头制造", 0.100),
+    5: ("大行 / 优质股份行", 0.110),
+    6: ("周期商品 / 小盘", 0.130),
+    7: ("单押 / 国别 / 故事", 0.150),
+}
+BASKET_VALUES: tuple[float, ...] = tuple(r for _, r in BASKET_R.values())
 
 
-def check_r(r: float, where: str) -> list[str]:
-    """A leg's discount rate must be one of the three tiers, not a free knob."""
-    if not any(abs(r - tier) < 1e-9 for tier in R_TIERS):
-        return [f"{where}: r={r} not in {R_TIERS} (valuation-rules.md「永续增长口径」)"]
+def basket_r(basket: int) -> float:
+    return BASKET_R[basket][1]
+
+
+def check_r(r: float, where: str, basket: int | None = None) -> list[str]:
+    """A leg's r must be a basket value; with the basket named it must be THAT basket's."""
+    if basket is not None:
+        if basket not in BASKET_R:
+            return [f"{where}: 篮 {basket} is not one of 1..7 (valuation-rules.md「§r 篮子」)"]
+        if abs(r - basket_r(basket)) > 1e-9:
+            return [f"{where}: r={r} but 篮 {basket} {BASKET_R[basket][0]} is {basket_r(basket)} (valuation-rules.md「§r 篮子」)"]
+        return []
+    if not any(abs(r - v) < 1e-9 for v in BASKET_VALUES):
+        return [f"{where}: r={r} not in baskets {BASKET_VALUES} (valuation-rules.md「§r 篮子」)"]
     return []
 
 
-# valuation-rules.md「永续增长口径」: a perpetual g above this is a dial, not a state.
-# Between r - g = 2% and 4% the multiple's elasticity to g passes 25x (1pp of g
-# moved MRVL.US's M by ~30%), so growth beyond the cap has to be named as a
-# finite transition -- two_stage_pe with n bounded by the years a consensus
-# exists for -- and never left in the perpetuity.
-G_CAP = 0.06
+# valuation-rules.md「永续增长口径」: a perpetual g above the cap is a dial, not a
+# state.  The cap keeps at least 4pp between r and g (between r - g = 2% and 4%
+# the multiple's elasticity to g passes 25x; 1pp of g moved MRVL.US's M by ~30%)
+# and never exceeds the 6% macro ceiling however high r is.  Growth beyond it
+# has to be named as a finite transition -- two_stage_pe with n bounded by the
+# years a consensus exists for -- and never left in the perpetuity.
+G_CAP_MACRO = 0.06
+MIN_R_MINUS_G = 0.04
 
 
-def check_g_cap(g: float, where: str) -> list[str]:
-    """A perpetual g must sit at or below G_CAP; the excess belongs in g1."""
-    if g > G_CAP + 1e-9:
-        return [f"{where}: g2={g:.4f} > cap {G_CAP:.2f} (valuation-rules.md「永续增长口径」) — move the excess into a named g1"]
+def g_cap(r: float) -> float:
+    return min(G_CAP_MACRO, r - MIN_R_MINUS_G)
+
+
+def check_g_cap(g: float, r: float, where: str) -> list[str]:
+    """A perpetual g must sit at or below g_cap(r); the excess belongs in g1."""
+    cap = g_cap(r)
+    if g > cap + 1e-9:
+        return [f"{where}: g2={g:.4f} > cap {cap:.3f} at r={r} (valuation-rules.md「永续增长口径」) — move the excess into a named g1"]
     return []
 
 
@@ -85,7 +110,7 @@ def perpetual_pe(g: float, roe: float, r: float) -> float:
 
 
 def capped_payout_pe(g_raw: float, roe: float, r: float, payout_observed: float) -> float:
-    """Multiple for a dividend name whose policy g exceeds G_CAP.
+    """Multiple for a dividend name whose policy g exceeds g_cap(r).
 
     Gordon credits exactly g/ROE of retention; when g is clipped to the cap the
     company keeps retaining for the uncapped g, and that extra retention is
@@ -94,9 +119,10 @@ def capped_payout_pe(g_raw: float, roe: float, r: float, payout_observed: float)
     (valuation-rules.md「永续增长口径」capped-g rule, 2026-09-15).  Below the cap
     this is exactly perpetual_pe.
     """
-    if g_raw <= G_CAP + 1e-9:
+    cap = g_cap(r)
+    if g_raw <= cap + 1e-9:
         return perpetual_pe(g_raw, roe, r)
-    return payout_observed / (r - G_CAP)
+    return payout_observed / (r - cap)
 
 
 def annuity_factor(g: float, r: float, n: float) -> float:
@@ -258,7 +284,7 @@ def implied_g_retaining(pe: float, roe: float, r: float) -> tuple[float, bool]:
 #   magnitude -- only while ROE < r + _ROE_NEAR_R.  There the multiple is a
 #                hump and the payout g2 requires (1 - g2/ROE) is a real reading:
 #                the two branches sit ~50pp apart (1766.HK: modelled 100% vs
-#                paid 50%).  On a high-ROE book every g2 <= G_CAP needs >= ~85%
+#                paid 50%).  On a high-ROE book every g2 <= g_cap(r) needs >= ~85%
 #                payout, so the same gap measures book-vs-marginal ROE
 #                (600011.SH: 永续债 lifts common-equity ROE to 16%; GLW.US auto
 #                leg on a 40% company ROE) -- report it with `payout_gap`, do
