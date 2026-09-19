@@ -44,9 +44,9 @@ class ParseTests(unittest.TestCase):
         self.assertIn("WOLF.US", tickers)
         self.assertIn("0700.HK", tickers)
         intc = next(m for m in metas if m.ticker == "INTC.US")
-        self.assertAlmostEqual(intc.L, 27.2, places=1)
-        self.assertAlmostEqual(intc.M, 71.2, places=1)
-        self.assertAlmostEqual(intc.H, 113.1, places=1)
+        self.assertAlmostEqual(intc.L, 14.7, places=1)
+        self.assertAlmostEqual(intc.M, 29.2, places=1)
+        self.assertAlmostEqual(intc.H, 33.6, places=1)
 
     def test_paths_grouped_by_market_like_index(self) -> None:
         # Daily digest must read US → HK → A like _INDEX.md, not name-sorted

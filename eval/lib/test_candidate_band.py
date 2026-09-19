@@ -112,8 +112,8 @@ class ParseCandidateTests(unittest.TestCase):
 
     def test_sofi_framework_carries_candidate(self) -> None:
         m = load_framework(REPO_ROOT / "frameworks" / "SOFI.US.md")
-        self.assertEqual(m.candidate, (7.23, 15.54, 16.29))
-        self.assertEqual(m.candidate_label, "FY28·Piper单家")
+        self.assertEqual(m.candidate, (5.56, 9.69, 10.15))
+        self.assertEqual(m.candidate_label, "FY28·Piper单家·窗口口径")
 
 
 class CandidateZoneTests(unittest.TestCase):
@@ -134,8 +134,8 @@ class CandidateLinesTests(unittest.TestCase):
             daily_bands.format_pool_lines(r),
             [
                 "🔴 SOFI.US 17.32 USD",
-                "「叙事溢价」 L/M/H = 7.23/13.02/13.88",
-                "「叙事溢价」 候选(FY28·Piper单家) L/M/H = 7.23/15.54/16.29",
+                "「叙事溢价」 P > 13.88 · L/M/H = 7.23/13.02/13.88",
+                "「叙事溢价」 候选(FY28·Piper单家) P > 16.29 · L/M/H = 7.23/15.54/16.29",
             ],
         )
 
@@ -177,8 +177,8 @@ class CandidateCrossTests(unittest.TestCase):
             lines,
             [
                 "🔴 SOFI.US 16.00 USD",
-                "「叙事溢价」 L/M/H = 7.23/13.02/13.88",
-                "「乐观」 候选(FY28·Piper单家) L/M/H = 7.23/15.54/16.29",
+                "「叙事溢价」 P > 13.88 · L/M/H = 7.23/13.02/13.88",
+                "「乐观」 候选(FY28·Piper单家) [15.91, 16.29] · L/M/H = 7.23/15.54/16.29",
                 "候选 「叙事溢价」 → 「乐观」",
             ],
         )
