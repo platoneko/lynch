@@ -143,7 +143,9 @@ def parse_baskets(md: str) -> dict[str, int]:
         if not in_inputs or not line.startswith("|"):
             continue
         cells = [c.strip() for c in line.strip("|").split("|")]
-        if len(cells) < 3 or not cells[0].startswith("r"):
+        # Only `r` / `r_*` rows are discount-rate legs; `roe_*`, `rf_*`, `rev_*`
+        # may mention a basket in prose without being one.
+        if len(cells) < 3 or not (cells[0] == "r" or cells[0].startswith("r_")):
             continue
         m = _BASKET_TAG.search(cells[2])
         if m:

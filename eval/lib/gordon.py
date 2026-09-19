@@ -43,8 +43,8 @@ BASKET_R: dict[int, tuple[str, float]] = {
     3: ("按量专利许可", 0.085),
     4: ("龙头制造", 0.100),
     5: ("大行 / 优质股份行", 0.110),
-    6: ("周期商品 / 小盘", 0.130),
-    7: ("单押 / 国别 / 故事", 0.150),
+    6: ("周期商品 / 氟化工 / 小盘", 0.130),
+    7: ("单押 / 国别重 / 故事股", 0.150),
 }
 BASKET_VALUES: tuple[float, ...] = tuple(r for _, r in BASKET_R.values())
 
@@ -128,7 +128,7 @@ def capped_payout_pe(g_raw: float, roe: float, r: float, payout_observed: float)
 def annuity_factor(g: float, r: float, n: float) -> float:
     """PV of n years of a stream growing at g, discounted at r, per unit of NI_1.
 
-    The finite-life twin of `1/(r - g)`, sharing the same r tiers.  Use it
+    The finite-life twin of `1/(r - g)`, sharing the basket r.  Use it
     wherever the cash flow has a named end and Gordon's perpetual premise
     therefore fails: a concession that reverts to the host state, a supply
     contract with a stated term.  `n → ∞` recovers `1/(r - g)` for g < r, and

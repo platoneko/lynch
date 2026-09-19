@@ -65,7 +65,7 @@
 
 **跨票可比性**：`scripts/daily_bands.py` 把所有票的 zone 并排推送，故构造方法 **MUST** 可比。每票 §3 **MUST** 报 \(L/M\)、\(H/M\)、\((H-L)/2M\)（`neutral` 档宽占 M 的比例）；三者的仓库分布由 `scripts/calibration.py` 输出。`_INDEX.md` 每票带篮子列（各腿 `篮 N r%`），由 Inputs `r*` 行的 `篮 N` 标签生成。
 
-**篮子声明 — 行契约**：Inputs 表每条 `r*` 行（`r_disc` 年漂移折现除外）的来源单元格 **MUST** 含 `篮 N`（N ∈ 1..7）+ 归篮理由；eval 以 `inputs.parse_baskets` + `gordon.check_r(r, where, basket)` 校验值与篮子一致，`check_g_cap(g, r, where)` 校验永续 g。
+**篮子声明 — 行契约**：Inputs 表每条**进锚点公式的 r 行**的来源单元格 **MUST** 含 `篮 N`（N ∈ 1..7）+ 归篮理由；只作披露的 r 读数（`r_disc` 年漂移折现、`r_lt_implied`、带边 / 隐含 r）**MUST NOT** 含 `篮 N` 字样（写「同 `r_perp`，不归篮」之类）；eval 以 `inputs.parse_baskets` + `gordon.check_r(r, where, basket)` 校验值与篮子一致，`check_g_cap(g, r, where)` 校验永续 g。
 
 **BLOCKED — 题头契约**：规则拦下但用户拍板入池的票，题头第三行 `> **状态：BLOCKED**（原因；解封条件）`；Outputs 仍写底牌行（散文称对照带）。`daily_bands.py` / `_INDEX.md` / `calibration.py` 对 BLOCKED 票 **MUST NOT** 出 zone、**MUST NOT** 触发跨带告警。
 
