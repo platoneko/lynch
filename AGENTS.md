@@ -61,9 +61,13 @@
 
 ### 估值构造口径（真源已移至 skill）
 
-锚点语义（L/M/H 各定价什么）、价带偏离反思的语义门槛、永续增长口径（r 三档、Gordon、g 上限、增长的表达顺序、g2 来源优先序、构造规则冲突的裁决顺序、两段式过渡、谷底档）、L 是情景不是地板、可比性的构造要求、\(V_{opt}\) 与候选带的判据、共享轴的构造要求——**真源在 `.claude/skills/sediment-framework/references/valuation-rules.md`**，本文与标的文档里出现的「AGENTS.md「永续增长口径」」等旧指针均指向该文件。这些只在写 / 纠正框架时需要；日报与 eval 库只依赖本节下面的契约。
+锚点语义（L/M/H 各定价什么）、价带偏离反思的语义门槛、永续增长口径（r 由 7 个篮子按生意性质给出——值的真源 `eval/lib/gordon.py` `BASKET_R`；g 上限 `min(6%, r−4%)`；Gordon、增长的表达顺序、g2 来源优先序、构造规则冲突的裁决顺序、两段式过渡、谷底档 / regime-point 双口径）、L 是情景不是地板、可比性的构造要求、\(V_{opt}\) 与候选带的判据、共享轴的构造要求——**真源在 `.claude/skills/sediment-framework/references/valuation-rules.md`**，本文与标的文档里出现的「AGENTS.md「永续增长口径」」等旧指针均指向该文件。这些只在写 / 纠正框架时需要；日报与 eval 库只依赖本节下面的契约。
 
-**跨票可比性**：`scripts/daily_bands.py` 把所有票的 zone 并排推送，故构造方法 **MUST** 可比。每票 §3 **MUST** 报 \(L/M\)、\(H/M\)、\((H-L)/2M\)（`neutral` 档宽占 M 的比例）；三者的仓库分布由 `scripts/calibration.py` 输出。
+**跨票可比性**：`scripts/daily_bands.py` 把所有票的 zone 并排推送，故构造方法 **MUST** 可比。每票 §3 **MUST** 报 \(L/M\)、\(H/M\)、\((H-L)/2M\)（`neutral` 档宽占 M 的比例）；三者的仓库分布由 `scripts/calibration.py` 输出。`_INDEX.md` 每票带篮子列（各腿 `篮 N r%`），由 Inputs `r*` 行的 `篮 N` 标签生成。
+
+**篮子声明 — 行契约**：Inputs 表每条 `r*` 行（`r_disc` 年漂移折现除外）的来源单元格 **MUST** 含 `篮 N`（N ∈ 1..7）+ 归篮理由；eval 以 `inputs.parse_baskets` + `gordon.check_r(r, where, basket)` 校验值与篮子一致，`check_g_cap(g, r, where)` 校验永续 g。
+
+**BLOCKED — 题头契约**：规则拦下但用户拍板入池的票，题头第三行 `> **状态：BLOCKED**（原因；解封条件）`；Outputs 仍写底牌行（散文称对照带）。`daily_bands.py` / `_INDEX.md` / `calibration.py` 对 BLOCKED 票 **MUST NOT** 出 zone、**MUST NOT** 触发跨带告警。
 
 **未建模期权（\(V_{opt}\)）— 行契约**：Outputs bullet `\(V_{opt}\)` + `\(p_L/p_M/p_H\)`；`daily_bands.py` 据此报第二条 `+V` zone。底牌 \(L/M/H\) 与 zone 判定 **MUST NOT** 含概率。判据与构造见 skill references「未建模期权」。
 
