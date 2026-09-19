@@ -17,7 +17,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from eval.lib.axes import list_axis_paths  # noqa: E402
-from eval.lib.frameworks import FRAMEWORKS_DIR, list_framework_paths  # noqa: E402
+from eval.lib.frameworks import FRAMEWORKS_DIR, list_framework_paths, market_bucket  # noqa: E402
 
 _TITLE = re.compile(r"^#\s+(\S+)\s+[—–-]\s+(.+)$")
 _INDEX_PATH = FRAMEWORKS_DIR / "_INDEX.md"
@@ -28,16 +28,6 @@ _SECTIONS: tuple[tuple[str, str], ...] = (
     ("港股", "HK"),
     ("A股", "A"),
 )
-
-
-def _market_bucket(ticker: str) -> str | None:
-    if ticker.endswith(".US"):
-        return "US"
-    if ticker.endswith(".HK"):
-        return "HK"
-    if ticker.endswith((".SH", ".SZ")):
-        return "A"
-    return None
 
 
 def _chinese_name(name_rest: str) -> str | None:
@@ -109,7 +99,7 @@ def build_index(frameworks_dir: Path | None = None) -> str:
         # Link by filename stem so the relative path always resolves.
         ticker = path.stem
         _, cn = _parse_title(path)
-        bucket = _market_bucket(ticker)
+        bucket = market_bucket(ticker)
         if bucket is None:
             unknown.append(ticker)
             continue
