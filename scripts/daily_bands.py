@@ -35,7 +35,7 @@ TZ = ZoneInfo("Asia/Shanghai")
 class Row:
     meta: FrameworkMeta
     price: float
-    zone: str
+    zone: str | None  # None only for a BLOCKED framework
     previous_zone: str | None
     crossed: bool
     notes: list[str]
@@ -136,10 +136,16 @@ def format_pool_lines(r: Row) -> list[str]:
     Tickers carrying a candidate band get one more, last:
     「叙事溢价」 候选(FY28·Piper单家) P > 16.29 · L/M/H = 7.23/15.54/16.29
     """
-    emoji = zone_emoji(r.zone)
     title = r.meta.ticker
     if not r.meta.ticker.endswith(".US"):
         title = f"{r.meta.ticker} {_short_name(r.meta)}"
+    # AGENTS.md「BLOCKED — 题头契约」: the deck is printed as a reference band, no zone.
+    if r.meta.blocked:
+        return [
+            f"⛔ {title} {_fmt_price(r.price, r.meta.currency)}",
+            f"BLOCKED（{r.meta.blocked}）· 对照带 {format_lmh(r.meta.L, r.meta.M, r.meta.H)}",
+        ]
+    emoji = zone_emoji(r.zone)
     header = f"{emoji} {title} {_fmt_price(r.price, r.meta.currency)}"
     bounds = format_zone_bounds(r.zone, r.meta.L, r.meta.M, r.meta.H)
     lines = [
@@ -265,9 +271,12 @@ def run(*, dry_run: bool, notify: bool, bands_dir: Path | None) -> int:
                 raise KeyError("longbridge 未返回报价（停牌/代码变更/接口异常）")
             q = quotes[meta.ticker]
             price = q.last
-            zone = zone_of(price, meta.L, meta.M, meta.H)
-            option_zone = credited_option_zone(price, meta)
-            cand_zone = candidate_zone(price, meta)
+            if meta.blocked:
+                zone = option_zone = cand_zone = None
+            else:
+                zone = zone_of(price, meta.L, meta.M, meta.H)
+                option_zone = credited_option_zone(price, meta)
+                cand_zone = candidate_zone(price, meta)
         except Exception as e:  # noqa: BLE001
             errors.append(f"{meta.ticker}: {e}")
             continue
@@ -282,9 +291,10 @@ def run(*, dry_run: bool, notify: bool, bands_dir: Path | None) -> int:
         previous_candidate_zone = None
         if prev and isinstance(prev.get("candidate_zone"), str):
             previous_candidate_zone = prev["candidate_zone"]
-        crossed = zone_changed(previous_zone, zone)
-        option_crossed = zone_changed(previous_option_zone, option_zone)
-        candidate_crossed = zone_changed(previous_candidate_zone, cand_zone)
+        # A BLOCKED ticker has no zone to cross; it must never page the channel.
+        crossed = zone_changed(previous_zone, zone) and not meta.blocked
+        option_crossed = zone_changed(previous_option_zone, option_zone) and not meta.blocked
+        candidate_crossed = zone_changed(previous_candidate_zone, cand_zone) and not meta.blocked
         if previous_zone is None:
             notes.append("first_run")
 
@@ -302,6 +312,7 @@ def run(*, dry_run: bool, notify: bool, bands_dir: Path | None) -> int:
             previous_option_zone=previous_option_zone,
             candidate_zone=cand_zone,
             previous_candidate_zone=previous_candidate_zone,
+            blocked=meta.blocked,
             notes=notes,
             inputs_used={
                 "price_source": "longbridge",

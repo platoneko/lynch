@@ -17,7 +17,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from eval.lib.axes import list_axis_paths  # noqa: E402
-from eval.lib.frameworks import FRAMEWORKS_DIR, list_framework_paths, market_bucket  # noqa: E402
+from eval.lib.frameworks import FRAMEWORKS_DIR, basket_label, list_framework_paths, load_framework, market_bucket  # noqa: E402
 
 _TITLE = re.compile(r"^#\s+(\S+)\s+[—–-]\s+(.+)$")
 _INDEX_PATH = FRAMEWORKS_DIR / "_INDEX.md"
@@ -92,7 +92,7 @@ def _parse_axis(path: Path) -> tuple[str, str, str]:
 
 
 def build_index(frameworks_dir: Path | None = None) -> str:
-    buckets: dict[str, list[tuple[str, str | None]]] = {k: [] for _, k in _SECTIONS}
+    buckets: dict[str, list[tuple[str, str | None, str]]] = {k: [] for _, k in _SECTIONS}
     unknown: list[str] = []
 
     for path in list_framework_paths(frameworks_dir):
@@ -103,7 +103,13 @@ def build_index(frameworks_dir: Path | None = None) -> str:
         if bucket is None:
             unknown.append(ticker)
             continue
-        buckets[bucket].append((ticker, cn))
+        # Basket column (AGENTS.md「篮子声明」) and BLOCKED flag come from the
+        # parsed framework; a parse failure must surface, not print a blank.
+        meta = load_framework(path)
+        tail = f"篮子：{basket_label(meta)}"
+        if meta.blocked:
+            tail += " · **BLOCKED**"
+        buckets[bucket].append((ticker, cn, tail))
 
     for items in buckets.values():
         items.sort(key=lambda t: t[0])
@@ -111,7 +117,7 @@ def build_index(frameworks_dir: Path | None = None) -> str:
     lines: list[str] = [
         "# 标的与轴索引",
         "",
-        "> 由 `scripts/gen_index.py` 从 `frameworks/*.md` 与 `frameworks/axes/*.md` 题头生成；勿手改。",
+        "> 由 `scripts/gen_index.py` 从 `frameworks/*.md`（题头、Inputs 篮子标签、BLOCKED 状态）与 `frameworks/axes/*.md` 题头生成；勿手改。",
         "> 轴的稳定引用写逻辑 id `` `_AXIS.<名>` ``；文件在 `axes/<名>.md`。",
         "",
     ]
@@ -121,14 +127,12 @@ def build_index(frameworks_dir: Path | None = None) -> str:
             continue
         lines.append(f"## {heading}")
         lines.append("")
-        for ticker, cn in items:
+        for ticker, cn, tail in items:
             link = f"[{ticker}](./{ticker}.md)"
-            if key == "US":
-                lines.append(f"- {link}")
-            elif cn:
-                lines.append(f"- {link} — {cn}")
+            if key != "US" and cn:
+                lines.append(f"- {link} — {cn} · {tail}")
             else:
-                lines.append(f"- {link}")
+                lines.append(f"- {link} — {tail}")
         lines.append("")
 
     if unknown:
