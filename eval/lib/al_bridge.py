@@ -106,19 +106,20 @@ def anchors(inp: dict[str, float], fx: float = 1.0) -> tuple[list[float], list[f
     return [e * pe / fx for e, pe in zip(eps, pes)], eps
 
 
-def check_gordon(inp: dict[str, float]) -> list[str]:
+def check_gordon(inp: dict[str, float], basket: int | None = None) -> list[str]:
     """Everything valuation-rules.md asks of a generated multiple, in one place.
 
-    r on a tier; every g under the cap; the tier shape flat-or-reverse and
+    r in its basket; every g under g_cap(r); the tier shape flat-or-reverse and
     equal to the axis's shared g rows; and the guardrail — each generated PE
     inside the band this stock has actually printed.  A guardrail miss is
     reported, never clipped: widening the band or bending g to pass is the
     exact move the rule exists to forbid.
     """
-    errors = check_r(inp["r_perp"], "r_perp")
+    r = inp["r_perp"]
+    errors = check_r(r, "r_perp", basket)
     stated = {"L": inp["g2_l"], "M": inp["g2_m"], "H": inp["g2_h"]}
     for tag, g in stated.items():
-        errors += check_g_cap(g, f"g2_{tag.lower()}")
+        errors += check_g_cap(g, r, f"g2_{tag.lower()}")
     errors += check_axis_g_mount(AXIS_AL, stated)
     if errors:
         return errors
