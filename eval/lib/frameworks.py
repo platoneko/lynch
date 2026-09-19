@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+
+from eval.lib.inputs import parse_baskets
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FRAMEWORKS_DIR = REPO_ROOT / "frameworks"
@@ -47,6 +49,12 @@ _CANDIDATE = re.compile(
     r"H′\s*[≈=]\s*\*\*([0-9]+(?:\.[0-9]+)?)\*\*"
 )
 
+# Header line 3 of a framework the rules stopped (valuation-rules.md「BLOCKED 的语义」):
+#   > **状态：BLOCKED**（reason; unblock condition）
+# The deck line is still written (对照带) so the anchors parse; consumers
+# (digest / index / calibration) must not derive a zone from it.
+_BLOCKED = re.compile(r"^>\s*\*\*状态：BLOCKED\*\*\s*[（(]([^）)]*)[）)]", re.MULTILINE)
+
 _CURRENCY = re.compile(r"（(USD|HKD|CNY|TWD)[^）]*）|\((USD|HKD|CNY|TWD)[^)]*\)")
 # 中文写法也认，否则「（人民币）」会退回全文扫描并被无关括注劫持
 _CURRENCY_CN = {"人民币": "CNY", "港元": "HKD", "港币": "HKD", "美元": "USD", "新台币": "TWD"}
@@ -68,6 +76,18 @@ LYNCH_CN: dict[str, str] = {
     "turnaround": "转机",
     "asset_play": "资产隐蔽",
 }
+
+
+def basket_label(meta: "FrameworkMeta") -> str:
+    """Human label for the index / digest: `篮 4 10%`, per leg when several."""
+    from eval.lib.gordon import BASKET_R  # local import: gordon does not depend on frameworks
+
+    if not meta.baskets:
+        return "—"
+    cells = [f"篮 {b} {BASKET_R[b][1]:.1%}".replace(".0%", "%") for b in meta.baskets.values()]
+    if len(cells) == 1:
+        return cells[0]
+    return " · ".join(f"{k} {c}" for k, c in zip(meta.baskets, cells))
 
 
 def lynch_cn(primary: str, secondary: str | None = None) -> str:
@@ -95,6 +115,10 @@ class FrameworkMeta:
     # Not an option: no p_k, never feeds the base zone (AGENTS.md「共识升级候选带」).
     candidate: tuple[float, float, float] | None = None
     candidate_label: str | None = None
+    # AGENTS.md「BLOCKED — 题头契约」: reason text when the rules stopped this ticker.
+    blocked: str | None = None
+    # {r-field: basket} from the Inputs `篮 N` tags (AGENTS.md「篮子声明」).
+    baskets: dict[str, int] = field(default_factory=dict)
 
     @property
     def option_band(self) -> tuple[float, float, float] | None:
@@ -125,10 +149,35 @@ class FrameworkMeta:
         return lynch_cn(self.lynch_primary, self.lynch_secondary)
 
 
+# Market section order shared by _INDEX.md and the daily digest.
+MARKET_ORDER: tuple[str, ...] = ("US", "HK", "A")
+
+
+def market_bucket(ticker: str) -> str | None:
+    if ticker.endswith(".US"):
+        return "US"
+    if ticker.endswith(".HK"):
+        return "HK"
+    if ticker.endswith((".SH", ".SZ")):
+        return "A"
+    return None
+
+
+def _market_sort_key(p: Path) -> tuple[int, str]:
+    bucket = market_bucket(p.stem)
+    rank = MARKET_ORDER.index(bucket) if bucket in MARKET_ORDER else len(MARKET_ORDER)
+    return rank, p.name
+
+
 def list_framework_paths(frameworks_dir: Path | None = None) -> list[Path]:
+    """Framework files grouped US → HK → A (same as _INDEX.md), name-sorted within.
+
+    Plain name sort interleaves HK and A tickers by leading digit, which reads
+    as random in the digest.
+    """
     d = frameworks_dir or FRAMEWORKS_DIR
     out: list[Path] = []
-    for p in sorted(d.glob("*.md")):
+    for p in sorted(d.glob("*.md"), key=_market_sort_key):
         if p.name.startswith("_"):
             continue
         out.append(p)
@@ -231,6 +280,9 @@ def load_framework(path: Path) -> FrameworkMeta:
     if p_tiers is not None and not all(0.0 <= p <= 1.0 for p in p_tiers):
         raise ValueError(f"{ticker}: p_L/p_M/p_H out of [0,1], got {p_tiers}")
     currency = _parse_currency(md)
+    bm = _BLOCKED.search(md)
+    blocked = bm.group(1).strip() if bm else None
+    baskets = parse_baskets(md)
     lm = _LYNCH.search(md)
     if not lm:
         raise ValueError(f"{ticker}: missing 林奇：`primary` header")
@@ -261,6 +313,8 @@ def load_framework(path: Path) -> FrameworkMeta:
         p_tiers=p_tiers,
         candidate=candidate[1] if candidate else None,
         candidate_label=candidate[0] if candidate else None,
+        blocked=blocked,
+        baskets=baskets,
     )
 
 

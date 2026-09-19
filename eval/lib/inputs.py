@@ -120,3 +120,32 @@ def report(errors: list[str], label: str = "FAIL") -> int:
         return 1
     print("OK")
     return 0
+
+
+_BASKET_TAG = re.compile(r"篮\s*([1-7])")
+
+
+def parse_baskets(md: str) -> dict[str, int]:
+    """{r-field: basket} for every `r*` Inputs row whose source cell names `篮 N`.
+
+    valuation-rules.md「§r 篮子」: the framework names the basket, the value
+    lives in gordon.BASKET_R.  Rows without a basket tag (e.g. `r_disc`, the
+    year-drift discount) are simply absent from the dict.
+    """
+    out: dict[str, int] = {}
+    in_inputs = False
+    for line in md.splitlines():
+        if line.startswith("### Inputs"):
+            in_inputs = True
+            continue
+        if in_inputs and line.startswith("### "):
+            break
+        if not in_inputs or not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if len(cells) < 3 or not cells[0].startswith("r"):
+            continue
+        m = _BASKET_TAG.search(cells[2])
+        if m:
+            out[cells[0]] = int(m.group(1))
+    return out
