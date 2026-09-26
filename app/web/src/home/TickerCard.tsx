@@ -1,6 +1,6 @@
 import type { TickerRow } from '../types';
 import { rowZone } from './listModel';
-import { fmt, PriceBar } from './PriceBar';
+import { barScale, fmt, PriceBar } from './PriceBar';
 
 export function TickerCard({ row, zoneLabel, onOpen }: {
   row: TickerRow;
@@ -34,19 +34,34 @@ function CardZone({ row, zoneLabel }: { row: TickerRow; zoneLabel: (id: string) 
   if (row.blocked) return <div className="tag tag-blocked">BLOCKED</div>;
   const zone = rowZone(row);
   if (!row.band || !zone) return <div className="tag tag-muted">暂无日报</div>;
-  const { band } = row;
+  const { band, candidate } = row;
+  const base = { L: row.L!, M: row.M!, H: row.H! };
+  // Both bars share one scale so the candidate's shift against the base is visible.
+  const scale = barScale(base, candidate);
   return (
     <>
-      <div className="card-zone">
-        <span className={`tag zone-bg-${zone}`}>{zoneLabel(zone)}</span>
-        <PriceBar price={band.price} L={row.L!} M={row.M!} H={row.H!} zone={zone} />
+      {/* Alone, the base band keeps its one-line card layout; with a candidate the two stack. */}
+      <div className={candidate ? 'band' : 'band band-inline'}>
+        <div className="band-head">
+          {candidate && <span className="band-caption">底牌</span>}
+          <span className={`tag zone-bg-${zone}`}>{zoneLabel(zone)}</span>
+        </div>
+        <PriceBar price={band.price} anchors={base} scale={scale} zone={zone} />
       </div>
-      {(band.option_zone || band.candidate_zone) && (
-        <div className="card-extra">
-          {band.option_zone && <span>+V {zoneLabel(band.option_zone)}</span>}
-          {band.candidate_zone && <span>候选 {zoneLabel(band.candidate_zone)}</span>}
+      {candidate && (
+        <div className="band">
+          <div className="band-head">
+            <span className="band-caption">候选</span>
+            {/* Zones come only from the daily run; a missing one is shown as such, never computed here. */}
+            {band.candidate_zone
+              ? <span className={`tag zone-bg-${band.candidate_zone}`}>{zoneLabel(band.candidate_zone)}</span>
+              : <span className="tag tag-muted">—</span>}
+            <span className="band-label">{candidate.label}</span>
+          </div>
+          <PriceBar price={band.price} anchors={candidate} scale={scale} zone={band.candidate_zone} />
         </div>
       )}
+      {band.option_zone && <div className="card-extra">+V {zoneLabel(band.option_zone)}</div>}
     </>
   );
 }

@@ -1,25 +1,77 @@
-export function barGeometry(price: number, L: number, M: number, H: number) {
-  const span = H - L;
-  const raw = (price - L) / span;
+import type { ZoneId } from '../types';
+
+export interface Anchors {
+  L: number;
+  M: number;
+  H: number;
+}
+
+/** The price range one card's bars share, so a candidate's shift against the base shows. */
+export interface Scale {
+  lo: number;
+  hi: number;
+}
+
+// Closer than this (percent of the bar width) and the M number would collide with L's or H's.
+const MIN_LABEL_GAP = 16;
+
+export function barScale(base: Anchors, candidate: Anchors | null): Scale {
+  return candidate
+    ? { lo: Math.min(base.L, candidate.L), hi: Math.max(base.H, candidate.H) }
+    : { lo: base.L, hi: base.H };
+}
+
+/** Percent positions on `scale` of the anchors, the zone cut points A/B and the price. */
+export function barGeometry(price: number, a: Anchors, scale: Scale) {
+  const span = scale.hi - scale.lo;
+  const pct = (v: number) => (span > 0 ? ((v - scale.lo) / span) * 100 : 50);
+  // The zone cut points (AGENTS.md「价带约定」): conservative [L, A), neutral [A, B), optimistic [B, H].
+  const A = (a.L + a.M) / 2;
+  const B = (a.M + a.H) / 2;
+  const [L, M, H] = [pct(a.L), pct(a.M), pct(a.H)];
   return {
-    pricePct: Math.min(Math.max(raw, 0), 1) * 100,
-    midPct: ((M - L) / span) * 100,
-    overflow: raw < 0 ? ('below' as const) : raw > 1 ? ('above' as const) : null,
+    L, A: pct(A), M, B: pct(B), H,
+    price: Math.min(Math.max(pct(price), 0), 100),
+    overflow: price < scale.lo ? ('below' as const) : price > scale.hi ? ('above' as const) : null,
+    showMidLabel: M - L >= MIN_LABEL_GAP && H - M >= MIN_LABEL_GAP,
   };
 }
 
-export function PriceBar({ price, L, M, H, zone }: { price: number; L: number; M: number; H: number; zone: string }) {
-  const g = barGeometry(price, L, M, H);
+/** One band on a shared scale; the dot is the price, coloured by the zone it falls in for this band. */
+export function PriceBar({ price, anchors, scale, zone }: {
+  price: number;
+  anchors: Anchors;
+  scale: Scale;
+  zone: ZoneId | null;
+}) {
+  const g = barGeometry(price, anchors, scale);
+  const segments = [
+    ['conservative', g.L, g.A],
+    ['neutral', g.A, g.B],
+    ['optimistic', g.B, g.H],
+  ] as const;
+  const labels = [
+    [anchors.L, g.L],
+    ...(g.showMidLabel ? [[anchors.M, g.M] as const] : []),
+    [anchors.H, g.H],
+  ];
   return (
     <div className="pricebar">
-      <span className="pricebar-end">{fmt(L)}</span>
       <div className="pricebar-track">
-        <div className="pricebar-mid" style={{ left: `${g.midPct}%` }} />
-        <div className={`pricebar-dot zone-bg-${zone}`} style={{ left: `${g.pricePct}%` }}>
+        {segments.map(([z, from, to]) => (
+          <div key={z} className={`pricebar-seg seg-${z}`} style={{ left: `${from}%`, width: `${to - from}%` }} />
+        ))}
+        <div className="pricebar-mid" style={{ left: `${g.M}%` }} />
+        <div className={`pricebar-dot ${zone ? `zone-bg-${zone}` : 'dot-muted'}`} style={{ left: `${g.price}%` }}>
           {g.overflow === 'below' ? '◀' : g.overflow === 'above' ? '▶' : ''}
         </div>
       </div>
-      <span className="pricebar-end">{fmt(H)}</span>
+      <div className="pricebar-nums">
+        {/* translateX(-p%) keeps the end labels inside the bar: left-aligned at 0, right-aligned at 100. */}
+        {labels.map(([value, at], i) => (
+          <span key={i} style={{ left: `${at}%`, transform: `translateX(-${at}%)` }}>{fmt(value)}</span>
+        ))}
+      </div>
     </div>
   );
 }

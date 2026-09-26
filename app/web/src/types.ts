@@ -13,6 +13,16 @@ export interface Band {
   candidate_zone: ZoneId | null;
 }
 
+/** A framework's consensus-upgrade candidate band (AGENTS.md「共识升级候选带」). */
+export interface Candidate {
+  label: string;
+  L: number;
+  M: number;
+  H: number;
+  gate: string | null; // the Assumptions row id that must hold before it replaces the base band
+  background: string | null; // that row's text cell, raw markdown
+}
+
 /** One pool member; when `error` is set only `ticker` is filled. */
 export interface TickerRow {
   ticker: string;
@@ -25,7 +35,7 @@ export interface TickerRow {
   M: number | null;
   H: number | null;
   blocked: string | null;
-  candidate_label: string | null;
+  candidate: Candidate | null;
   band: Band | null;
   error: string | null;
 }
