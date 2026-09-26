@@ -1,4 +1,4 @@
-import type { TickerRow } from '../types';
+import type { TickerRow, ZoneId } from '../types';
 import { rowZone } from './listModel';
 import { barScale, fmt, PriceBar } from './PriceBar';
 
@@ -50,18 +50,29 @@ function CardZone({ row, zoneLabel }: { row: TickerRow; zoneLabel: (id: string) 
       </div>
       {candidate && (
         <div className="band">
-          <div className="band-head">
-            <span className="band-caption">候选</span>
-            {/* Zones come only from the daily run; a missing one is shown as such, never computed here. */}
-            {band.candidate_zone
-              ? <span className={`tag zone-bg-${band.candidate_zone}`}>{zoneLabel(band.candidate_zone)}</span>
-              : <span className="tag tag-muted">—</span>}
-            <span className="band-label">{candidate.label}</span>
-          </div>
+          <CandidateHead label={candidate.label} zone={band.candidate_zone} zoneLabel={zoneLabel} />
           <PriceBar price={band.price} anchors={candidate} scale={scale} zone={band.candidate_zone} />
         </div>
       )}
       {band.option_zone && <div className="card-extra">+V {zoneLabel(band.option_zone)}</div>}
     </>
+  );
+}
+
+/** 「候选 [zone] label」, shared by the card and the doc page header. */
+export function CandidateHead({ label, zone, zoneLabel }: {
+  label: string;
+  zone: ZoneId | null;
+  zoneLabel: (id: string) => string;
+}) {
+  return (
+    <div className="band-head">
+      <span className="band-caption">候选</span>
+      {/* Zones come only from the daily run; a missing one is shown as such, never computed here. */}
+      {zone
+        ? <span className={`tag zone-bg-${zone}`}>{zoneLabel(zone)}</span>
+        : <span className="tag tag-muted">—</span>}
+      <span className="band-label">{label}</span>
+    </div>
   );
 }

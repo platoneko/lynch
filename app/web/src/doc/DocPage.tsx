@@ -1,8 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { fetchFramework } from '../api';
 import { rowZone } from '../home/listModel';
-import type { TickerRow } from '../types';
-import { buildDoc, sectionLabel, type BuiltDoc } from './buildDoc';
+import { fmt } from '../home/PriceBar';
+import { CandidateHead } from '../home/TickerCard';
+import type { Candidate, TickerRow, ZoneId } from '../types';
+import { buildDoc, renderFragment, sectionLabel, type BuiltDoc } from './buildDoc';
 import { currentIndex, isVisible, neighbors, openIdsFor } from './nav';
 
 export function DocPage({ ticker, row, pool, zoneLabel, onBack }: {
@@ -97,6 +99,15 @@ export function DocPage({ ticker, row, pool, zoneLabel, onBack }: {
         <div className="doc-head">
           {zone && <span className={`tag zone-bg-${zone}`}>{zoneLabel(zone)}</span>}
           {row?.blocked && <span className="tag tag-blocked">BLOCKED</span>}
+          {/* A BLOCKED ticker shows no zone at all, candidate included. */}
+          {row?.candidate && !row.blocked && (
+            <CandidateBlock
+              candidate={row.candidate}
+              zone={row.band?.candidate_zone ?? null}
+              pool={pool}
+              zoneLabel={zoneLabel}
+            />
+          )}
           <div className="md" dangerouslySetInnerHTML={{ __html: doc.headerHtml }} />
         </div>
         {sections.filter((s) => isVisible(s, open)).map((s) => {
@@ -119,6 +130,29 @@ export function DocPage({ ticker, row, pool, zoneLabel, onBack }: {
           ↓ {next !== null ? label(next) : '已到结尾'}
         </button>
       </footer>
+    </div>
+  );
+}
+
+/** Why the candidate is only a candidate: its prices and the gate assumption's text, collapsed by default. */
+function CandidateBlock({ candidate, zone, pool, zoneLabel }: {
+  candidate: Candidate;
+  zone: ZoneId | null;
+  pool: ReadonlySet<string>;
+  zoneLabel: (id: string) => string;
+}) {
+  const background = useMemo(
+    () => (candidate.background ? renderFragment(candidate.background, pool) : null),
+    [candidate.background, pool],
+  );
+  return (
+    <div className="doc-cand">
+      <CandidateHead label={candidate.label} zone={zone} zoneLabel={zoneLabel} />
+      <details>
+        <summary>候选背景</summary>
+        <p className="doc-cand-prices">L′ {fmt(candidate.L)} · M′ {fmt(candidate.M)} · H′ {fmt(candidate.H)}</p>
+        {background && <div className="md" dangerouslySetInnerHTML={{ __html: background }} />}
+      </details>
     </div>
   );
 }

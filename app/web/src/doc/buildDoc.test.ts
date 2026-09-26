@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildDoc, linkedTicker, sectionLabel } from './buildDoc';
+import { buildDoc, linkedTicker, renderFragment, sectionLabel } from './buildDoc';
 
 const SAMPLE = [
   '# AAA.US — Alpha', '', '> 林奇：`stalwart`', '',
@@ -76,5 +76,15 @@ describe('linkedTicker', () => {
     expect(linkedTicker('./CCC.US.md', POOL)).toBeNull();
     expect(linkedTicker('axes/rates.md', POOL)).toBeNull();
     expect(linkedTicker('https://example.com/BBB.US.md', POOL)).toBeNull();
+  });
+});
+
+describe('renderFragment', () => {
+  it('renders a table-cell fragment like the document body', () => {
+    const html = renderFragment('**候选带（T）**：\\(g_1\\) see [BBB](./BBB.US.md)', POOL);
+    expect(html).toContain('<strong>候选带（T）</strong>');
+    expect(html).toContain('class="katex');
+    expect(html).not.toContain('\\(');
+    expect(html).toContain('href="#/doc/BBB.US"');
   });
 });

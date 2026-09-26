@@ -90,6 +90,12 @@ export function buildDoc(source: string, pool: ReadonlySet<string>): BuiltDoc {
   return { headerHtml: render(0, starts[0] ?? tokens.length), sections };
 }
 
+/** A fragment lifted out of a framework (e.g. an Assumptions cell), rendered like the document body. */
+export function renderFragment(source: string, pool: ReadonlySet<string>): string {
+  const env: RenderEnv = { pool, linkIsInternal: [] };
+  return md.render(source, env);
+}
+
 function headingText(inline: Token): string {
   return (inline.children ?? [])
     .map((c) => (c.type === 'softbreak' ? ' ' : c.content))
