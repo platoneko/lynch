@@ -206,6 +206,9 @@ func Stop() {
 	// pooled keep-alive connection across restarts, and one still served by
 	// this session's gate (old secret) would answer the new boot URL with 403.
 	s.hs.Close()
+	// Serve may not have registered ln yet, in which case hs.Close skips it and
+	// the port would be freed asynchronously; release it now for a quick re-Start.
+	s.ln.Close()
 	<-s.started
 	// A Start that failed before tsnet built its system (bad Dir) has nothing to
 	// close, and tsnet's Close would dereference the missing system.
