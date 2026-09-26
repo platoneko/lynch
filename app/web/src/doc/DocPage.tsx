@@ -92,7 +92,6 @@ export function DocPage({ ticker, row, pool, zoneLabel, onBack }: {
             ↑ {up !== null ? label(up) : '已到开头'}
           </button>
         </div>
-        <div className="bar-where">当前：{current >= 0 ? label(current) : '题头'}</div>
       </header>
 
       <main className="doc-body">

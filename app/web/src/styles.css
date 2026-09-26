@@ -5,7 +5,7 @@
   --muted: #6b6b70;
   --line: #e2e2e0;
   --accent: #2f6fdf;
-  --bar-h: 88px;
+  --bar-h: 68px;
   --zone-deep_discount: #1f8a4c;
   --zone-conservative: #4caf6e;
   --zone-neutral: #d9a400;
@@ -95,7 +95,6 @@ button { font: inherit; color: inherit; }
 .bar-row { display: flex; gap: 8px; }
 .bar-jump { flex: 1; min-width: 0; text-align: left; padding: 6px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
 .bar-jump:disabled { color: var(--muted); }
-.bar-where { color: var(--muted); font-size: 12px; padding-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* Bottom room lets even the last short section scroll up to the bar, so a jump can make it current. */
 .doc-body { padding: var(--bar-h) 16px calc(100vh - var(--bar-h)); }
 .doc-head { padding: 12px 0 4px; border-bottom: 1px solid var(--line); }
