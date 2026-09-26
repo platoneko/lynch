@@ -22,6 +22,16 @@ def test_tickers_json(repo, tmp_path):
     assert body["tickers"][0]["ticker"] == "AAA.US"
 
 
+def test_non_finite_price_nulls_only_its_row(repo, tmp_path):
+    # Python's json.loads accepts NaN; serializing it back must not fail the whole list.
+    (repo[1] / "AAA.US.json").write_text('{"price": NaN, "as_of": "x", "zone": "neutral"}', encoding="utf-8")
+    r = client(repo, tmp_path).get("/api/tickers")
+    assert r.status_code == 200
+    rows = {t["ticker"]: t for t in r.json()["tickers"]}
+    assert rows["AAA.US"]["band"] is None
+    assert rows["BBB.US"]["band"]["price"] == 5.0
+
+
 def test_framework_markdown(repo, tmp_path):
     r = client(repo, tmp_path).get("/api/frameworks/AAA.US")
     assert r.status_code == 200

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import sys
 from pathlib import Path
 from typing import Any
@@ -89,7 +90,9 @@ def _read_band(ticker: str, bands_dir: Path) -> dict[str, Any] | None:
         log.warning("band artifact is not an object: %s", ticker)
         return None
     price = record.get("price")
-    if isinstance(price, bool) or not isinstance(price, (int, float)) or "as_of" not in record:
+    # json.loads accepts NaN/Infinity, which the JSON response cannot carry.
+    if (isinstance(price, bool) or not isinstance(price, (int, float))
+            or not math.isfinite(price) or "as_of" not in record):
         log.warning("band artifact lacks price/as_of: %s", ticker)
         return None
     return {k: record.get(k) for k in BAND_KEYS}

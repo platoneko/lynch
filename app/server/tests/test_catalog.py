@@ -66,7 +66,9 @@ def test_malformed_band_is_null(repo):
     b"42",
     b"\xff\xfe\x00",
     json.dumps({"price": True, "as_of": AS_OF, "zone": "neutral"}).encode(),
-], ids=["list", "number", "non-utf8", "bool-price"])
+    json.dumps({"price": float("nan"), "as_of": AS_OF, "zone": "neutral"}).encode(),
+    json.dumps({"price": float("inf"), "as_of": AS_OF, "zone": "neutral"}).encode(),
+], ids=["list", "number", "non-utf8", "bool-price", "nan-price", "inf-price"])
 def test_odd_band_is_one_null_row_with_warning(repo, caplog, content):
     fw, bands = repo
     (bands / "AAA.US.json").write_bytes(content)
