@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestProxyOnlyReachesTarget(t *testing.T) {
@@ -47,6 +48,29 @@ func TestProxyOnlyReachesTarget(t *testing.T) {
 		if a != target {
 			t.Fatalf("dialed %q, want only %q", a, target)
 		}
+	}
+}
+
+func TestProxyBoundsHangingDial(t *testing.T) {
+	defer func(d time.Duration) { dialTimeout = d }(dialTimeout)
+	dialTimeout = 50 * time.Millisecond
+	// Like tsnet's Dial while the node waits for login: it only returns when ctx ends.
+	hang := func(ctx context.Context, _, _ string) (net.Conn, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	front := httptest.NewServer(newProxy("100.64.0.1:3151", hang))
+	defer front.Close()
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(front.URL + "/api/tickers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(string(body), "服务端无响应") {
+		t.Fatalf("got %d %q", resp.StatusCode, body)
 	}
 }
 

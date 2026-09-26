@@ -28,6 +28,9 @@ type session struct {
 	ln     net.Listener
 	secret string
 	done   chan struct{}
+	// started closes once srv.Start has returned: tsnet.Server.Close must not
+	// run before or concurrently with Start.
+	started chan struct{}
 
 	mu      sync.Mutex
 	state   string
@@ -80,7 +83,10 @@ func Start(dataDir, target string) error {
 	if err != nil {
 		return err
 	}
-	s := &session{srv: srv, ln: ln, secret: secret, done: make(chan struct{}), state: "starting"}
+	s := &session{
+		srv: srv, ln: ln, secret: secret,
+		done: make(chan struct{}), started: make(chan struct{}), state: "starting",
+	}
 	go http.Serve(ln, newGate(secret, newProxy(target, srv.Dial)))
 
 	// Step 3: bring the node up and keep Status current in the background.
@@ -90,7 +96,9 @@ func Start(dataDir, target string) error {
 }
 
 func (s *session) run() {
-	if err := s.srv.Start(); err != nil {
+	err := s.srv.Start()
+	close(s.started)
+	if err != nil {
 		s.set("error", "", err.Error())
 		return
 	}
@@ -190,5 +198,10 @@ func Stop() {
 	}
 	close(s.done)
 	s.ln.Close()
-	s.srv.Close()
+	<-s.started
+	// A Start that failed before tsnet built its system (bad Dir) has nothing to
+	// close, and tsnet's Close would dereference the missing system.
+	if s.srv.Sys() != nil {
+		s.srv.Close()
+	}
 }

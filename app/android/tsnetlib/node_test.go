@@ -14,6 +14,17 @@ func TestStoppedState(t *testing.T) {
 	}
 }
 
+// A rotation or quick back-out can Stop while the node is still inside srv.Start.
+func TestStopRightAfterStart(t *testing.T) {
+	if err := Start(t.TempDir(), "127.0.0.1:1"); err != nil {
+		t.Fatal(err)
+	}
+	Stop()
+	if got := Status(); got != `{"state":"stopped"}` {
+		t.Fatalf("Status() after Stop = %s", got)
+	}
+}
+
 func TestStateOf(t *testing.T) {
 	for backend, want := range map[string]string{
 		"Running": "running", "NeedsLogin": "needs_login", "NeedsMachineAuth": "needs_approval",
