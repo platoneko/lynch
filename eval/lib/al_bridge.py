@@ -44,7 +44,7 @@ from .axes import AXIS_AL, check_axis_g_mount
 from .gordon import check_g_cap, check_r, perpetual_pe
 
 REQUIRED = [
-    "price", "shares",
+    "shares",
     "rev_m", "gm_m", "rev_ref", "gm_ref", "np_m", "np_ref",
     "vol_al", "spread_l", "spread_m", "spread_h",
     "equity", "r_perp", "g2_l", "g2_m", "g2_h", "pe_own_min", "pe_own_max",

@@ -33,7 +33,7 @@ python3 -m unittest discover -s eval/lib -t . -p 'test_*.py'
 
 ## 日报
 
-`scripts/daily_bands.py` 只读框架锚点 + Longbridge 现价 → 写 `output/bands/` → 飞书。**MUST NOT** 回写 `frameworks/*.md`，也 **MUST NOT** 让弱流水线改框架或概率锚点。
+`scripts/daily_bands.py` 只读框架锚点 + Longbridge 现价 → 写 `output/bands/` → 飞书。**MUST NOT** 回写 `frameworks/*.md`，也 **MUST NOT** 让弱流水线改框架或概率锚点。`output/bands/` 是日报带时间戳的观测日志（跨带比较用），不是框架现状；框架文档不写现价与现行 zone（`frameworks/AGENTS.md`「现价 — 禁写契约」）。
 
 ## 密钥与本地
 

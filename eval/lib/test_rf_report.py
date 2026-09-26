@@ -18,10 +18,17 @@ def gordon_band(dr: float) -> tuple[float, float, float]:
 
 
 class RfBlockTests(unittest.TestCase):
-    def run_block(self):
+    def run_block(self, price: float | None = 150.0):
         with mock.patch.object(rf_report, "load_rates", return_value=SEG), redirect_stdout(io.StringIO()) as out:
-            blk = rf_report.rf_block("USD", {"r_perp": 0.10}, gordon_band, price=150.0)
+            blk = rf_report.rf_block("USD", {"r_perp": 0.10}, gordon_band, price=price)
         return blk, out.getvalue()
+
+    def test_without_price_prints_bands_but_no_zone(self) -> None:
+        # Framework docs no longer carry the current price; the bands stand alone.
+        blk, out = self.run_block(price=None)
+        self.assertEqual(blk.consensus, gordon_band(0.0075))
+        self.assertNotIn("zone=", out)
+        self.assertIn("反向压力", out)
 
     def test_consensus_is_band_at_delta(self) -> None:
         blk, _ = self.run_block()

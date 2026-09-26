@@ -82,10 +82,16 @@ def check_missing(inp: dict[str, float], required: list[str]) -> list[str]:
 def check_against_stated(
     md: str,
     computed: dict[str, float],
-    zone: str,
+    zone: str | None,
     tol: float = 0.05,
 ) -> list[str]:
-    """Compare recomputed anchors/cut-points/zone with what the framework says."""
+    """Compare recomputed anchors/cut-points/zone with what the framework says.
+
+    Framework docs are dropping the current price, and with it the stated zone
+    (the digest and the app zone on live quotes).  Until every doc is migrated,
+    a doc that states no zone skips the zone comparison; one that still states
+    a zone must match the eval's, and an eval that no longer computes one fails.
+    """
     errors: list[str] = []
     stated = stated_anchors(md)
     for key, value in computed.items():
@@ -95,7 +101,11 @@ def check_against_stated(
         elif abs(said - value) > tol:
             errors.append(f"{key}: stated {said} vs recomputed {value:.4f}")
     said_zone = stated_zone(md)
-    if said_zone != zone:
+    if said_zone is None:
+        return errors
+    if zone is None:
+        errors.append(f"zone: stated {said_zone} but the eval computes none")
+    elif said_zone != zone:
         errors.append(f"zone: stated {said_zone} vs recomputed {zone}")
     return errors
 
