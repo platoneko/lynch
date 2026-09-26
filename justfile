@@ -251,3 +251,63 @@ logs:
 [doc('从 frameworks/*.md 题头重生 _INDEX.md')]
 gen-index:
     python3 scripts/gen_index.py
+
+# ── mobile reader (app/) ────────────────────────────────────────────────
+# Separate from the neige instance above: its own port, pid and log.
+app_host := "100.93.210.104"
+app_port := "3151"
+app_pid := "_local/tmp/lynch-app.pid"
+app_log := "_local/tmp/lynch-app.log"
+
+[doc('构建手机阅读 app 前端（app/web/dist）')]
+app-web:
+    cd app/web && npm ci && npm run build
+
+[doc('后台启动手机阅读 app 服务端（只绑 tailnet 地址）')]
+app-start:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p _local/tmp
+    if [ ! -f app/web/dist/index.html ]; then
+      echo "missing app/web/dist — run: just app-web" >&2
+      exit 1
+    fi
+    if [ -f "{{app_pid}}" ] && kill -0 "$(cat "{{app_pid}}")" 2>/dev/null; then
+      echo "already running pid=$(cat {{app_pid}}) — http://{{app_host}}:{{app_port}}"
+      exit 0
+    fi
+    (cd app/server && uv sync --quiet)
+    # Run the venv python directly so the pid file holds the server, not a wrapper.
+    PYTHONPATH=app/server nohup app/server/.venv/bin/python -m lynch_reader.web \
+        --host {{app_host}} --port {{app_port}} >>"{{app_log}}" 2>&1 </dev/null &
+    echo $! >"{{app_pid}}"
+    sleep 1
+    if ! kill -0 "$(cat "{{app_pid}}")" 2>/dev/null; then
+      echo "failed to start — tail {{app_log}}" >&2
+      exit 1
+    fi
+    echo "lynch-app pid=$(cat {{app_pid}})  http://{{app_host}}:{{app_port}}  log={{app_log}}"
+
+[doc('停止手机阅读 app 服务端')]
+app-stop:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -f "{{app_pid}}" ] && kill -0 "$(cat "{{app_pid}}")" 2>/dev/null; then
+      kill "$(cat "{{app_pid}}")"
+      echo "stopped pid=$(cat {{app_pid}})"
+    else
+      echo "not running"
+    fi
+    rm -f "{{app_pid}}"
+
+[doc('查看手机阅读 app 服务端状态')]
+app-status:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -f "{{app_pid}}" ] && kill -0 "$(cat "{{app_pid}}")" 2>/dev/null; then
+      echo "pid=$(cat {{app_pid}})"
+    else
+      echo "pid: not running"
+    fi
+    code=$(curl --noproxy '*' -sS -o /dev/null -w '%{http_code}' "http://{{app_host}}:{{app_port}}/api/tickers" || true)
+    echo "GET /api/tickers -> ${code:-unreachable}"
