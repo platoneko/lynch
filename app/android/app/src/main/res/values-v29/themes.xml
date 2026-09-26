@@ -2,5 +2,12 @@
 <!-- DayNight makes isLightTheme follow the system dark mode, and the WebView's
      prefers-color-scheme with it. -->
 <resources>
-    <style name="Theme.Lynch" parent="@android:style/Theme.DeviceDefault.DayNight" />
+    <style name="Theme.Lynch" parent="@android:style/Theme.DeviceDefault.DayNight">
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowNoTitle">true</item>
+        <!-- Edge-to-edge (API 30+) makes the bars transparent over our background;
+             dark icons in light mode keep them readable. -->
+        <item name="android:windowLightStatusBar">?android:attr/isLightTheme</item>
+        <item name="android:windowLightNavigationBar">?android:attr/isLightTheme</item>
+    </style>
 </resources>

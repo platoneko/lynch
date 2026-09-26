@@ -2,5 +2,9 @@
 <!-- The WebView's prefers-color-scheme follows the theme's isLightTheme (targetSdk 33+).
      API 26–28 have no DayNight theme, so the web UI stays light there. -->
 <resources>
-    <style name="Theme.Lynch" parent="@android:style/Theme.DeviceDefault.Light" />
+    <!-- No title bar: the web UI has its own top bar. -->
+    <style name="Theme.Lynch" parent="@android:style/Theme.DeviceDefault.Light">
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowNoTitle">true</item>
+    </style>
 </resources>

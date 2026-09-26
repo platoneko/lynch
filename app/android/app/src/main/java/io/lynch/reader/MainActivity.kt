@@ -6,6 +6,7 @@ import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.Network
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -14,6 +15,7 @@ import android.util.Log
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+import android.view.WindowInsets
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -218,10 +220,27 @@ class MainActivity : Activity() {
         }
         web = WebView(this).apply { visibility = View.GONE }
         configureWeb(web)
-        setContentView(FrameLayout(this).apply {
+        val root = FrameLayout(this).apply {
             addView(web, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
             addView(panel, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
-        })
+        }
+        fitSystemBars(root)
+        setContentView(root)
+    }
+
+    // Android 15+ forces edge-to-edge for targetSdk 35, so content would draw under the
+    // status bar, gesture bar and keyboard. Opt in on API 30+ everywhere for one code path,
+    // and inset the root by exactly those areas. API 26–29 keep the legacy fitted window.
+    private fun fitSystemBars(root: View) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+        window.setDecorFitsSystemWindows(false)
+        root.setOnApplyWindowInsetsListener { v, insets ->
+            val bars = insets.getInsets(
+                WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout() or WindowInsets.Type.ime(),
+            )
+            v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            WindowInsets.CONSUMED
+        }
     }
 
     companion object {
