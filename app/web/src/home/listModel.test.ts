@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TickerRow, ZoneId } from '../types';
-import { applyFilter, DEFAULT_FILTER, latestAsOf, loadFilter, saveFilter } from './listModel';
+import { applyFilter, DEFAULT_FILTER, latestAsOf } from './listModel';
 
 const ZONES = ['deep_discount', 'conservative', 'neutral', 'optimistic', 'stretched'];
 
@@ -80,20 +80,5 @@ describe('latestAsOf', () => {
   });
   it('is null without any band', () => {
     expect(latestAsOf([row('A.US', { band: null })])).toBeNull();
-  });
-});
-
-describe('persistence', () => {
-  it('restores zones/classes/sort but never the query', () => {
-    const store = new Map<string, string>();
-    const storage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v) };
-    saveFilter(storage, { query: 'nvda', zones: ['neutral'], classes: ['cyclical'], sort: 'ticker' });
-    expect(loadFilter(storage)).toEqual({ query: '', zones: ['neutral'], classes: ['cyclical'], sort: 'ticker' });
-  });
-  it('falls back to defaults on garbage, bad sort or missing storage', () => {
-    expect(loadFilter({ getItem: () => '{not json' })).toEqual(DEFAULT_FILTER);
-    expect(loadFilter({ getItem: () => '{"sort":"price","zones":"x"}' })).toEqual(DEFAULT_FILTER);
-    expect(loadFilter(null)).toEqual(DEFAULT_FILTER);
-    expect(() => saveFilter({ setItem: () => { throw new Error('quota'); } }, DEFAULT_FILTER)).not.toThrow();
   });
 });

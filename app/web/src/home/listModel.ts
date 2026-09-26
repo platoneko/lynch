@@ -10,7 +10,6 @@ export function rowZone(r: TickerRow): ZoneId | null {
 }
 
 export type SortKey = 'zone' | 'market' | 'ticker';
-const SORT_KEYS: readonly SortKey[] = ['zone', 'market', 'ticker'];
 
 export interface HomeFilter {
   query: string;
@@ -67,40 +66,4 @@ export function latestAsOf(rows: TickerRow[]): string | null {
     if (t && (best === null || Date.parse(t) > Date.parse(best))) best = t;
   }
   return best;
-}
-
-const STORAGE_KEY = 'lynch.home.filter.v1';
-
-/** The query is deliberately not restored: reopening the app should show the whole pool. */
-export function loadFilter(storage: Pick<Storage, 'getItem'> | null): HomeFilter {
-  try {
-    const raw = storage?.getItem(STORAGE_KEY);
-    if (!raw) return DEFAULT_FILTER;
-    const v = JSON.parse(raw);
-    const strings = (x: unknown) => (Array.isArray(x) && x.every((s) => typeof s === 'string') ? x : []);
-    return {
-      query: '',
-      zones: strings(v.zones),
-      classes: strings(v.classes),
-      sort: SORT_KEYS.includes(v.sort) ? v.sort : 'zone',
-    };
-  } catch {
-    return DEFAULT_FILTER;
-  }
-}
-
-export function saveFilter(storage: Pick<Storage, 'setItem'> | null, f: HomeFilter): void {
-  try {
-    storage?.setItem(STORAGE_KEY, JSON.stringify({ zones: f.zones, classes: f.classes, sort: f.sort }));
-  } catch {
-    // Private mode / quota: the filter just won't survive a restart.
-  }
-}
-
-export function browserStorage(): Storage | null {
-  try {
-    return window.localStorage;
-  } catch {
-    return null;
-  }
 }

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { fetchCatalog } from './api';
 import { DocPage } from './doc/DocPage';
 import { HomePage } from './home/HomePage';
-import { browserStorage, loadFilter, saveFilter, type HomeFilter } from './home/listModel';
+import { DEFAULT_FILTER, type HomeFilter } from './home/listModel';
 import { docHash, parseRoute, type Route } from './route';
 import type { Catalog } from './types';
 
@@ -16,7 +16,7 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   // Filter lives here, not in HomePage, so the query survives a trip into a doc.
-  const [filter, setFilter] = useState<HomeFilter>(() => loadFilter(browserStorage()));
+  const [filter, setFilter] = useState<HomeFilter>(DEFAULT_FILTER);
   const homeScroll = useRef(0);
   const openedFromHome = useRef(false);
 
@@ -40,10 +40,6 @@ export function App() {
     window.scrollTo(0, route.page === 'home' ? homeScroll.current : 0);
   }, [route]);
 
-  const updateFilter = (f: HomeFilter) => {
-    setFilter(f);
-    saveFilter(browserStorage(), f);
-  };
   const openDoc = (ticker: string) => {
     homeScroll.current = window.scrollY;
     openedFromHome.current = true;
@@ -87,7 +83,7 @@ export function App() {
   return (
     <>
       {error && <div className="banner-error" onClick={load}>刷新失败：{error}（点此重试）</div>}
-      <HomePage catalog={catalog} filter={filter} onFilter={updateFilter} onOpen={openDoc}
+      <HomePage catalog={catalog} filter={filter} onFilter={setFilter} onOpen={openDoc}
         onRefresh={load} refreshing={loading} />
     </>
   );
