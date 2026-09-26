@@ -58,14 +58,6 @@ _CANDIDATE = re.compile(
 # line after H′ counts.
 _CANDIDATE_GATE = re.compile(r"门槛\s*(A[0-9A-Za-z]+′?)")
 
-# Header line 3 of a framework the rules stopped (valuation-rules.md「BLOCKED 的语义」):
-#   > **状态：BLOCKED**（reason; unblock condition）
-# The deck line is still written (对照带) so the anchors parse; consumers
-# (digest / index / calibration) must not derive a zone from it.
-_BLOCKED_LINE = re.compile(r"^>\s*\*\*状态：BLOCKED\*\*", re.MULTILINE)
-# Reason runs to end of line so nested parens (e.g. `③ 出带（M 7.0× < 10.4×）`) are kept whole.
-_BLOCKED = re.compile(r"^>\s*\*\*状态：BLOCKED\*\*\s*[（(](.+?)[）)]\s*$", re.MULTILINE)
-
 _CURRENCY = re.compile(r"（(USD|HKD|CNY|TWD)[^）]*）|\((USD|HKD|CNY|TWD)[^)]*\)")
 # 中文写法也认，否则「（人民币）」会退回全文扫描并被无关括注劫持
 _CURRENCY_CN = {"人民币": "CNY", "港元": "HKD", "港币": "HKD", "美元": "USD", "新台币": "TWD"}
@@ -131,8 +123,6 @@ class FrameworkMeta:
     candidate_label: str | None = None
     # Assumptions row id that must hold before the candidate replaces the base deck.
     candidate_gate: str | None = None
-    # AGENTS.md「BLOCKED — 题头契约」: reason text when the rules stopped this ticker.
-    blocked: str | None = None
     # {r-field: basket} from the Inputs `篮 N` tags (AGENTS.md「篮子声明」).
     baskets: dict[str, int] = field(default_factory=dict)
 
@@ -277,25 +267,6 @@ def _parse_candidate(
     return m.group(1).strip(), band, gate.group(1) if gate else None
 
 
-def _parse_blocked(md: str, path: Path) -> str | None:
-    """BLOCKED reason, or None when the header line is absent.
-
-    A BLOCKED line with no reason must fail the parse rather than fall back to
-    "not blocked": a falsy reason would let the digest derive a zone the header
-    forbids (AGENTS.md「BLOCKED — 题头契约」).
-    """
-    if not _BLOCKED_LINE.search(md):
-        return None
-    m = _BLOCKED.search(md)
-    reason = m.group(1).strip() if m else ""
-    if not reason:
-        raise ValueError(
-            f"{path.name}: BLOCKED header needs a reason — "
-            "`> **状态：BLOCKED**（reason；unblock condition）`"
-        )
-    return reason
-
-
 def _parse_currency(md: str) -> str:
     """Currency of the anchors. Never guesses USD — an unlabelled band is an error."""
     tm = re.search(r"^#\s+(\S+)", md, re.M)
@@ -340,7 +311,6 @@ def load_framework(path: Path) -> FrameworkMeta:
     if p_tiers is not None and not all(0.0 <= p <= 1.0 for p in p_tiers):
         raise ValueError(f"{ticker}: p_L/p_M/p_H out of [0,1], got {p_tiers}")
     currency = _parse_currency(md)
-    blocked = _parse_blocked(md, path)
     baskets = parse_baskets(md)
     lm = _LYNCH.search(md)
     if not lm:
@@ -374,7 +344,6 @@ def load_framework(path: Path) -> FrameworkMeta:
         candidate=candidate[1] if candidate else None,
         candidate_label=candidate[0] if candidate else None,
         candidate_gate=candidate[2] if candidate else None,
-        blocked=blocked,
         baskets=baskets,
     )
 

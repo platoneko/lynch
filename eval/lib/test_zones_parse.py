@@ -50,14 +50,6 @@ class ZoneTests(unittest.TestCase):
         self.assertEqual(price_zones(35.0, plain), ("optimistic", None, None))
         self.assertEqual(price_zones(35.0, full), ("optimistic", "neutral", "deep_discount"))
 
-    def test_price_zones_blocked_has_none(self) -> None:
-        # AGENTS.md「BLOCKED — 题头契约」: no zone at all, option and candidate included.
-        m = FrameworkMeta(ticker="X.US", path=Path("x"), name="x", L=10.0, M=20.0, H=40.0, currency="USD",
-                          eval_script=None, lynch_primary="stalwart", lynch_secondary=None,
-                          v_opt=10.0, p_tiers=(0.0, 0.5, 1.0), candidate=(36.0, 50.0, 60.0),
-                          candidate_label="T", blocked="reason")
-        self.assertEqual(price_zones(35.0, m), (None, None, None))
-
 
 class ParseTests(unittest.TestCase):
     @_NEEDS_CONTENT
@@ -104,17 +96,6 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(parse_baskets(md), {"r": 4})
 
     @staticmethod
-    def _blocked_framework(status_line: str) -> str:
-        return (
-            "# X.US — 甲 / X Inc.\n\n"
-            "> 林奇：`stalwart` | 更新：2026-09-20 | eval: eval/X.US.py\n"
-            f"{status_line}\n"
-            "> 主尺：x\n\n## 3\n\n### Inputs\n\n| 字段名 | 含义 | 取值 | as-of |\n|---|---|---|---|\n"
-            "| r_perp | 0.10 | 篮 4 龙头制造 | 2026-09-20 |\n\n"
-            "### Outputs\n\n- 价带锚点（USD）对照带：L = **57.35** · M = **77.23** · H = **136.83**\n"
-        )
-
-    @staticmethod
     def _load_md(md: str) -> FrameworkMeta:
         import tempfile
 
@@ -122,25 +103,6 @@ class ParseTests(unittest.TestCase):
             p = Path(d) / "X.US.md"
             p.write_text(md, encoding="utf-8")
             return load_framework(p)
-
-    def test_blocked_header_is_parsed(self) -> None:
-        m = self._load_md(self._blocked_framework(
-            "> **状态：BLOCKED**（③ 出带：篮 4 仍出带；解封 = ROIC 证据 ≥14%）"))
-        self.assertEqual(m.blocked, "③ 出带：篮 4 仍出带；解封 = ROIC 证据 ≥14%")
-        self.assertEqual(m.baskets, {"r_perp": 4})
-        self.assertEqual((m.L, m.M, m.H), (57.35, 77.23, 136.83))
-
-    def test_blocked_reason_keeps_nested_parens(self) -> None:
-        m = self._load_md(self._blocked_framework(
-            "> **状态：BLOCKED**（③ 出带（M 7.0× < 10.4×）；解封 = 回带）"))
-        self.assertEqual(m.blocked, "③ 出带（M 7.0× < 10.4×）；解封 = 回带")
-
-    def test_blocked_header_without_reason_raises(self) -> None:
-        # A falsy reason must not silently un-block the ticker (digest would derive a zone).
-        for line in ("> **状态：BLOCKED**（）", "> **状态：BLOCKED** — 原因；解封条件"):
-            with self.subTest(line=line):
-                with self.assertRaisesRegex(ValueError, "BLOCKED header needs a reason"):
-                    self._load_md(self._blocked_framework(line))
 
     def test_basket_label(self) -> None:
         base = dict(path=Path("x"), name="x", L=1, M=2, H=3, currency="USD", eval_script=None,

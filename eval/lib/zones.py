@@ -82,13 +82,8 @@ def candidate_zone(price: float, meta: FrameworkMeta) -> str | None:
 
 def price_zones(
     price: float, meta: FrameworkMeta
-) -> tuple[str | None, str | None, str | None]:
-    """(base, +V, candidate) zones of one price, as the daily digest and the reader report them.
-
-    A BLOCKED framework gets no zone at all (AGENTS.md「BLOCKED — 题头契约」).
-    """
-    if meta.blocked:
-        return None, None, None
+) -> tuple[str, str | None, str | None]:
+    """(base, +V, candidate) zones of one price, as the daily digest and the reader report them."""
     return (
         zone_of(price, meta.L, meta.M, meta.H),
         credited_option_zone(price, meta),

@@ -1,13 +1,9 @@
 import type { Candidate, OptionBand, TickerRow, ZoneId } from '../types';
 import { fmt } from './PriceBar';
 
-/**
- * The zone a row shows, filters and sorts by. BLOCKED never has one
- * (AGENTS.md「BLOCKED — 题头契约」); the server sends none, and this holds it
- * here too.
- */
+/** The zone a row shows, filters and sorts by. */
 export function rowZone(r: TickerRow): ZoneId | null {
-  return r.blocked ? null : r.band?.zone ?? null;
+  return r.band?.zone ?? null;
 }
 
 /** A band shown under the base band: its own bar on the card, its own head line on the doc page. */
@@ -77,7 +73,7 @@ function comparator(sort: SortKey, zoneOrder: string[], serverOrder: Map<string,
   if (sort === 'ticker') return byTicker;
   // The server already lists US → HK → A, name-sorted within (eval/lib/frameworks.py).
   if (sort === 'market') return (a: TickerRow, b: TickerRow) => serverOrder.get(a.ticker)! - serverOrder.get(b.ticker)!;
-  // Rows without a zone (BLOCKED, no band, parse error) sink to the bottom.
+  // Rows without a zone (no band, parse error) sink to the bottom.
   const rank = (r: TickerRow) => {
     const zone = rowZone(r);
     const i = zone ? zoneOrder.indexOf(zone) : -1;

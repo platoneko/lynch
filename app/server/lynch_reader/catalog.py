@@ -37,7 +37,7 @@ log = logging.getLogger("lynch_reader")
 
 ROW_KEYS = (
     "ticker", "name", "market", "lynch_primary", "lynch_secondary", "currency",
-    "L", "M", "H", "blocked", "option", "candidate", "band", "quote_error", "error",
+    "L", "M", "H", "option", "candidate", "band", "quote_error", "error",
 )
 
 # The home refresh button tolerates this much staleness; it also bounds Longbridge CLI calls.
@@ -173,7 +173,6 @@ def _ticker_row(path: Path) -> tuple[dict[str, Any], FrameworkMeta | None]:
         L=meta.L,
         M=meta.M,
         H=meta.H,
-        blocked=meta.blocked,
         option=_option(meta, assumptions),
         candidate=_candidate(meta, assumptions),
     )

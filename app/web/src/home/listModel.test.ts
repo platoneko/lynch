@@ -7,7 +7,7 @@ const ZONES = ['deep_discount', 'conservative', 'neutral', 'optimistic', 'stretc
 function row(ticker: string, over: Partial<TickerRow> = {}): TickerRow {
   return {
     ticker, name: `${ticker} name`, market: 'US', lynch_primary: 'stalwart', lynch_secondary: null,
-    currency: 'USD', L: 10, M: 20, H: 40, blocked: null, option: null, candidate: null,
+    currency: 'USD', L: 10, M: 20, H: 40, option: null, candidate: null,
     band: { price: 25, as_of: '2026-09-26T09:03:00+08:00', zone: 'neutral', option_zone: null, candidate_zone: null },
     quote_error: null, error: null, ...over,
   };
@@ -38,12 +38,6 @@ describe('filters', () => {
     const f = { ...DEFAULT_FILTER, zones: ['neutral', 'conservative'] };
     expect(tickers(applyFilter(rows, f, ZONES))).toEqual(['C.US', 'A.US']);
   });
-  it('BLOCKED rows with a stale band zone are excluded by the zone filter', () => {
-    // The server sends no zone for a BLOCKED row; one left on its band must not match either.
-    const rows = [withZone('A.US', 'neutral'), row('B.US', { blocked: 'reason' })];
-    const f = { ...DEFAULT_FILTER, zones: ['neutral'] };
-    expect(tickers(applyFilter(rows, f, ZONES))).toEqual(['A.US']);
-  });
   it('class filter matches primary or secondary', () => {
     const rows = [row('A.US', { lynch_primary: 'cyclical' }),
       row('B.US', { lynch_primary: 'fast_grower', lynch_secondary: 'cyclical' }),
@@ -63,11 +57,6 @@ describe('sort', () => {
     withZone('M.US', 'deep_discount'), row('X.US', { error: 'boom', band: null, name: null })];
   it('zone order, zone-less last, ticker as tiebreak', () => {
     expect(tickers(applyFilter(rows, DEFAULT_FILTER, ZONES))).toEqual(['M.US', 'A.US', 'Z.US', 'N.US', 'X.US']);
-  });
-  it('BLOCKED rows with a stale band zone sort after zoned rows', () => {
-    const blocked = row('A.US', { blocked: 'reason' }); // band.zone 'neutral' left over
-    expect(tickers(applyFilter([blocked, withZone('Z.US', 'stretched')], DEFAULT_FILTER, ZONES)))
-      .toEqual(['Z.US', 'A.US']);
   });
   it('market keeps the server order (US → HK → A)', () => {
     expect(tickers(applyFilter(rows, { ...DEFAULT_FILTER, sort: 'market' }, ZONES)))

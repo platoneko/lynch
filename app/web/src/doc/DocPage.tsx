@@ -98,9 +98,7 @@ export function DocPage({ ticker, row, pool, zoneLabel, onBack }: {
       <main className="doc-body">
         <div className="doc-head">
           {zone && <span className={`tag zone-bg-${zone}`}>{zoneLabel(zone)}</span>}
-          {row?.blocked && <span className="tag tag-blocked">BLOCKED</span>}
-          {/* A BLOCKED ticker shows no zone at all, +V and candidate included. */}
-          {row && !row.blocked && extraBands(row).map((b) => (
+          {row && extraBands(row).map((b) => (
             <BandBlock key={b.kind} band={b} pool={pool} zoneLabel={zoneLabel} />
           ))}
           <div className="md" dangerouslySetInnerHTML={{ __html: doc.headerHtml }} />

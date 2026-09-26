@@ -27,8 +27,6 @@ export function TickerCard({ row, label, onOpen }: {
 }
 
 function CardZone({ row, label }: { row: TickerRow; label: (id: string) => string }) {
-  // BLOCKED never shows a zone (AGENTS.md「BLOCKED — 题头契约」).
-  if (row.blocked) return <div className="tag tag-blocked">BLOCKED</div>;
   const zone = rowZone(row);
   if (!row.band || !zone) return <div className="tag tag-muted">{row.quote_error ?? '无报价'}</div>;
   const { band } = row;

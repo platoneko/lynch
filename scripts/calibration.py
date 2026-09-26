@@ -106,10 +106,7 @@ def _gamma_implied(num_ratio: float, pe_ratio: float) -> float | None:
 
 
 def main() -> int:
-    # BLOCKED frameworks carry a reference band, not a deck; they stay out of the distributions.
-    all_metas = load_all_frameworks()
-    blocked = [m.ticker for m in all_metas if m.blocked]
-    metas = [m for m in all_metas if not m.blocked]
+    metas = load_all_frameworks()
 
     by_class: dict[str, list[FrameworkMeta]] = {}
     for m in metas:
@@ -152,8 +149,6 @@ def main() -> int:
         f"（中位 {statistics.median(all_lm):.2f}）· "
         f"H/M {min(all_hm):.2f}–{max(all_hm):.2f}（中位 {statistics.median(all_hm):.2f}）"
     )
-    if blocked:
-        print(f"BLOCKED（不进分布）: {', '.join(blocked)}")
     print("散布 MUST 可归因到基本面或林奇分类，MUST NOT 来自构造手法（valuation-rules.md「锚点语义」）")
     print(
         "γ = dlog(PE)/dlog(EPS)：隐含值是该票倍数政策所假设的（flat=0、反向<0、同向>0），"

@@ -45,7 +45,6 @@ export interface TickerRow {
   L: number | null;
   M: number | null;
   H: number | null;
-  blocked: string | null;
   option: OptionBand | null;
   candidate: Candidate | null;
   band: Band | null;

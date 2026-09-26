@@ -103,12 +103,10 @@ def build_index(frameworks_dir: Path | None = None) -> str:
         if bucket is None:
             unknown.append(ticker)
             continue
-        # Basket column (AGENTS.md「篮子声明」) and BLOCKED flag come from the
-        # parsed framework; a parse failure must surface, not print a blank.
+        # Basket column (AGENTS.md「篮子声明」) comes from the parsed framework;
+        # a parse failure must surface, not print a blank.
         meta = load_framework(path)
         tail = f"篮子：{basket_label(meta)}"
-        if meta.blocked:
-            tail += " · **BLOCKED**"
         buckets[bucket].append((ticker, cn, tail))
 
     for items in buckets.values():
@@ -117,7 +115,7 @@ def build_index(frameworks_dir: Path | None = None) -> str:
     lines: list[str] = [
         "# 标的与轴索引",
         "",
-        "> 由 `scripts/gen_index.py` 从 `frameworks/*.md`（题头、Inputs 篮子标签、BLOCKED 状态）与 `frameworks/axes/*.md` 题头生成；勿手改。",
+        "> 由 `scripts/gen_index.py` 从 `frameworks/*.md`（题头、Inputs 篮子标签）与 `frameworks/axes/*.md` 题头生成；勿手改。",
         "> 轴的稳定引用写逻辑 id `` `_AXIS.<名>` ``；文件在 `axes/<名>.md`。",
         "",
     ]

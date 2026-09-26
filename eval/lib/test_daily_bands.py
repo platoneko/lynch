@@ -47,15 +47,6 @@ def _row(meta: FrameworkMeta, price: float, zone: str, **kwargs) -> daily_bands.
 
 
 class PoolLinesTests(unittest.TestCase):
-    def test_blocked_ticker_prints_no_zone_and_never_crosses(self) -> None:
-        meta = _meta(ticker="X.US", path=Path("frameworks/X.US.md"), name="x / X Inc.", L=57.35, M=77.23,
-                     H=136.83, currency="USD", lynch_primary="stalwart", blocked="③ 出带；解封 = ROIC ≥14%")
-        r = _row(meta, 150.0, None, previous_zone="stretched")
-        lines = daily_bands.format_pool_lines(r)
-        self.assertEqual(lines[0], "⛔ X.US 150.0 USD")
-        self.assertEqual(lines[1], "BLOCKED（③ 出带；解封 = ROIC ≥14%）· 对照带 L/M/H = 57.35/77.23/136.83")
-        self.assertFalse(r.any_crossed)
-
     def test_us_header_omits_name(self) -> None:
         r = _row(
             _meta(

@@ -43,7 +43,7 @@ def test_parsed_row_is_zoned_on_the_live_price(repo, quotes):
     assert row == {
         "ticker": "AAA.US", "name": "Alpha Corp", "market": "US",
         "lynch_primary": "fast_grower", "lynch_secondary": "cyclical", "currency": "USD",
-        "L": 10.0, "M": 20.0, "H": 40.0, "blocked": None, "option": None, "candidate": None,
+        "L": 10.0, "M": 20.0, "H": 40.0, "option": None, "candidate": None,
         "band": {"price": 25.0, "as_of": AS_OF, "zone": zone_of(25.0, 10, 20, 40),
                  "option_zone": None, "candidate_zone": None},
         "quote_error": None, "error": None,
@@ -63,12 +63,6 @@ def test_option_and_candidate_zones(repo, fetch, quotes):
     assert band["zone"] == zone_of(35.0, 10, 20, 40) == "optimistic"
     assert band["option_zone"] == zone_of(35.0, 10, 25, 50) == "neutral"
     assert band["candidate_zone"] == zone_of(35.0, 36, 50, 60) == "deep_discount"
-
-
-def test_blocked_row_keeps_price_without_zones(repo, quotes):
-    row = rows_by_ticker(repo, quotes)["BBB.US"]
-    assert row["blocked"] == "test reason; unblock when X"
-    assert row["band"] == {"price": 5.0, "as_of": AS_OF, "zone": None, "option_zone": None, "candidate_zone": None}
 
 
 def test_parse_failure_is_one_row_not_whole_list(repo, quotes):

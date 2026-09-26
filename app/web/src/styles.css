@@ -69,7 +69,6 @@ button { font: inherit; color: inherit; }
 .band-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
 .card-error { color: var(--zone-stretched); font-size: 13px; margin-top: 4px; word-break: break-all; }
 .tag { flex: none; display: inline-block; padding: 1px 8px; border-radius: 6px; font-size: 12px; }
-.tag-blocked { background: #8a8a90; color: #fff; margin-top: 8px; }
 .tag-muted { border: 1px solid var(--line); color: var(--muted); margin-top: 8px; }
 .band-head .tag-muted { margin-top: 0; }
 

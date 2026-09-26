@@ -10,15 +10,13 @@ from lynch_reader.catalog import Quote, QuoteCache
 NOW = 1_790_000_000.0  # fake clock, seconds since the epoch
 
 
-def framework_md(ticker: str, name: str, lynch: str, blocked: str | None = None) -> str:
+def framework_md(ticker: str, name: str, lynch: str) -> str:
     lines = [
         f"# {ticker} — {name}",
         "",
         f"> 🟡 林奇：{lynch} | 更新：2026-09-21 | eval: eval/{ticker}.py",
         "> 主尺：test ruler",
     ]
-    if blocked:
-        lines.append(f"> **状态：BLOCKED**（{blocked}）")
     lines += ["", "## 0. 现行结论", "", "- **价带锚点**（USD）：L = **10** · M = **20** · H = **40**", ""]
     return "\n".join(lines)
 
@@ -28,9 +26,7 @@ def repo(tmp_path: Path) -> Path:
     fw = tmp_path / "frameworks"
     fw.mkdir()
     (fw / "AAA.US.md").write_text(framework_md("AAA.US", "Alpha Corp", "`fast_grower` / `cyclical`"), encoding="utf-8")
-    (fw / "BBB.US.md").write_text(
-        framework_md("BBB.US", "Beta Inc", "`stalwart`", blocked="test reason; unblock when X"), encoding="utf-8"
-    )
+    (fw / "BBB.US.md").write_text(framework_md("BBB.US", "Beta Inc", "`stalwart`"), encoding="utf-8")
     (fw / "0001.HK.md").write_text("# 0001.HK — Broken\n\nno anchors here\n", encoding="utf-8")
     (fw / "_TEMPLATE.md").write_text("# template\n", encoding="utf-8")
     return fw
