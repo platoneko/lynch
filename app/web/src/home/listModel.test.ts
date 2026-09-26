@@ -1,0 +1,88 @@
+import { describe, expect, it } from 'vitest';
+import type { TickerRow, ZoneId } from '../types';
+import { applyFilter, DEFAULT_FILTER, latestAsOf, loadFilter, saveFilter } from './listModel';
+
+const ZONES = ['deep_discount', 'conservative', 'neutral', 'optimistic', 'stretched'];
+
+function row(ticker: string, over: Partial<TickerRow> = {}): TickerRow {
+  return {
+    ticker, name: `${ticker} name`, market: 'US', lynch_primary: 'stalwart', lynch_secondary: null,
+    currency: 'USD', L: 10, M: 20, H: 40, blocked: null, candidate_label: null,
+    band: { price: 25, as_of: '2026-09-26T09:03:00+08:00', zone: 'neutral', option_zone: null, candidate_zone: null },
+    error: null, ...over,
+  };
+}
+const withZone = (t: string, zone: ZoneId | null) =>
+  row(t, { band: { price: 1, as_of: '2026-09-26T09:03:00+08:00', zone, option_zone: null, candidate_zone: null } });
+const tickers = (rows: TickerRow[]) => rows.map((r) => r.ticker);
+
+describe('search', () => {
+  const rows = [row('NVDA.US', { name: '英伟达' }), row('0700.HK', { name: '腾讯控股', market: 'HK' })];
+  it('matches ticker case-insensitively and trims', () => {
+    expect(tickers(applyFilter(rows, { ...DEFAULT_FILTER, query: ' nvda ' }, ZONES))).toEqual(['NVDA.US']);
+  });
+  it('matches name substring', () => {
+    expect(tickers(applyFilter(rows, { ...DEFAULT_FILTER, query: '腾讯' }, ZONES))).toEqual(['0700.HK']);
+    expect(tickers(applyFilter(rows, { ...DEFAULT_FILTER, query: '0700' }, ZONES))).toEqual(['0700.HK']);
+  });
+  it('does not crash on error rows without a name', () => {
+    const broken = row('BAD.US', { name: null, error: 'boom', band: null });
+    expect(tickers(applyFilter([broken], { ...DEFAULT_FILTER, query: 'x' }, ZONES))).toEqual([]);
+  });
+});
+
+describe('filters', () => {
+  it('zone filter is multi-select and drops rows without a zone', () => {
+    const rows = [withZone('A.US', 'neutral'), withZone('B.US', 'stretched'), withZone('C.US', 'conservative'),
+      row('D.US', { band: null }), withZone('E.US', null)];
+    const f = { ...DEFAULT_FILTER, zones: ['neutral', 'conservative'] };
+    expect(tickers(applyFilter(rows, f, ZONES))).toEqual(['C.US', 'A.US']);
+  });
+  it('class filter matches primary or secondary', () => {
+    const rows = [row('A.US', { lynch_primary: 'cyclical' }),
+      row('B.US', { lynch_primary: 'fast_grower', lynch_secondary: 'cyclical' }),
+      row('C.US', { lynch_primary: 'stalwart' })];
+    expect(tickers(applyFilter(rows, { ...DEFAULT_FILTER, classes: ['cyclical'] }, ZONES))).toEqual(['A.US', 'B.US']);
+  });
+});
+
+describe('sort', () => {
+  const rows = [withZone('Z.US', 'stretched'), row('N.US', { band: null }), withZone('A.US', 'stretched'),
+    withZone('M.US', 'deep_discount'), row('X.US', { error: 'boom', band: null, name: null })];
+  it('zone order, zone-less last, ticker as tiebreak', () => {
+    expect(tickers(applyFilter(rows, DEFAULT_FILTER, ZONES))).toEqual(['M.US', 'A.US', 'Z.US', 'N.US', 'X.US']);
+  });
+  it('market keeps the server order (US → HK → A)', () => {
+    expect(tickers(applyFilter(rows, { ...DEFAULT_FILTER, sort: 'market' }, ZONES)))
+      .toEqual(['Z.US', 'N.US', 'A.US', 'M.US', 'X.US']);
+  });
+  it('ticker is plain alphabetical', () => {
+    expect(tickers(applyFilter(rows, { ...DEFAULT_FILTER, sort: 'ticker' }, ZONES)))
+      .toEqual(['A.US', 'M.US', 'N.US', 'X.US', 'Z.US']);
+  });
+});
+
+describe('latestAsOf', () => {
+  it('picks the newest timestamp', () => {
+    const rows = [row('A.US'), row('B.US', { band: { price: 1, as_of: '2026-09-26T16:13:00+08:00', zone: null, option_zone: null, candidate_zone: null } })];
+    expect(latestAsOf(rows)).toBe('2026-09-26T16:13:00+08:00');
+  });
+  it('is null without any band', () => {
+    expect(latestAsOf([row('A.US', { band: null })])).toBeNull();
+  });
+});
+
+describe('persistence', () => {
+  it('restores zones/classes/sort but never the query', () => {
+    const store = new Map<string, string>();
+    const storage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v) };
+    saveFilter(storage, { query: 'nvda', zones: ['neutral'], classes: ['cyclical'], sort: 'ticker' });
+    expect(loadFilter(storage)).toEqual({ query: '', zones: ['neutral'], classes: ['cyclical'], sort: 'ticker' });
+  });
+  it('falls back to defaults on garbage, bad sort or missing storage', () => {
+    expect(loadFilter({ getItem: () => '{not json' })).toEqual(DEFAULT_FILTER);
+    expect(loadFilter({ getItem: () => '{"sort":"price","zones":"x"}' })).toEqual(DEFAULT_FILTER);
+    expect(loadFilter(null)).toEqual(DEFAULT_FILTER);
+    expect(() => saveFilter({ setItem: () => { throw new Error('quota'); } }, DEFAULT_FILTER)).not.toThrow();
+  });
+});
