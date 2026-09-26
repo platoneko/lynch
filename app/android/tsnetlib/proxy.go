@@ -2,10 +2,13 @@ package tsnetlib
 
 import (
 	"context"
+	"fmt"
+	"html"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -29,8 +32,34 @@ func newProxy(target string, dial dialFunc) http.Handler {
 		},
 		ResponseHeaderTimeout: 30 * time.Second,
 	}
-	p.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, err error) {
-		http.Error(w, "tailnet 已连上，但服务端无响应："+err.Error(), http.StatusBadGateway)
+	p.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		msg := "tailnet 已连上，但服务端无响应：" + err.Error()
+		if !isNavigation(r) {
+			// fetch() callers (web api.ts) show this body verbatim.
+			http.Error(w, msg, http.StatusBadGateway)
+			return
+		}
+		// A page load that fails never starts the web app and its retry button,
+		// so the error page must carry its own.
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusBadGateway)
+		fmt.Fprintf(w, retryPage, html.EscapeString(msg))
 	}
 	return p
 }
+
+func isNavigation(r *http.Request) bool {
+	return r.Header.Get("Sec-Fetch-Mode") == "navigate" ||
+		strings.Contains(r.Header.Get("Accept"), "text/html")
+}
+
+const retryPage = `<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lynch</title></head>
+<body style="font-family:sans-serif;padding:16px">
+<p>%s</p>
+<button onclick="location.reload()">重试</button>
+</body></html>
+`

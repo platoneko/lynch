@@ -69,8 +69,35 @@ func TestProxyBoundsHangingDial(t *testing.T) {
 	}
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(string(body), "服务端无响应") {
-		t.Fatalf("got %d %q", resp.StatusCode, body)
+	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(string(body), "服务端无响应") ||
+		!strings.HasPrefix(resp.Header.Get("Content-Type"), "text/plain") {
+		t.Fatalf("got %d %s %q", resp.StatusCode, resp.Header.Get("Content-Type"), body)
+	}
+}
+
+// At a cold start with the server down the web app never loads, so the page
+// the WebView navigates to must itself offer the retry.
+func TestProxyDeadServerNavigationGetsRetryPage(t *testing.T) {
+	front := httptest.NewServer(newProxy("127.0.0.1:1", (&net.Dialer{}).DialContext))
+	defer front.Close()
+	for name, set := range map[string]func(*http.Request){
+		"sec-fetch-mode": func(r *http.Request) { r.Header.Set("Sec-Fetch-Mode", "navigate") },
+		"accept-html":    func(r *http.Request) { r.Header.Set("Accept", "text/html,application/xhtml+xml,*/*;q=0.8") },
+	} {
+		req, _ := http.NewRequest(http.MethodGet, front.URL+"/", nil)
+		set(req)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadGateway ||
+			!strings.HasPrefix(resp.Header.Get("Content-Type"), "text/html") ||
+			!strings.Contains(string(body), "服务端无响应") ||
+			!strings.Contains(string(body), "location.reload()") {
+			t.Fatalf("%s: got %d %s %q", name, resp.StatusCode, resp.Header.Get("Content-Type"), body)
+		}
 	}
 }
 
@@ -83,7 +110,8 @@ func TestProxyReportsDeadServer(t *testing.T) {
 	}
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(string(body), "服务端无响应") {
-		t.Fatalf("got %d %q", resp.StatusCode, body)
+	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(string(body), "服务端无响应") ||
+		!strings.HasPrefix(resp.Header.Get("Content-Type"), "text/plain") {
+		t.Fatalf("got %d %s %q", resp.StatusCode, resp.Header.Get("Content-Type"), body)
 	}
 }
