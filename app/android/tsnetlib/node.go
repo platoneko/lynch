@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -79,7 +81,7 @@ func Start(dataDir, target string) error {
 	if err != nil {
 		return err
 	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := listenLoopback(filepath.Join(dataDir, "proxy-port"))
 	if err != nil {
 		return err
 	}
@@ -93,6 +95,30 @@ func Start(dataDir, target string) error {
 	go s.run()
 	cur = s
 	return nil
+}
+
+// listenLoopback reuses the port saved in portFile when it is still free.
+// The WebView keys localStorage (saved filters) by origin, which includes the
+// port, so a fresh port per launch would drop them. Access control rests on
+// the gate's cookie, not on the port being unpredictable.
+func listenLoopback(portFile string) (net.Listener, error) {
+	if b, err := os.ReadFile(portFile); err == nil {
+		if port, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil && port > 0 && port < 65536 {
+			if ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port)); err == nil {
+				return ln, nil
+			}
+		}
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, err
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	if err := os.WriteFile(portFile, []byte(strconv.Itoa(port)), 0o600); err != nil {
+		ln.Close()
+		return nil, err
+	}
+	return ln, nil
 }
 
 func (s *session) run() {

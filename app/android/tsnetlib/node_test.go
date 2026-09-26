@@ -1,6 +1,13 @@
 package tsnetlib
 
-import "testing"
+import (
+	"encoding/json"
+	"fmt"
+	"net"
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestStoppedState(t *testing.T) {
 	if got := Status(); got != `{"state":"stopped"}` {
@@ -33,5 +40,55 @@ func TestStateOf(t *testing.T) {
 		if got := stateOf(backend); got != want {
 			t.Fatalf("stateOf(%s) = %s, want %s", backend, got, want)
 		}
+	}
+}
+
+func startedPort(t *testing.T, dataDir string) int {
+	t.Helper()
+	if err := Start(dataDir, "127.0.0.1:1"); err != nil {
+		t.Fatal(err)
+	}
+	defer Stop()
+	var st status
+	if err := json.Unmarshal([]byte(Status()), &st); err != nil {
+		t.Fatal(err)
+	}
+	if st.Port == 0 {
+		t.Fatalf("no port in Status()")
+	}
+	return st.Port
+}
+
+// localStorage is per-origin and the origin includes the port, so the port
+// must survive restarts for saved filters to survive them.
+func TestPortStableAcrossRestarts(t *testing.T) {
+	dir := t.TempDir()
+	first := startedPort(t, dir)
+	if second := startedPort(t, dir); second != first {
+		t.Fatalf("port changed across restarts: %d then %d", first, second)
+	}
+}
+
+func TestCorruptPortFileFallsBack(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "proxy-port"), []byte("garbage\x00"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	port := startedPort(t, dir)
+	if again := startedPort(t, dir); again != port {
+		t.Fatalf("fresh port not saved: %d then %d", port, again)
+	}
+}
+
+func TestBusySavedPortFallsBack(t *testing.T) {
+	dir := t.TempDir()
+	port := startedPort(t, dir)
+	busy, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer busy.Close()
+	if got := startedPort(t, dir); got == port {
+		t.Fatalf("reused busy port %d", got)
 	}
 }

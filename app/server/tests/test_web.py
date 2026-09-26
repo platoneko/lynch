@@ -42,6 +42,14 @@ def test_static_index(repo, tmp_path):
     assert "<title>lynch</title>" in r.text
 
 
+def test_index_is_revalidated(repo, tmp_path):
+    # The phone's proxy origin is stable across launches, so a cached index.html
+    # would keep pointing at the previous build's hashed assets.
+    c = client(repo, tmp_path)
+    for path in ("/", "/index.html"):
+        assert c.get(path).headers.get("cache-control") == "no-cache", path
+
+
 def test_api_works_without_built_web(repo, tmp_path):
     c = client(repo, tmp_path, with_dist=False)
     assert c.get("/api/tickers").status_code == 200

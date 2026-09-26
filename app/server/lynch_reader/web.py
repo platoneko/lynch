@@ -23,6 +23,21 @@ DEFAULT_HOST = "100.93.210.104"
 DEFAULT_PORT = 3151
 
 
+class WebDist(StaticFiles):
+    """The built web UI; HTML is always revalidated.
+
+    The phone's loopback origin is stable across launches, so a cached
+    index.html would keep loading the previous build's hashed assets after a
+    redeploy. The hashed assets themselves may stay cached.
+    """
+
+    async def get_response(self, path: str, scope) -> Response:
+        response = await super().get_response(path, scope)
+        if response.media_type == "text/html":
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 def create_app(frameworks_dir: Path, bands_dir: Path, web_dist: Path) -> Starlette:
     def tickers(_: Request) -> Response:
         return JSONResponse(catalog(frameworks_dir, bands_dir))
@@ -38,7 +53,7 @@ def create_app(frameworks_dir: Path, bands_dir: Path, web_dist: Path) -> Starlet
         Route("/api/frameworks/{ticker}", framework),
     ]
     if web_dist.is_dir():
-        routes.append(Mount("/", StaticFiles(directory=web_dist, html=True)))
+        routes.append(Mount("/", WebDist(directory=web_dist, html=True)))
     return Starlette(routes=routes)
 
 
