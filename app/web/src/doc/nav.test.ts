@@ -8,11 +8,11 @@ const SECTIONS = [sec(0, 2, null), sec(1, 2, null), sec(2, 3, 's1'), sec(3, 3, '
 
 describe('neighbors', () => {
   it('handles header, first, middle and last', () => {
-    expect(neighbors(6, -1)).toEqual({ prev: null, next: 0 });
-    expect(neighbors(6, 0)).toEqual({ prev: null, next: 1 });
-    expect(neighbors(6, 2)).toEqual({ prev: 1, next: 3 });
-    expect(neighbors(6, 5)).toEqual({ prev: 4, next: null });
-    expect(neighbors(0, -1)).toEqual({ prev: null, next: null });
+    expect(neighbors(6, -1)).toEqual({ up: null, next: 0 });
+    expect(neighbors(6, 0)).toEqual({ up: 0, next: 1 });
+    expect(neighbors(6, 2)).toEqual({ up: 2, next: 3 });
+    expect(neighbors(6, 5)).toEqual({ up: 5, next: null });
+    expect(neighbors(0, -1)).toEqual({ up: null, next: null });
   });
 });
 

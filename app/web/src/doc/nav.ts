@@ -1,9 +1,12 @@
 import type { DocSection } from './buildDoc';
 
-/** `current` is -1 while the reader is still above the first heading. */
-export function neighbors(count: number, current: number): { prev: number | null; next: number | null } {
+/**
+ * `current` is -1 while the reader is still above the first heading.
+ * `up` returns to the start of the section being read, not the one before it.
+ */
+export function neighbors(count: number, current: number): { up: number | null; next: number | null } {
   return {
-    prev: current > 0 ? current - 1 : null,
+    up: current >= 0 ? current : null,
     next: current + 1 < count ? current + 1 : null,
   };
 }

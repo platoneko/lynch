@@ -68,7 +68,7 @@ export function DocPage({ ticker, row, pool, zoneLabel, onBack }: {
   if (!doc) return <div className="status-screen"><p>加载中…</p></div>;
 
   const { sections } = doc;
-  const { prev, next } = neighbors(sections.length, current);
+  const { up, next } = neighbors(sections.length, current);
   const label = (i: number) => sectionLabel(sections[i], sections);
   const jump = (i: number) => {
     setOpen((o) => new Set([...o, ...openIdsFor(sections, i)]));
@@ -88,8 +88,8 @@ export function DocPage({ ticker, row, pool, zoneLabel, onBack }: {
       <header className="bar bar-top" ref={topBar}>
         <div className="bar-row">
           <button className="icon-btn" onClick={onBack} aria-label="返回">‹</button>
-          <button className="bar-jump" disabled={prev === null} onClick={() => prev !== null && jump(prev)}>
-            ↑ {prev !== null ? label(prev) : '已到开头'}
+          <button className="bar-jump" disabled={up === null} onClick={() => up !== null && jump(up)}>
+            ↑ {up !== null ? label(up) : '已到开头'}
           </button>
         </div>
         <div className="bar-where">当前：{current >= 0 ? label(current) : '题头'}</div>
