@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The five valuation zones (colors match the web zone palette in app/web/src/styles.css) with a price pin in "conservative". -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group>
+        <clip-path android:pathData="M33,56H75A7,7 0 0,1 75,70H33A7,7 0 0,1 33,56Z" />
+        <path android:fillColor="#1F8A4C" android:pathData="M26,56h11.2v14h-11.2z" />
+        <path android:fillColor="#4CAF6E" android:pathData="M37.2,56h11.2v14h-11.2z" />
+        <path android:fillColor="#D9A400" android:pathData="M48.4,56h11.2v14h-11.2z" />
+        <path android:fillColor="#E07B1A" android:pathData="M59.6,56h11.2v14h-11.2z" />
+        <path android:fillColor="#D13F3F" android:pathData="M70.8,56h11.2v14h-11.2z" />
+    </group>
+    <!-- Dark halo separates the pin from the band. -->
+    <path
+        android:pathData="M42.8,34V76"
+        android:strokeColor="#191B21"
+        android:strokeWidth="8"
+        android:strokeLineCap="round" />
+    <path
+        android:fillColor="#1D2027"
+        android:pathData="M34.8,34a8,8 0 1,0 16,0a8,8 0 1,0 -16,0" />
+    <path
+        android:pathData="M42.8,34V76"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4"
+        android:strokeLineCap="round" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M36.8,34a6,6 0 1,0 12,0a6,6 0 1,0 -12,0" />
+</vector>
