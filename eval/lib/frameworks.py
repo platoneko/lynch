@@ -48,6 +48,10 @@ _CANDIDATE = re.compile(
     r"M′\s*[≈=]\s*\*\*([0-9]+(?:\.[0-9]+)?)\*\*[^\n]*?"
     r"H′\s*[≈=]\s*\*\*([0-9]+(?:\.[0-9]+)?)\*\*"
 )
+# The gate assumption is named after the primed anchors on the same line
+# (`… · 门槛 A1c（note）`); a label may name an id too, so only the rest of the
+# line after H′ counts.
+_CANDIDATE_GATE = re.compile(r"门槛\s*(A[0-9A-Za-z]+′?)")
 
 # Header line 3 of a framework the rules stopped (valuation-rules.md「BLOCKED 的语义」):
 #   > **状态：BLOCKED**（reason; unblock condition）
@@ -118,6 +122,8 @@ class FrameworkMeta:
     # Not an option: no p_k, never feeds the base zone (AGENTS.md「共识升级候选带」).
     candidate: tuple[float, float, float] | None = None
     candidate_label: str | None = None
+    # Assumptions row id that must hold before the candidate replaces the base deck.
+    candidate_gate: str | None = None
     # AGENTS.md「BLOCKED — 题头契约」: reason text when the rules stopped this ticker.
     blocked: str | None = None
     # {r-field: basket} from the Inputs `篮 N` tags (AGENTS.md「篮子声明」).
@@ -225,8 +231,10 @@ def _parse_option(md: str) -> tuple[float | None, tuple[float, float, float] | N
     return v_opt, p_tiers
 
 
-def _parse_candidate(md: str) -> tuple[str, tuple[float, float, float]] | None:
-    """(label, (L′, M′, H′)) or None.  Two candidate lines are as ambiguous as two decks."""
+def _parse_candidate(
+    md: str,
+) -> tuple[str, tuple[float, float, float], str | None] | None:
+    """(label, (L′, M′, H′), gate) or None.  Two candidate lines are as ambiguous as two decks."""
     matches = list(_CANDIDATE.finditer(md))
     if not matches:
         return None
@@ -236,7 +244,9 @@ def _parse_candidate(md: str) -> tuple[str, tuple[float, float, float]] | None:
     band = (float(m.group(2)), float(m.group(3)), float(m.group(4)))
     if not (band[0] < band[1] < band[2]):
         raise ValueError(f"candidate band needs L′ < M′ < H′, got {band}")
-    return m.group(1).strip(), band
+    line_end = md.find("\n", m.end())
+    gate = _CANDIDATE_GATE.search(md, m.end(), len(md) if line_end < 0 else line_end)
+    return m.group(1).strip(), band, gate.group(1) if gate else None
 
 
 def _parse_blocked(md: str, path: Path) -> str | None:
@@ -334,6 +344,7 @@ def load_framework(path: Path) -> FrameworkMeta:
         p_tiers=p_tiers,
         candidate=candidate[1] if candidate else None,
         candidate_label=candidate[0] if candidate else None,
+        candidate_gate=candidate[2] if candidate else None,
         blocked=blocked,
         baskets=baskets,
     )

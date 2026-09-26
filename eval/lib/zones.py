@@ -1,6 +1,12 @@
 """Five-tier zone mapping from AGENTS.md (L < M < H midpoints)."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    # Type-only: per-ticker evals import this module as `lib.zones` and need no framework parsing.
+    from .frameworks import FrameworkMeta
+
 ZONE_CN: dict[str, str] = {
     "deep_discount": "深度折价",
     "conservative": "保守",
@@ -46,6 +52,39 @@ def zone_of(price: float, L: float, M: float, H: float) -> str:
     if price <= H:
         return "optimistic"
     return "stretched"
+
+
+def credited_option_zone(
+    price: float, meta: FrameworkMeta
+) -> str | None:
+    """Zone on the V-credited band, or None when this ticker has no option to report."""
+    band = meta.option_band
+    if band is None or meta.v_opt is None or meta.v_opt <= 0:
+        return None
+    return zone_of(price, *band)
+
+
+def candidate_zone(price: float, meta: FrameworkMeta) -> str | None:
+    """Zone on the consensus-upgrade candidate band, or None when the ticker has none."""
+    if meta.candidate is None:
+        return None
+    return zone_of(price, *meta.candidate)
+
+
+def price_zones(
+    price: float, meta: FrameworkMeta
+) -> tuple[str | None, str | None, str | None]:
+    """(base, +V, candidate) zones of one price, as the daily digest and the reader report them.
+
+    A BLOCKED framework gets no zone at all (AGENTS.md「BLOCKED — 题头契约」).
+    """
+    if meta.blocked:
+        return None, None, None
+    return (
+        zone_of(price, meta.L, meta.M, meta.H),
+        credited_option_zone(price, meta),
+        candidate_zone(price, meta),
+    )
 
 
 def zone_bound_edges(

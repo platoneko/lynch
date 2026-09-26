@@ -6,7 +6,7 @@ from pathlib import Path
 
 from eval.lib.frameworks import FrameworkMeta, basket_label, list_framework_paths, load_all_frameworks, load_framework
 from eval.lib.inputs import parse_baskets
-from eval.lib.zones import cut_points, zone_bound_edges, zone_of
+from eval.lib.zones import cut_points, price_zones, zone_bound_edges, zone_of
 
 
 class ZoneTests(unittest.TestCase):
@@ -34,6 +34,24 @@ class ZoneTests(unittest.TestCase):
         self.assertEqual(zone_bound_edges("neutral", L, M, H), ("half_open", A, B))
         self.assertEqual(zone_bound_edges("optimistic", L, M, H), ("closed", B, H))
         self.assertEqual(zone_bound_edges("stretched", L, M, H), ("open_above", H, None))
+
+    def test_price_zones_base_option_candidate(self) -> None:
+        base = dict(ticker="X.US", path=Path("x"), name="x", L=10.0, M=20.0, H=40.0, currency="USD",
+                    eval_script=None, lynch_primary="stalwart", lynch_secondary=None)
+        plain = FrameworkMeta(**base)
+        # +V band = (10, 25, 50); candidate (36, 50, 60) sits above the price.
+        full = FrameworkMeta(**base, v_opt=10.0, p_tiers=(0.0, 0.5, 1.0),
+                             candidate=(36.0, 50.0, 60.0), candidate_label="T")
+        self.assertEqual(price_zones(35.0, plain), ("optimistic", None, None))
+        self.assertEqual(price_zones(35.0, full), ("optimistic", "neutral", "deep_discount"))
+
+    def test_price_zones_blocked_has_none(self) -> None:
+        # AGENTS.md「BLOCKED — 题头契约」: no zone at all, option and candidate included.
+        m = FrameworkMeta(ticker="X.US", path=Path("x"), name="x", L=10.0, M=20.0, H=40.0, currency="USD",
+                          eval_script=None, lynch_primary="stalwart", lynch_secondary=None,
+                          v_opt=10.0, p_tiers=(0.0, 0.5, 1.0), candidate=(36.0, 50.0, 60.0),
+                          candidate_label="T", blocked="reason")
+        self.assertEqual(price_zones(35.0, m), (None, None, None))
 
 
 class ParseTests(unittest.TestCase):

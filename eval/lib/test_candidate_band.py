@@ -100,6 +100,24 @@ class ParseCandidateTests(unittest.TestCase):
         m = _load("")
         self.assertIsNone(m.candidate)
         self.assertIsNone(m.candidate_label)
+        self.assertIsNone(m.candidate_gate)
+
+    def test_gate_is_read_after_the_primed_anchors(self) -> None:
+        self.assertEqual(_load(_CANDIDATE_LINE).candidate_gate, "A22")
+        line = "- 候选带（T）：L′ = **7.23** · M′ = **15.54** · H′ = **16.29** · 门槛 A3′（note 门槛 A1）"
+        self.assertEqual(_load(line).candidate_gate, "A3′")
+
+    def test_gate_named_only_in_the_label_is_none(self) -> None:
+        # 600096.SH shape: the label mentions an id, but no `门槛 A…` follows the prices.
+        line = "- 候选带（FY2027·单家，A3′）：L′ = **7.23** · M′ = **15.54** · H′ = **16.29**；门槛 FY2027 ≥2 家"
+        m = _load(line)
+        self.assertEqual(m.candidate_label, "FY2027·单家，A3′")
+        self.assertIsNone(m.candidate_gate)
+
+    def test_real_framework_gates(self) -> None:
+        gates = {t: load_framework(REPO_ROOT / "frameworks" / f"{t}.md").candidate_gate
+                 for t in ("0700.HK", "600096.SH", "0189.HK")}
+        self.assertEqual(gates, {"0700.HK": "A1c", "600096.SH": None, "0189.HK": None})
 
     def test_candidate_must_be_a_ladder(self) -> None:
         bad = "- 候选带（x）：L′ = **7.23** · M′ = **16.29** · H′ = **15.54**"

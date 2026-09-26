@@ -25,7 +25,16 @@ from eval.lib.bands_io import build_record, read_previous, read_rf_readings, wri
 from eval.lib.feishu import send_post  # noqa: E402
 from eval.lib.frameworks import FrameworkMeta, load_all_frameworks  # noqa: E402
 from eval.lib.price import fetch_quotes  # noqa: E402
-from eval.lib.zones import zone_bound_edges, zone_emoji, zone_label, zone_of  # noqa: E402
+# candidate_zone / credited_option_zone are re-exported: the digest tests call them from here.
+from eval.lib.zones import (  # noqa: E402, F401
+    candidate_zone,
+    credited_option_zone,
+    price_zones,
+    zone_bound_edges,
+    zone_emoji,
+    zone_label,
+    zone_of,
+)
 
 
 log = logging.getLogger("daily_bands")
@@ -103,29 +112,12 @@ def zone_changed(previous: str | None, current: str | None) -> bool:
     return previous is not None and current is not None and previous != current
 
 
-def credited_option_zone(
-    price: float, meta: FrameworkMeta
-) -> str | None:
-    """Zone on the V-credited band, or None when this ticker has no option to report."""
-    band = meta.option_band
-    if band is None or meta.v_opt is None or meta.v_opt <= 0:
-        return None
-    return zone_of(price, *band)
-
-
 def _short_name(meta: FrameworkMeta) -> str:
     """Title segment before ' / ' (中文名优先)."""
     name = (meta.name or "").strip()
     if " / " in name:
         name = name.split(" / ", 1)[0].strip()
     return name or meta.ticker
-
-
-def candidate_zone(price: float, meta: FrameworkMeta) -> str | None:
-    """Zone on the consensus-upgrade candidate band, or None when the ticker has none."""
-    if meta.candidate is None:
-        return None
-    return zone_of(price, *meta.candidate)
 
 
 def format_pool_lines(r: Row) -> list[str]:
@@ -304,12 +296,7 @@ def run(*, dry_run: bool, notify: bool, bands_dir: Path | None) -> int:
                 raise KeyError("longbridge 未返回报价（停牌/代码变更/接口异常）")
             q = quotes[meta.ticker]
             price = q.last
-            if meta.blocked:
-                zone = option_zone = cand_zone = None
-            else:
-                zone = zone_of(price, meta.L, meta.M, meta.H)
-                option_zone = credited_option_zone(price, meta)
-                cand_zone = candidate_zone(price, meta)
+            zone, option_zone, cand_zone = price_zones(price, meta)
         except Exception as e:  # noqa: BLE001
             errors.append(f"{meta.ticker}: {e}")
             continue
