@@ -124,6 +124,33 @@ button { font: inherit; color: inherit; }
 .md .table-scroll { overflow-x: auto; margin: 8px 0; -webkit-overflow-scrolling: touch; }
 .md table { border-collapse: collapse; font-size: 13px; white-space: nowrap; }
 .md th, .md td { border: 1px solid var(--line); padding: 4px 8px; vertical-align: top; }
+/* Grid tables scroll sideways; the row label (档 / 腿) stays pinned so a row is still readable. */
+.md table:not(.table-prose) :is(th, td):first-child { position: sticky; left: 0; z-index: 1; background: var(--bg); box-shadow: inset -1px 0 var(--line); }
+/* Prose tables (see buildDoc PROSE_CELL_CHARS) wrap; their per-cell labels and folds are phone-only. */
+.md table.table-prose { white-space: normal; overflow-wrap: break-word; } /* `anywhere` would squeeze "A2" / "active" to one glyph per line */
+.md .cell-label { display: none; }
+.md .cell-fold > summary { list-style: none; cursor: pointer; color: var(--muted); font-size: 12px; }
+.md .cell-fold > summary::-webkit-details-marker { display: none; }
+.md .cell-fold > summary::after { content: " ▸ 展开"; }
+.md .cell-fold[open] > summary::after { content: " ▾"; }
+@supports selector(::details-content) {
+  @media (min-width: 641px) {
+    .md .cell-fold > summary { display: none; }
+    .md .cell-fold::details-content { content-visibility: visible; }
+  }
+}
+/* Phone: each prose row becomes a card of "header value" lines; the first cell is its title. */
+@media (max-width: 640px) {
+  .md table.table-prose, .table-prose tbody, .table-prose tr, .table-prose td { display: block; }
+  .md table.table-prose { font-size: 14px; line-height: 1.65; }
+  .table-prose thead { display: none; }
+  .table-prose tr { margin: 8px 0; padding: 6px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+  .md .table-prose td { border: none; padding: 2px 0; text-align: left !important; }
+  .md .table-prose td.cell-empty { display: none; }
+  .md .table-prose td:first-child { font-weight: 600; }
+  .md .table-prose td:first-child > .cell-label { display: none; }
+  .md .table-prose .cell-label { display: inline; margin-right: 6px; color: var(--muted); font-size: 12px; font-weight: normal; }
+}
 .md code { font-size: 0.9em; background: var(--line); border-radius: 4px; padding: 0 3px; overflow-wrap: anywhere; }
 .md pre { overflow-x: auto; background: var(--card); padding: 8px; border-radius: 8px; }
 .md a { color: var(--accent); }

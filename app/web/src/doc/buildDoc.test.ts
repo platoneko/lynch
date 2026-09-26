@@ -69,6 +69,41 @@ describe('buildDoc', () => {
   });
 });
 
+describe('table layout', () => {
+  const long = (s: string) => s.repeat(100);
+  const render = (lines: string[]) => buildDoc(['## 0. x', '', ...lines, ''].join('\n'), POOL).sections[0].bodyHtml;
+
+  it('leaves a table of short cells as a plain grid', () => {
+    const html = render(['| 档 | 值 |', '|---|---:|', '| L | 10 |']);
+    expect(html).toContain('<div class="table-scroll"><table>');
+    expect(html).not.toContain('cell-label');
+  });
+
+  it('marks a table with a long cell as prose and labels each cell with its rendered header', () => {
+    const html = render(['| id | 假设 \\(p_k\\) |', '|---|---|', `| A1 | ${long('长')} |`]);
+    expect(html).toContain('<table class="table-prose">');
+    expect(html).toMatch(/<td><span class="cell-label">id<\/span>A1<\/td>/);
+    expect(html).toMatch(/<span class="cell-label">假设 <eq><span class="katex/);
+  });
+
+  it('folds long cells after the subject column, never the subject itself', () => {
+    const html = render([
+      '| id | 假设 | 状态 | 证据 |', '|---|---|---|---|',
+      `| A1 | ${long('假')} | active | ${long('证')} |`,
+      `| A2 | short | active | 短证据 |`,
+    ]);
+    expect(html.match(/<details class="cell-fold">/g)).toHaveLength(1);
+    expect(html).toContain(`<details class="cell-fold"><summary>证据</summary>${long('证')}</details></td>`);
+    expect(html).toContain(`<span class="cell-label">假设</span>${long('假')}`);
+    expect(html).toContain('<span class="cell-label">证据</span>短证据');
+  });
+
+  it('marks empty cells so a card can skip them, and keeps column alignment', () => {
+    const html = render(['| a | b |', '|---|---:|', `| ${long('x')} | |`]);
+    expect(html).toContain('<td style="text-align:right" class="cell-empty">');
+  });
+});
+
 describe('linkedTicker', () => {
   it('accepts relative pool links only', () => {
     expect(linkedTicker('./BBB.US.md', POOL)).toBe('BBB.US');
