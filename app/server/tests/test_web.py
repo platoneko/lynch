@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from starlette.testclient import TestClient
 
-from lynch_reader.catalog import QuoteCache
+from lynch_reader.catalog import QUOTE_REFRESH_MAX_AGE_S, QuoteCache
 from lynch_reader.web import create_app
 from tests.conftest import FakeFetch
 
@@ -23,6 +23,16 @@ def test_tickers_json(repo, tmp_path, quotes):
     assert body["quote_error"] is None
     assert body["tickers"][0]["ticker"] == "AAA.US"
     assert body["tickers"][0]["band"]["price"] == 25.0
+
+
+def test_refresh_query_uses_the_refresh_max_age(repo, tmp_path, fetch, clock, quotes):
+    c = client(repo, tmp_path, quotes)
+    c.get("/api/tickers")
+    clock.now += QUOTE_REFRESH_MAX_AGE_S
+    c.get("/api/tickers")
+    assert len(fetch.calls) == 1
+    c.get("/api/tickers?refresh=1")
+    assert len(fetch.calls) == 2
 
 
 def test_non_finite_price_nulls_only_its_row(repo, tmp_path, fetch, quotes):

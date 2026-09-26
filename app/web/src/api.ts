@@ -7,8 +7,9 @@ async function get(path: string): Promise<Response> {
   return res;
 }
 
-export async function fetchCatalog(): Promise<Catalog> {
-  return (await get('/api/tickers')).json();
+/** `refresh`: a tap on refresh, which lets the server refetch quotes sooner than on a plain load. */
+export async function fetchCatalog(refresh: boolean): Promise<Catalog> {
+  return (await get(refresh ? '/api/tickers?refresh=1' : '/api/tickers')).json();
 }
 
 export async function fetchFramework(ticker: string): Promise<string> {

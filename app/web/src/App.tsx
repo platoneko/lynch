@@ -20,15 +20,16 @@ export function App() {
   const homeScroll = useRef(0);
   const openedFromHome = useRef(false);
 
-  const load = useCallback(() => {
+  const load = useCallback((refresh: boolean) => {
     setLoading(true);
     setError(null);
-    fetchCatalog()
+    fetchCatalog(refresh)
       .then(setCatalog, (e: unknown) => setError(String(e instanceof Error ? e.message : e)))
       .finally(() => setLoading(false));
   }, []);
 
-  useEffect(load, [load]);
+  useEffect(() => load(false), [load]);
+  const reload = () => load(true);
 
   useEffect(() => {
     const onHash = () => setRoute(parseRoute(window.location.hash));
@@ -59,7 +60,7 @@ export function App() {
         {error ? (
           <>
             <p>加载失败：{error}</p>
-            <button onClick={load}>重试</button>
+            <button onClick={reload}>重试</button>
           </>
         ) : (
           <p>加载中…</p>
@@ -82,9 +83,9 @@ export function App() {
   }
   return (
     <>
-      {error && <div className="banner-error" onClick={load}>刷新失败：{error}（点此重试）</div>}
+      {error && <div className="banner-error" onClick={reload}>刷新失败：{error}（点此重试）</div>}
       <HomePage catalog={catalog} filter={filter} onFilter={setFilter} onOpen={openDoc}
-        onRefresh={load} refreshing={loading} />
+        onRefresh={reload} refreshing={loading} />
     </>
   );
 }

@@ -40,8 +40,10 @@ ROW_KEYS = (
     "L", "M", "H", "option", "candidate", "band", "quote_error", "error",
 )
 
-# The home refresh button tolerates this much staleness; it also bounds Longbridge CLI calls.
-QUOTE_TTL_S = 30.0
+# Quotes are reused up to this age: it bounds Longbridge CLI calls.
+QUOTE_MAX_AGE_S = 300.0
+# The refresh button is mainly for re-reading frameworks; its quotes need only be this fresh.
+QUOTE_REFRESH_MAX_AGE_S = 60.0
 # During an outage each call can take the whole timeout; requests in this window share one failure.
 QUOTE_BACKOFF_S = 5.0
 QUOTE_TIMEOUT_S = 15
@@ -60,7 +62,7 @@ class QuoteBatch:
     symbols: tuple[str, ...]
     quotes: dict[str, Quote]
     fetched_at: float  # wall clock, seconds since the epoch: only for `as_of`
-    fetched_mono: float  # monotonic clock: for the TTL
+    fetched_mono: float  # monotonic clock: for the max age
 
 
 @dataclass(frozen=True)
@@ -71,7 +73,7 @@ class QuoteFailure:
 
 
 class QuoteCache:
-    """One batched quote call for the whole pool, reused for QUOTE_TTL_S.
+    """One batched quote call for the whole pool, reused while younger than the caller's max age.
 
     The lock makes concurrent requests wait for one CLI call instead of each
     starting their own; those that waited get that call's batch or failure.
@@ -93,7 +95,7 @@ class QuoteCache:
         self._batch: QuoteBatch | None = None
         self._failure: QuoteFailure | None = None
 
-    def get(self, symbols: list[str]) -> QuoteBatch:
+    def get(self, symbols: list[str], max_age_s: float) -> QuoteBatch:
         key = tuple(symbols)
         with self._lock:
             # A pool that changed since (framework added or renamed) needs its own call.
@@ -101,7 +103,7 @@ class QuoteCache:
             if f is not None and f.symbols == key and self._monotonic() - f.failed_mono < QUOTE_BACKOFF_S:
                 raise f.error
             b = self._batch
-            if b is None or b.symbols != key or self._monotonic() - b.fetched_mono >= QUOTE_TTL_S:
+            if b is None or b.symbols != key or self._monotonic() - b.fetched_mono >= max_age_s:
                 b = self._fetch_batch(key)
             return b
 
@@ -120,7 +122,7 @@ class QuoteCache:
         return self._batch
 
 
-def catalog(frameworks_dir: Path, quotes: QuoteCache) -> dict[str, Any]:
+def catalog(frameworks_dir: Path, quotes: QuoteCache, refresh: bool = False) -> dict[str, Any]:
     # Step 1: framework header fields; a bad file costs only its own row.
     parsed = [_ticker_row(p) for p in list_framework_paths(frameworks_dir)]
     priced = [(row, meta) for row, meta in parsed if meta is not None]
@@ -128,8 +130,9 @@ def catalog(frameworks_dir: Path, quotes: QuoteCache) -> dict[str, Any]:
     # Step 2: one quote batch for every parsed row. When the whole call fails the list
     # still loads with every band empty; an old snapshot is never shown in its place.
     quote_error = None
+    max_age_s = QUOTE_REFRESH_MAX_AGE_S if refresh else QUOTE_MAX_AGE_S
     try:
-        batch = quotes.get([meta.ticker for _, meta in priced])
+        batch = quotes.get([meta.ticker for _, meta in priced], max_age_s)
     except Exception as e:  # noqa: BLE001 — external CLI: missing, non-zero exit, timeout, bad JSON
         log.warning("quote fetch failed: %s", e)
         quote_error = _quote_failure(e)

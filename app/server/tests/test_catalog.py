@@ -12,7 +12,7 @@ import pytest
 from eval.lib.frameworks import list_framework_paths
 from eval.lib.zones import zone_of
 from lynch_reader.catalog import (
-    FRAMEWORKS_DIR, NO_QUOTE, QUOTE_BACKOFF_S, QUOTE_TTL_S, QuoteCache, catalog, framework_path,
+    FRAMEWORKS_DIR, NO_QUOTE, QUOTE_BACKOFF_S, QUOTE_MAX_AGE_S, QUOTE_REFRESH_MAX_AGE_S, QuoteCache, catalog, framework_path,
 )
 from tests.conftest import NOW, FakeClock, FakeFetch, framework_md
 
@@ -76,9 +76,9 @@ def test_one_batched_fetch_for_parsed_rows(repo, fetch, quotes):
     assert fetch.calls == [["AAA.US", "BBB.US"]]
 
 
-def test_quotes_are_cached_for_the_ttl(repo, fetch, clock, quotes):
+def test_quotes_are_reused_up_to_the_max_age(repo, fetch, clock, quotes):
     catalog(repo, quotes)
-    clock.now += QUOTE_TTL_S - 1
+    clock.now += QUOTE_MAX_AGE_S - 1
     catalog(repo, quotes)
     assert len(fetch.calls) == 1
     clock.now += 2
@@ -87,6 +87,18 @@ def test_quotes_are_cached_for_the_ttl(repo, fetch, clock, quotes):
     assert len(fetch.calls) == 2
     assert band["price"] == 26.0
     assert band["as_of"] == datetime.fromtimestamp(clock.now, ZoneInfo("Asia/Shanghai")).isoformat(timespec="seconds")
+
+
+def test_refresh_refetches_quotes_older_than_the_refresh_max_age(repo, fetch, clock, quotes):
+    catalog(repo, quotes)
+    clock.now += QUOTE_REFRESH_MAX_AGE_S - 1
+    catalog(repo, quotes, refresh=True)
+    assert len(fetch.calls) == 1
+    clock.now += 1
+    catalog(repo, quotes)  # a plain load still reuses the batch
+    assert len(fetch.calls) == 1
+    catalog(repo, quotes, refresh=True)
+    assert len(fetch.calls) == 2
 
 
 def test_a_changed_pool_is_refetched(repo, fetch, quotes):
@@ -113,7 +125,7 @@ def test_no_usable_quote_is_logged_once_per_batch(repo, fetch, clock, quotes, ca
         catalog(repo, quotes)
         catalog(repo, quotes)  # cache hit: same batch, no new warning
         assert sum("AAA.US" in r.getMessage() for r in caplog.records) == 1
-        clock.now += QUOTE_TTL_S
+        clock.now += QUOTE_MAX_AGE_S
         catalog(repo, quotes)  # a new batch warns again
         assert sum("AAA.US" in r.getMessage() for r in caplog.records) == 2
 
@@ -156,7 +168,7 @@ def test_whole_call_failure_backs_off_then_retries(repo, clock):
 
 def test_failure_after_a_good_batch_does_not_serve_the_old_batch(repo, fetch, clock, quotes):
     catalog(repo, quotes)
-    clock.now += QUOTE_TTL_S
+    clock.now += QUOTE_MAX_AGE_S
     fetch.error = RuntimeError("boom")
     out = catalog(repo, quotes)
     assert out["quote_error"] and all(r["band"] is None for r in out["tickers"])
@@ -186,14 +198,14 @@ def test_requests_waiting_on_a_failing_call_reuse_its_failure(repo, clock):
     assert results["first"]["quote_error"] == results["waiter"]["quote_error"] == "取价失败：boom"
 
 
-def test_ttl_follows_the_monotonic_clock_not_the_wall_clock(repo, fetch, clock):
+def test_max_age_follows_the_monotonic_clock_not_the_wall_clock(repo, fetch, clock):
     wall = FakeClock()
     quotes = QuoteCache(fetch=fetch, monotonic=clock, wall=wall)
     catalog(repo, quotes)
-    wall.now -= 3600  # the wall clock is set back an hour: no effect on the TTL
+    wall.now -= 3600  # the wall clock is set back an hour: no effect on the max age
     catalog(repo, quotes)
     assert len(fetch.calls) == 1
-    clock.now += QUOTE_TTL_S
+    clock.now += QUOTE_MAX_AGE_S
     band = rows_by_ticker(repo, quotes)["AAA.US"]["band"]
     assert len(fetch.calls) == 2
     # `as_of` still reports wall time.

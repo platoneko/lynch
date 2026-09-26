@@ -39,8 +39,9 @@ class WebDist(StaticFiles):
 
 
 def create_app(frameworks_dir: Path, web_dist: Path, quotes: QuoteCache) -> Starlette:
-    def tickers(_: Request) -> Response:
-        return JSONResponse(catalog(frameworks_dir, quotes))
+    def tickers(request: Request) -> Response:
+        refresh = request.query_params.get("refresh") == "1"
+        return JSONResponse(catalog(frameworks_dir, quotes, refresh))
 
     def framework(request: Request) -> Response:
         path = framework_path(request.path_params["ticker"], frameworks_dir)
