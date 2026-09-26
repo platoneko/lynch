@@ -74,12 +74,22 @@ def _ticker_row(path: Path, bands_dir: Path) -> dict[str, Any]:
 
 
 def _read_band(ticker: str, bands_dir: Path) -> dict[str, Any] | None:
-    record = read_previous(ticker, bands_dir)
+    # read_previous only absorbs OSError/JSONDecodeError; a non-UTF-8 file
+    # (UnicodeDecodeError, a ValueError) must also cost just this row.
+    try:
+        record = read_previous(ticker, bands_dir)
+    except (ValueError, OSError) as e:
+        log.warning("band artifact unreadable: %s: %s", ticker, e)
+        return None
     if record is None:
         if bands_path(ticker, bands_dir).exists():
             log.warning("band artifact unreadable: %s", ticker)
         return None
-    if not isinstance(record.get("price"), (int, float)) or "as_of" not in record:
+    if not isinstance(record, dict):
+        log.warning("band artifact is not an object: %s", ticker)
+        return None
+    price = record.get("price")
+    if isinstance(price, bool) or not isinstance(price, (int, float)) or "as_of" not in record:
         log.warning("band artifact lacks price/as_of: %s", ticker)
         return None
     return {k: record.get(k) for k in BAND_KEYS}

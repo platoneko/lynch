@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
+
+import pytest
 
 from lynch_reader.catalog import catalog, framework_path
 from tests.conftest import AS_OF
@@ -56,6 +59,22 @@ def test_malformed_band_is_null(repo):
     fw, bands = repo
     (bands / "AAA.US.json").write_text("{not json", encoding="utf-8")
     assert rows_by_ticker(fw, bands)["AAA.US"]["band"] is None
+
+
+@pytest.mark.parametrize("content", [
+    b"[]",
+    b"42",
+    b"\xff\xfe\x00",
+    json.dumps({"price": True, "as_of": AS_OF, "zone": "neutral"}).encode(),
+], ids=["list", "number", "non-utf8", "bool-price"])
+def test_odd_band_is_one_null_row_with_warning(repo, caplog, content):
+    fw, bands = repo
+    (bands / "AAA.US.json").write_bytes(content)
+    with caplog.at_level(logging.WARNING, logger="lynch_reader"):
+        rows = rows_by_ticker(fw, bands)
+    assert rows["AAA.US"]["band"] is None
+    assert rows["BBB.US"]["band"]["price"] == 5.0
+    assert any(r.levelno == logging.WARNING and "AAA.US" in r.getMessage() for r in caplog.records)
 
 
 def test_band_without_price_is_null(repo):
