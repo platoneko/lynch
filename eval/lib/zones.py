@@ -54,14 +54,23 @@ def zone_of(price: float, L: float, M: float, H: float) -> str:
     return "stretched"
 
 
+def credited_option_band(meta: FrameworkMeta) -> tuple[float, float, float] | None:
+    """The V-credited band the digest and the reader report, or None when there is no option.
+
+    A `V_opt = 0` line is a disclosure that the ticker has no option, not a band.
+    """
+    band = meta.option_band
+    if band is None or meta.v_opt is None or meta.v_opt <= 0:
+        return None
+    return band
+
+
 def credited_option_zone(
     price: float, meta: FrameworkMeta
 ) -> str | None:
     """Zone on the V-credited band, or None when this ticker has no option to report."""
-    band = meta.option_band
-    if band is None or meta.v_opt is None or meta.v_opt <= 0:
-        return None
-    return zone_of(price, *band)
+    band = credited_option_band(meta)
+    return None if band is None else zone_of(price, *band)
 
 
 def candidate_zone(price: float, meta: FrameworkMeta) -> str | None:

@@ -32,6 +32,9 @@ _ANCHOR_SLASH = re.compile(
 # Option ceiling: `\(V_{opt}\) = **35.25**`, also `**\(V_{opt}\) = +35.25**`
 _V_OPT = re.compile(r"V_\{?opt\}?\\?\)?\s*[≈=]\s*\*{0,2}\s*\+?([0-9]+(?:\.[0-9]+)?)")
 
+# The Outputs bullet that opens with the option ceiling: `- \(V_{opt}\) = **18.17** · …`
+_OPTION_LINE = re.compile(r"^-\s+(\\\(V_\{opt\}\\\)\s*[≈=].*)$", re.MULTILINE)
+
 # Per-tier option credit: `\(p_L/p_M/p_H\) = **0 / 0.25 / 1.0**`
 _P_TIERS = re.compile(
     r"p_L\s*/\s*p_M\s*/\s*p_H\\?\)?\s*[≈=]\s*\*{0,2}\s*"
@@ -119,6 +122,8 @@ class FrameworkMeta:
     lynch_secondary: str | None
     v_opt: float | None = None
     p_tiers: tuple[float, float, float] | None = None
+    # The Outputs `\(V_{opt}\)` bullet text, for readers that show why the option exists.
+    option_line: str | None = None
     # Not an option: no p_k, never feeds the base zone (AGENTS.md「共识升级候选带」).
     candidate: tuple[float, float, float] | None = None
     candidate_label: str | None = None
@@ -193,15 +198,21 @@ def list_framework_paths(frameworks_dir: Path | None = None) -> list[Path]:
     return out
 
 
+def _outputs_section(md: str) -> str | None:
+    """From `### Outputs` up to the next numbered chapter, or None without one."""
+    m_out = re.search(r"^### Outputs\b.*", md, re.MULTILINE)
+    if not m_out:
+        return None
+    outputs = md[m_out.start() :]
+    nxt = re.search(r"^## \d", outputs[1:], re.MULTILINE)
+    if nxt:
+        outputs = outputs[: nxt.start() + 1]
+    return outputs
+
+
 def _parse_anchors(md: str) -> tuple[float, float, float]:
     # Prefer ### Outputs section if present
-    outputs = md
-    m_out = re.search(r"^### Outputs\b.*", md, re.MULTILINE)
-    if m_out:
-        outputs = md[m_out.start() :]
-        nxt = re.search(r"^## \d", outputs[1:], re.MULTILINE)
-        if nxt:
-            outputs = outputs[: nxt.start() + 1]
+    outputs = _outputs_section(md) or md
 
     # An Outputs section carrying two L/M/H triples (e.g. a sensitivity row) is
     # ambiguous: silently taking one of them is how the daily digest would
@@ -229,6 +240,16 @@ def _parse_option(md: str) -> tuple[float | None, tuple[float, float, float] | N
         (float(pm.group(1)), float(pm.group(2)), float(pm.group(3))) if pm else None
     )
     return v_opt, p_tiers
+
+
+def _parse_option_line(md: str) -> str | None:
+    """The Outputs `\\(V_{opt}\\)` bullet (AGENTS.md「未建模期权」行契约), `- ` stripped.
+
+    Only the Outputs section counts: §0 / §1 often name V_opt earlier in prose.
+    """
+    outputs = _outputs_section(md)
+    m = _OPTION_LINE.search(outputs) if outputs else None
+    return m.group(1).strip() if m else None
 
 
 def _parse_candidate(
@@ -342,6 +363,7 @@ def load_framework(path: Path) -> FrameworkMeta:
         lynch_secondary=lynch_secondary,
         v_opt=v_opt,
         p_tiers=p_tiers,
+        option_line=_parse_option_line(md),
         candidate=candidate[1] if candidate else None,
         candidate_label=candidate[0] if candidate else None,
         candidate_gate=candidate[2] if candidate else None,

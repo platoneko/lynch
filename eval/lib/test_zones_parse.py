@@ -6,7 +6,7 @@ from pathlib import Path
 
 from eval.lib.frameworks import FrameworkMeta, basket_label, list_framework_paths, load_all_frameworks, load_framework
 from eval.lib.inputs import parse_baskets
-from eval.lib.zones import cut_points, price_zones, zone_bound_edges, zone_of
+from eval.lib.zones import credited_option_band, cut_points, price_zones, zone_bound_edges, zone_of
 
 
 class ZoneTests(unittest.TestCase):
@@ -154,6 +154,55 @@ class ParseTests(unittest.TestCase):
                 continue
             m = load_framework(p)
             self.assertEqual(m.ticker, p.stem)
+
+
+class OptionTests(unittest.TestCase):
+    """The +V option band and its Outputs line (AGENTS.md「未建模期权」)."""
+
+    _MD = (
+        "# X.US — 甲 / X Inc.\n\n"
+        "> 林奇：`stalwart` | 更新：2026-09-20 | eval: eval/X.US.py\n"
+        "> 主尺：x\n\n## 0. 现行结论\n\n"
+        "- **价带锚点（USD）**：L = **10** · M = **20** · H = **40**\n"
+        "  - \\(V_{opt}\\) = **10**（§0 shorthand, not the Outputs line）\n\n"
+        "## 3. 可演算块\n\n### Outputs\n\n"
+        "- 底牌 L = **10** · M = **20** · H = **40**\n"
+        "{outputs}"
+        "- **可比性读数**：\\(L/M\\) = **0.5** · \\(V_{opt}/M\\) = **0.5**\n\n"
+        "## 4. Changelog\n\n- \\(V_{opt}\\) = **99** later note\n"
+    )
+
+    def _load(self, outputs: str) -> FrameworkMeta:
+        return ParseTests._load_md(self._MD.replace("{outputs}", outputs))
+
+    def test_option_line_is_the_outputs_bullet(self) -> None:
+        # 000100.SZ shape: §0 names V_opt first; the Outputs bullet is the one reported.
+        m = self._load("- \\(V_{opt}\\) = **10** · \\(p_L/p_M/p_H\\) = **0 / 0.5 / 1.0** —— 见表3（A12）\n")
+        self.assertEqual(m.option_line, "\\(V_{opt}\\) = **10** · \\(p_L/p_M/p_H\\) = **0 / 0.5 / 1.0** —— 见表3（A12）")
+
+    def test_no_outputs_bullet_is_none(self) -> None:
+        self.assertIsNone(self._load("").option_line)
+
+    def test_credited_option_band(self) -> None:
+        with_p = self._load("- \\(V_{opt}\\) = **10** · \\(p_L/p_M/p_H\\) = **0 / 0.5 / 1.0**\n")
+        self.assertEqual(credited_option_band(with_p), (10.0, 25.0, 50.0))
+        # A ceiling without the per-tier credit places no band.
+        self.assertIsNone(credited_option_band(self._load("- \\(V_{opt}\\) = **10**\n")))
+        zero = ParseTests._load_md(
+            self._MD.replace("{outputs}", "- \\(V_{opt}\\) = **0** · \\(p_L/p_M/p_H\\) = **0 / 0.5 / 1.0**\n")
+            .replace("**10**（§0", "**0**（§0"))
+        self.assertEqual(zero.v_opt, 0.0)
+        self.assertIsNone(credited_option_band(zero))
+
+    def test_real_frameworks_option_lines(self) -> None:
+        with_option = [m for m in load_all_frameworks() if credited_option_band(m) is not None]
+        self.assertTrue(with_option)
+        for m in with_option:
+            with self.subTest(ticker=m.ticker):
+                self.assertIsNotNone(m.option_line)
+                self.assertTrue(m.option_line.startswith("\\(V_{opt}\\)"), m.option_line)
+        cohr = next(m for m in with_option if m.ticker == "COHR.US")
+        self.assertIn("（A12）", cohr.option_line)
 
 
 if __name__ == "__main__":
