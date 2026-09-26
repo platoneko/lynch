@@ -14,16 +14,20 @@ Agent 应加载 skill **`sediment-framework`**：**先持续对话**对齐分类
 
 - `frameworks/<TICKER>.md` — 真源（题头含林奇类 + 主尺一行）
 
-模板：`frameworks/_TEMPLATE.md`。协作硬约束：`AGENTS.md`。  
-标的池 = 扫 `frameworks/*.md`（排除 `_` 前缀）；**不**维护 `universe.yaml`。
+模板：`frameworks/_TEMPLATE.md`。协作硬约束：`frameworks/AGENTS.md`（框架）· `AGENTS.md`（开发）。  
+标的池 = 扫 `frameworks/*.md`（排除 `_` 前缀与 `AGENTS.md` / `README.md`）；**不**维护 `universe.yaml`。
+
+首次克隆：`git clone git@github.com:platoneko/lynch-frameworks.git frameworks`（在本仓库根执行）。
 
 ## 目录
 
 | 路径 | 说明 |
 |------|------|
-| `frameworks/` | 单票框架（题头索引 + 现行结论 + Assumptions + Changelog） |
-| `.claude/skills/sediment-framework/` | 落盘流程 skill（中文） |
-| `.claude/skills/*` | finance-skills 软链（取数） |
+| `frameworks/` | 内容仓库 `lynch-frameworks` 的检出（本仓忽略）：单票框架、共享情景轴、每票演算、skill |
+| `.claude/skills` | → `frameworks/.claude/skills`（软链）：sediment-framework + finance-skills |
+| `eval/lib/` | 估值 / 解析 / zone 规则库 |
+| `scripts/` | 日报、财报提醒、索引生成、跨票体检 |
+| `app/` | 手机阅读 app（服务端 + 前端 + 安卓壳） |
 | `.mcp.json` | Wisburg MCP（本地，gitignore） |
 | `_local/` | 个人草稿，不入库 |
 
@@ -45,7 +49,7 @@ Agent 应加载 skill **`sediment-framework`**：**先持续对话**对齐分类
 | `optimistic` | 乐观 | \([(M+H)/2,H]\) |
 | `stretched` | 叙事溢价 | \(P > H\) |
 
-细则与语义见 `AGENTS.md`。单票如何得到 L/M/H 写在各自 `frameworks/*.md`（如 `INTC.US` 为不对称 SOTP）。
+细则与语义见 `frameworks/AGENTS.md`。单票如何得到 L/M/H 写在各自 `frameworks/*.md`（如 `INTC.US` 为不对称 SOTP）。
 
 ## 日报价带 + 飞书
 
@@ -75,4 +79,4 @@ python3 scripts/daily_bands.py --no-notify
 bash scripts/install-daily-cron.sh
 ```
 
-**MUST NOT** 让日报改写 `frameworks/*.md`。单票完整公式校验仍用 `python3 eval/<TICKER>.py`。
+**MUST NOT** 让日报改写 `frameworks/*.md`。单票完整公式校验仍用 `python3 frameworks/eval/<TICKER>.py`。
