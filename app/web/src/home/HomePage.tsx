@@ -1,5 +1,5 @@
 import type { Catalog } from '../types';
-import { applyFilter, latestAsOf, type HomeFilter, type SortKey } from './listModel';
+import { applyFilter, latestAsOf, quoteTimeText, type HomeFilter, type SortKey } from './listModel';
 import { TickerCard } from './TickerCard';
 
 const SORTS: { id: SortKey; label: string }[] = [
@@ -39,6 +39,7 @@ export function HomePage({ catalog, filter, onFilter, onOpen, onRefresh, refresh
             value={filter.query}
             onChange={(e) => onFilter({ ...filter, query: e.target.value })}
           />
+          <span className="quote-time">{quoteTimeText(asOf)}</span>
           <button className="icon-btn" onClick={onRefresh} disabled={refreshing} aria-label="刷新">
             {refreshing ? '…' : '⟳'}
           </button>
@@ -84,7 +85,6 @@ export function HomePage({ catalog, filter, onFilter, onOpen, onRefresh, refresh
         ))}
         {rows.length === 0 && <p className="empty">没有匹配的标的</p>}
       </main>
-      <footer className="home-foot">取价时间：{asOf ? asOf.replace('T', ' ').slice(0, 16) : '无'}</footer>
     </div>
   );
 }

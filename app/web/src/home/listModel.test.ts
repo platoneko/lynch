@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TickerRow, ZoneId } from '../types';
-import { applyFilter, DEFAULT_FILTER, latestAsOf, lynchClasses } from './listModel';
+import { applyFilter, DEFAULT_FILTER, latestAsOf, lynchClasses, quoteTimeText } from './listModel';
 
 const ZONES = ['deep_discount', 'conservative', 'neutral', 'optimistic', 'stretched'];
 
@@ -86,6 +86,15 @@ describe('latestAsOf', () => {
   });
   it('is null without any band', () => {
     expect(latestAsOf([row('A.US', { band: null })])).toBeNull();
+  });
+});
+
+describe('quoteTimeText', () => {
+  it('shows month-day and minute of the quote time as sent (Asia/Shanghai)', () => {
+    expect(quoteTimeText('2026-09-26T16:13:05+08:00')).toBe('取价 09-26 16:13');
+  });
+  it('says so when nothing was priced', () => {
+    expect(quoteTimeText(null)).toBe('未取到价');
   });
 });
 

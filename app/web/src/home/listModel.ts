@@ -66,6 +66,11 @@ function comparator(sort: SortKey, zoneOrder: string[], serverOrder: Map<string,
   return (a: TickerRow, b: TickerRow) => rank(a) - rank(b) || byTicker(a, b);
 }
 
+/** Label beside the refresh button. The server stamps as_of in Asia/Shanghai, so read it as sent. */
+export function quoteTimeText(asOf: string | null): string {
+  return asOf ? `取价 ${asOf.slice(5, 10)} ${asOf.slice(11, 16)}` : '未取到价';
+}
+
 export function latestAsOf(rows: TickerRow[]): string | null {
   let best: string | null = null;
   for (const r of rows) {

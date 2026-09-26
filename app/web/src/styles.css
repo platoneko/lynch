@@ -44,6 +44,7 @@ button { font: inherit; color: inherit; }
 .home-top { position: sticky; top: 0; z-index: 2; background: var(--bg); padding: 10px 16px 6px; border-bottom: 1px solid var(--line); }
 .home-search-row { display: flex; gap: 8px; }
 .home-search { flex: 1; min-width: 0; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--text); font-size: 16px; }
+.quote-time { align-self: center; color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .icon-btn { width: 40px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
 .chips { display: flex; gap: 6px; overflow-x: auto; padding-top: 8px; scrollbar-width: none; }
 .chip { flex: none; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); font-size: 13px; }
@@ -52,8 +53,7 @@ button { font: inherit; color: inherit; }
 .home-meta select { font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 2px 6px; }
 .home-meta .chips { padding-top: 0; }
 .cards { padding: 10px 16px; display: flex; flex-direction: column; gap: 10px; }
-.empty, .home-foot { color: var(--muted); text-align: center; font-size: 13px; }
-.home-foot { padding: 8px 16px 24px; }
+.empty { color: var(--muted); text-align: center; font-size: 13px; }
 
 .card { display: block; width: 100%; text-align: left; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; }
 .card-line1 { display: flex; align-items: baseline; gap: 8px; }
