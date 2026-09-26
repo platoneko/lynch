@@ -14,6 +14,8 @@ export interface Scale {
 
 // Closer than this (percent of the bar width) and the M number would collide with L's or H's.
 const MIN_LABEL_GAP = 16;
+// Within this distance (percent of the bar width) of an end, a centred number would spill past it.
+const LABEL_EDGE = 10;
 
 export function barScale(base: Anchors, candidate: Anchors | null): Scale {
   return candidate
@@ -67,13 +69,23 @@ export function PriceBar({ price, anchors, scale, zone }: {
         </div>
       </div>
       <div className="pricebar-nums">
-        {/* translateX(-p%) keeps the end labels inside the bar: left-aligned at 0, right-aligned at 100. */}
         {labels.map(([value, at], i) => (
-          <span key={i} style={{ left: `${at}%`, transform: `translateX(-${at}%)` }}>{fmt(value)}</span>
+          <span key={i} style={{ left: `${at}%`, transform: `translateX(${labelShift(at)}%)` }}>{fmt(value)}</span>
         ))}
       </div>
     </div>
   );
+}
+
+/**
+ * Horizontal shift of a number label, as a percent of its own width: centred under its
+ * tick (-50) in the interior, easing to flush-left (0) at the left end and flush-right
+ * (-100) at the right end so a label never leaves the bar.
+ */
+export function labelShift(at: number): number {
+  if (at < LABEL_EDGE) return -50 * (Math.max(at, 0) / LABEL_EDGE);
+  if (at > 100 - LABEL_EDGE) return -50 - 50 * ((Math.min(at, 100) - (100 - LABEL_EDGE)) / LABEL_EDGE);
+  return -50;
 }
 
 export function fmt(n: number): string {

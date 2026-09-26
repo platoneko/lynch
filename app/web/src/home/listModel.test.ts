@@ -9,7 +9,7 @@ function row(ticker: string, over: Partial<TickerRow> = {}): TickerRow {
     ticker, name: `${ticker} name`, market: 'US', lynch_primary: 'stalwart', lynch_secondary: null,
     currency: 'USD', L: 10, M: 20, H: 40, blocked: null, candidate: null,
     band: { price: 25, as_of: '2026-09-26T09:03:00+08:00', zone: 'neutral', option_zone: null, candidate_zone: null },
-    error: null, ...over,
+    quote_error: null, error: null, ...over,
   };
 }
 const withZone = (t: string, zone: ZoneId | null) =>

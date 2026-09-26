@@ -77,13 +77,14 @@ export function HomePage({ catalog, filter, onFilter, onOpen, onRefresh, refresh
           <span>{rows.length} / {catalog.tickers.length}</span>
         </div>
       </header>
+      {catalog.quote_error && <p className="banner-muted">{catalog.quote_error}</p>}
       <main className="cards">
         {rows.map((r) => (
           <TickerCard key={r.ticker} row={r} zoneLabel={(id) => labels.get(id) ?? id} onOpen={onOpen} />
         ))}
         {rows.length === 0 && <p className="empty">没有匹配的标的</p>}
       </main>
-      <footer className="home-foot">日报数据时间：{asOf ? asOf.replace('T', ' ').slice(0, 16) : '无'}</footer>
+      <footer className="home-foot">取价时间：{asOf ? asOf.replace('T', ' ').slice(0, 16) : '无'}</footer>
     </div>
   );
 }

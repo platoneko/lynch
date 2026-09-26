@@ -87,4 +87,9 @@ describe('renderFragment', () => {
     expect(html).not.toContain('\\(');
     expect(html).toContain('href="#/doc/BBB.US"');
   });
+  it('escapes raw HTML in the source', () => {
+    const html = renderFragment('<img src=x onerror=alert(1)>', POOL);
+    expect(html).not.toContain('<img');
+    expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
+  });
 });

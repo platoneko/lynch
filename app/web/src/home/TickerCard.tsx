@@ -33,7 +33,7 @@ function CardZone({ row, zoneLabel }: { row: TickerRow; zoneLabel: (id: string) 
   // BLOCKED never shows a zone (AGENTS.md「BLOCKED — 题头契约」).
   if (row.blocked) return <div className="tag tag-blocked">BLOCKED</div>;
   const zone = rowZone(row);
-  if (!row.band || !zone) return <div className="tag tag-muted">暂无日报</div>;
+  if (!row.band || !zone) return <div className="tag tag-muted">{row.quote_error ?? '无报价'}</div>;
   const { band, candidate } = row;
   const base = { L: row.L!, M: row.M!, H: row.H! };
   // Both bars share one scale so the candidate's shift against the base is visible.
@@ -68,7 +68,7 @@ export function CandidateHead({ label, zone, zoneLabel }: {
   return (
     <div className="band-head">
       <span className="band-caption">候选</span>
-      {/* Zones come only from the daily run; a missing one is shown as such, never computed here. */}
+      {/* Zones come only from the server; a missing one is shown as such, never computed here. */}
       {zone
         ? <span className={`tag zone-bg-${zone}`}>{zoneLabel(zone)}</span>
         : <span className="tag tag-muted">—</span>}

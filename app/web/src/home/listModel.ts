@@ -2,8 +2,8 @@ import type { TickerRow, ZoneId } from '../types';
 
 /**
  * The zone a row shows, filters and sorts by. BLOCKED never has one
- * (AGENTS.md「BLOCKED — 题头契约」), even when its band file still holds the
- * zone from a daily run before it was blocked.
+ * (AGENTS.md「BLOCKED — 题头契约」); the server sends none, and this holds it
+ * here too.
  */
 export function rowZone(r: TickerRow): ZoneId | null {
   return r.blocked ? null : r.band?.zone ?? null;

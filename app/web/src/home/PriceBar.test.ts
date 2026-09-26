@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { barGeometry, barScale } from './PriceBar';
+import { barGeometry, barScale, labelShift } from './PriceBar';
 
 const BASE = { L: 10, M: 20, H: 40 };
 const OWN = { lo: 10, hi: 40 };
@@ -23,6 +23,14 @@ describe('barGeometry', () => {
     expect(barGeometry(35, BASE, scale)).toMatchObject({ L: 0, H: 60, price: 50 });
     expect(barGeometry(35, cand, scale)).toMatchObject({ L: 20, H: 100, price: 50 });
   });
+  it('widens the shared scale down to a candidate below the base (AVGO shape)', () => {
+    const base = { L: 200, M: 300, H: 400 };
+    const cand = { L: 150, M: 250, H: 350 };
+    const scale = barScale(base, cand);
+    expect(scale).toEqual({ lo: 150, hi: 400 });
+    expect(barGeometry(260, base, scale)).toMatchObject({ L: 20, H: 100, price: 44, overflow: null });
+    expect(barGeometry(260, cand, scale)).toMatchObject({ L: 0, H: 80, price: 44, overflow: null });
+  });
   it('without a candidate the scale is L..H', () => {
     expect(barScale(BASE, null)).toEqual(OWN);
   });
@@ -44,5 +52,19 @@ describe('barGeometry', () => {
     const g = barGeometry(5, { L: 10, M: 10, H: 10 }, { lo: 10, hi: 10 });
     for (const v of [g.L, g.A, g.M, g.B, g.H, g.price]) expect(Number.isFinite(v)).toBe(true);
     expect(g.overflow).toBe('below');
+  });
+});
+
+describe('labelShift', () => {
+  it('centres interior labels under their tick', () => {
+    for (const at of [10, 20, 50, 80, 90]) expect(labelShift(at)).toBe(-50);
+  });
+  it('keeps labels at the ends flush with the bar', () => {
+    expect(labelShift(0)).toBeCloseTo(0);
+    expect(labelShift(100)).toBe(-100);
+  });
+  it('eases between the end and the centred shift near each end', () => {
+    expect(labelShift(5)).toBe(-25);
+    expect(labelShift(95)).toBe(-75);
   });
 });

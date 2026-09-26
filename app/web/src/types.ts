@@ -5,9 +5,10 @@ export interface Labeled {
   label: string;
 }
 
+/** Zones of the latest Longbridge quote, computed by the server with the daily digest's rules. */
 export interface Band {
   price: number;
-  as_of: string;
+  as_of: string; // when the server fetched the quote
   zone: ZoneId | null;
   option_zone: ZoneId | null;
   candidate_zone: ZoneId | null;
@@ -37,11 +38,13 @@ export interface TickerRow {
   blocked: string | null;
   candidate: Candidate | null;
   band: Band | null;
+  quote_error: string | null; // why `band` is null for this row alone
   error: string | null;
 }
 
 export interface Catalog {
   zones: Labeled[];
   lynch_classes: Labeled[];
+  quote_error: string | null; // the whole quote call failed: every `band` is null
   tickers: TickerRow[];
 }
