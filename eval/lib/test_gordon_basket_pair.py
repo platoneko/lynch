@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import unittest
 
+from eval.lib.frameworks import FRAMEWORKS_DIR
 from eval.lib.gordon import (
     check_basket_pair,
     check_k_declared,
     perpetual_pe,
     two_stage_pe,
 )
+
+_NEEDS_CONTENT = unittest.skipUnless(FRAMEWORKS_DIR.is_dir(), "content repo not cloned at frameworks/")
 
 # BE.US M tier, the worked example the rule is written against.
 BE = dict(g1=0.6016, n=1, g2=0.06, roe=0.3184)
@@ -76,6 +79,7 @@ if __name__ == "__main__":
     unittest.main()
 
 
+@_NEEDS_CONTENT
 class LabHaircutIsOneAxisValue(unittest.TestCase):
     """_AXIS.frontier-lab-funding §3b: five sellers, one k -- never five."""
 

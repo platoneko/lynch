@@ -9,7 +9,9 @@ from .inputs import parse_baskets
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FRAMEWORKS_DIR = REPO_ROOT / "frameworks"
-EVAL_DIR = REPO_ROOT / "eval"
+EVAL_DIR = FRAMEWORKS_DIR / "eval"
+# The content repo keeps its own docs beside the frameworks; they are not tickers.
+_REPO_DOCS = frozenset({"AGENTS.md", "README.md"})
 
 # Prefer Outputs-style lines: L = **x** · M = **y** · H = **z** (also ≈)
 _ANCHOR_BOLD = re.compile(
@@ -190,9 +192,12 @@ def list_framework_paths(frameworks_dir: Path | None = None) -> list[Path]:
     as random in the digest.
     """
     d = frameworks_dir or FRAMEWORKS_DIR
+    if not d.is_dir():
+        # An absent checkout must not read as an empty pool (the digest would go out blank).
+        raise FileNotFoundError(f"{d} missing — clone lynch-frameworks there")
     out: list[Path] = []
     for p in sorted(d.glob("*.md"), key=_market_sort_key):
-        if p.name.startswith("_"):
+        if p.name.startswith("_") or p.name in _REPO_DOCS:
             continue
         out.append(p)
     return out
@@ -343,7 +348,7 @@ def load_framework(path: Path) -> FrameworkMeta:
     ev: Path | None = None
     em = _EVAL_PTR.search(md)
     if em:
-        cand = REPO_ROOT / em.group(1)
+        cand = FRAMEWORKS_DIR / em.group(1)  # eval: pointers are relative to the content repo root
         if cand.is_file():
             ev = cand
     else:

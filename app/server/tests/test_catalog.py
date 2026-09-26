@@ -15,6 +15,8 @@ from lynch_reader.catalog import (
 )
 from tests.conftest import NOW, FakeClock, FakeFetch, framework_md
 
+needs_content = pytest.mark.skipif(not FRAMEWORKS_DIR.is_dir(), reason="content repo not cloned at frameworks/")
+
 AS_OF = datetime.fromtimestamp(NOW, ZoneInfo("Asia/Shanghai")).isoformat(timespec="seconds")
 
 
@@ -282,6 +284,7 @@ def test_no_candidate_is_null(repo, quotes):
     assert rows_by_ticker(repo, quotes)["AAA.US"]["candidate"] is None
 
 
+@needs_content
 def test_real_frameworks_candidates(quotes):
     rows = rows_by_ticker(FRAMEWORKS_DIR, quotes)
     line = re.compile(r"^-\s+(?:\*\*)?候选带（", re.MULTILINE)
@@ -352,6 +355,7 @@ def test_no_option_band_is_null(repo, quotes, outputs):
     assert rows_by_ticker(repo, quotes)["AAA.US"]["option"] is None
 
 
+@needs_content
 def test_real_frameworks_options(quotes):
     rows = rows_by_ticker(FRAMEWORKS_DIR, quotes)
     with_option = {t: r["option"] for t, r in rows.items() if r["option"] is not None}

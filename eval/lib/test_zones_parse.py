@@ -1,12 +1,17 @@
 """Lightweight tests for zone mapping and framework anchor parse."""
 from __future__ import annotations
 
+import tempfile
 import unittest
 from pathlib import Path
 
-from eval.lib.frameworks import FrameworkMeta, basket_label, list_framework_paths, load_all_frameworks, load_framework
+from eval.lib.frameworks import (
+    FRAMEWORKS_DIR, FrameworkMeta, basket_label, list_framework_paths, load_all_frameworks, load_framework,
+)
 from eval.lib.inputs import parse_baskets
 from eval.lib.zones import credited_option_band, cut_points, price_zones, zone_bound_edges, zone_of
+
+_NEEDS_CONTENT = unittest.skipUnless(FRAMEWORKS_DIR.is_dir(), "content repo not cloned at frameworks/")
 
 
 class ZoneTests(unittest.TestCase):
@@ -55,6 +60,7 @@ class ZoneTests(unittest.TestCase):
 
 
 class ParseTests(unittest.TestCase):
+    @_NEEDS_CONTENT
     def test_all_frameworks_parse(self) -> None:
         metas = load_all_frameworks()
         tickers = {m.ticker for m in metas}
@@ -147,11 +153,9 @@ class ParseTests(unittest.TestCase):
                          "篮 4 10%")
         self.assertEqual(basket_label(FrameworkMeta(ticker="C", **base)), "—")
 
+    @_NEEDS_CONTENT
     def test_stem_matches_title(self) -> None:
-        root = Path(__file__).resolve().parents[2] / "frameworks"
-        for p in root.glob("*.md"):
-            if p.name.startswith("_"):
-                continue
+        for p in list_framework_paths():
             m = load_framework(p)
             self.assertEqual(m.ticker, p.stem)
 
@@ -194,6 +198,7 @@ class OptionTests(unittest.TestCase):
         self.assertEqual(zero.v_opt, 0.0)
         self.assertIsNone(credited_option_band(zero))
 
+    @_NEEDS_CONTENT
     def test_real_frameworks_option_lines(self) -> None:
         with_option = [m for m in load_all_frameworks() if credited_option_band(m) is not None]
         self.assertTrue(with_option)
@@ -203,6 +208,34 @@ class OptionTests(unittest.TestCase):
                 self.assertTrue(m.option_line.startswith("\\(V_{opt}\\)"), m.option_line)
         cohr = next(m for m in with_option if m.ticker == "COHR.US")
         self.assertIn("（A12）", cohr.option_line)
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+class ContentRepoLayoutTest(unittest.TestCase):
+    """Content lives in lynch-frameworks, cloned at lynch/frameworks/."""
+
+    def test_missing_frameworks_dir_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaisesRegex(FileNotFoundError, "lynch-frameworks"):
+                list_framework_paths(Path(d) / "frameworks")
+
+    def test_repo_docs_are_not_tickers(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            for name in ("AGENTS.md", "README.md", "_TEMPLATE.md", "INTC.US.md"):
+                (root / name).write_text("x")
+            self.assertEqual([p.name for p in list_framework_paths(root)], ["INTC.US.md"])
+
+    @_NEEDS_CONTENT
+    def test_eval_pointer_resolves_under_content_repo(self) -> None:
+        meta = load_framework(FRAMEWORKS_DIR / "GOOG.US.md")
+        self.assertEqual(meta.eval_script, FRAMEWORKS_DIR / "eval" / "GOOG.US.py")
+
+    def test_no_ticker_scripts_in_code_repo(self) -> None:
+        # Per-ticker evals belong in frameworks/eval/; eval/ here holds only the library.
+        self.assertEqual(sorted(p.name for p in (REPO_ROOT / "eval").glob("*.py")), [])
 
 
 if __name__ == "__main__":

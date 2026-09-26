@@ -6,6 +6,9 @@ import unittest
 from pathlib import Path
 
 from eval.lib.axes import load_rates
+from eval.lib.frameworks import FRAMEWORKS_DIR
+
+_NEEDS_CONTENT = unittest.skipUnless(FRAMEWORKS_DIR.is_dir(), "content repo not cloned at frameworks/")
 
 _USD_ROW = "| **USD** | **4.00%** | **5.12%** | **4.75%** | **+75bp** | **50bp** | **50bp** | 2026-09-25 |"
 
@@ -23,11 +26,13 @@ def _axis(tmp: Path, usd_row: str) -> Path:
 
 
 class LoadRatesTests(unittest.TestCase):
+    @_NEEDS_CONTENT
     def test_repo_axis_usd(self) -> None:
         seg = load_rates("USD")
         self.assertAlmostEqual(seg["rf_mid"], 0.04)
         self.assertAlmostEqual(seg["delta_cons"], seg["rf_cons"] - seg["rf_mid"])
 
+    @_NEEDS_CONTENT
     def test_hkd_follows_usd(self) -> None:
         self.assertEqual(load_rates("HKD"), load_rates("USD"))
 

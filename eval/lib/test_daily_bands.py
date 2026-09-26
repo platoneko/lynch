@@ -155,7 +155,7 @@ class DailyPostTests(unittest.TestCase):
         r = _row(meta, 344.41, "optimistic")
         r.rf = {"stale": True}
         self.assertEqual(daily_bands.format_pool_lines(r)[-1],
-                         "利率读数过期（利率轴或锚点已变，重跑 eval/GOOG.US.py）")
+                         "利率读数过期（利率轴或锚点已变，重跑 frameworks/eval/GOOG.US.py）")
 
     def test_blank_line_between_tickers(self) -> None:
         rows = [

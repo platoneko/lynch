@@ -180,7 +180,7 @@ def format_rf_lines(r: Row) -> list[str]:
     if r.rf is None:
         return []
     if r.rf["stale"]:
-        return [f"利率读数过期（利率轴或锚点已变，重跑 eval/{r.meta.ticker}.py）"]
+        return [f"利率读数过期（利率轴或锚点已变，重跑 frameworks/eval/{r.meta.ticker}.py）"]
     out = []
     for label, band in (
         (f"利率·共识({r.rf['delta_cons'] * 1e4:+.0f}bp)", r.rf["consensus"]),

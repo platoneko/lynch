@@ -18,7 +18,9 @@ if str(_SCRIPTS) not in sys.path:
 
 import daily_bands  # noqa: E402
 from eval.lib.bands_io import build_record  # noqa: E402
-from eval.lib.frameworks import FrameworkMeta, load_framework  # noqa: E402
+from eval.lib.frameworks import FRAMEWORKS_DIR, FrameworkMeta, load_framework  # noqa: E402
+
+_NEEDS_CONTENT = unittest.skipUnless(FRAMEWORKS_DIR.is_dir(), "content repo not cloned at frameworks/")
 
 _BASE_MD = """# TEST.US — 测试 / Test Inc.
 
@@ -114,6 +116,7 @@ class ParseCandidateTests(unittest.TestCase):
         self.assertEqual(m.candidate_label, "FY2027·单家，A3′")
         self.assertIsNone(m.candidate_gate)
 
+    @_NEEDS_CONTENT
     def test_real_framework_gates(self) -> None:
         gates = {t: load_framework(REPO_ROOT / "frameworks" / f"{t}.md").candidate_gate
                  for t in ("0700.HK", "600096.SH", "0189.HK")}
@@ -128,6 +131,7 @@ class ParseCandidateTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             _load(_CANDIDATE_LINE + "\n" + _CANDIDATE_LINE)
 
+    @_NEEDS_CONTENT
     def test_sofi_framework_carries_candidate(self) -> None:
         m = load_framework(REPO_ROOT / "frameworks" / "SOFI.US.md")
         self.assertEqual(m.candidate, (5.56, 9.69, 10.15))
