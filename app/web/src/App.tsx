@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { fetchCatalog } from './api';
+import { DocPage } from './doc/DocPage';
 import { HomePage } from './home/HomePage';
 import { browserStorage, loadFilter, saveFilter, type HomeFilter } from './home/listModel';
 import { docHash, parseRoute, type Route } from './route';
@@ -54,6 +55,8 @@ export function App() {
     else window.location.hash = '#/';
   };
 
+  const pool = useMemo(() => new Set(catalog?.tickers.map((t) => t.ticker) ?? []), [catalog]);
+
   if (!catalog) {
     return (
       <div className="status-screen">
@@ -69,11 +72,16 @@ export function App() {
     );
   }
   if (route.page === 'doc') {
+    const labels = zoneLabels(catalog);
     return (
-      <div className="status-screen">
-        <p>{route.ticker}</p>
-        <button onClick={goBack}>返回</button>
-      </div>
+      <DocPage
+        key={route.ticker}
+        ticker={route.ticker}
+        row={catalog.tickers.find((t) => t.ticker === route.ticker)}
+        pool={pool}
+        zoneLabel={(id) => labels.get(id) ?? id}
+        onBack={goBack}
+      />
     );
   }
   return (

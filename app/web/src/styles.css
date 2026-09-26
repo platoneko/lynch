@@ -68,3 +68,31 @@ button { font: inherit; color: inherit; }
 .pricebar-track { position: relative; flex: 1; height: 4px; border-radius: 2px; background: var(--line); }
 .pricebar-mid { position: absolute; top: -3px; width: 1px; height: 10px; background: var(--muted); }
 .pricebar-dot { position: absolute; top: 50%; width: 12px; height: 12px; margin-left: -6px; border-radius: 50%; transform: translateY(-50%); font-size: 7px; line-height: 12px; text-align: center; }
+
+/* Doc */
+.bar { position: fixed; left: 0; right: 0; z-index: 3; background: var(--bg); padding: 6px 16px; }
+.bar-top { top: 0; border-bottom: 1px solid var(--line); }
+.bar-bottom { bottom: 0; border-top: 1px solid var(--line); padding-bottom: calc(6px + env(safe-area-inset-bottom)); }
+.bar-row { display: flex; gap: 8px; }
+.bar-jump { flex: 1; min-width: 0; text-align: left; padding: 6px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.bar-jump:disabled { color: var(--muted); }
+.bar-where { color: var(--muted); font-size: 12px; padding-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Bottom room lets even the last short section scroll up to the bar, so a jump can make it current. */
+.doc-body { padding: var(--bar-h) 16px calc(100vh - var(--bar-h)); }
+.doc-head { padding: 12px 0 4px; border-bottom: 1px solid var(--line); }
+.sec-head { scroll-margin-top: var(--bar-h); cursor: pointer; margin: 0; padding: 12px 0; border-bottom: 1px solid var(--line); display: flex; gap: 6px; }
+.sec-2 > .sec-head { font-size: 18px; }
+.sec-3 > .sec-head { font-size: 15px; padding-left: 14px; color: var(--text); }
+.sec-3 > .md { padding-left: 14px; }
+.sec-caret { flex: none; width: 1em; color: var(--muted); }
+
+.md { overflow-wrap: anywhere; }
+.md h1 { font-size: 20px; line-height: 1.35; margin: 4px 0 8px; }
+.md blockquote { margin: 8px 0; padding: 4px 12px; border-left: 3px solid var(--line); color: var(--muted); font-size: 13px; }
+.md .table-scroll { overflow-x: auto; margin: 8px 0; -webkit-overflow-scrolling: touch; }
+.md table { border-collapse: collapse; font-size: 13px; white-space: nowrap; }
+.md th, .md td { border: 1px solid var(--line); padding: 4px 8px; vertical-align: top; }
+.md code { font-size: 0.9em; background: var(--line); border-radius: 4px; padding: 0 3px; overflow-wrap: anywhere; }
+.md pre { overflow-x: auto; background: var(--card); padding: 8px; border-radius: 8px; }
+.md a { color: var(--accent); }
+.md .katex-display { overflow-x: auto; overflow-y: hidden; }
