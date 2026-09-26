@@ -83,6 +83,8 @@
 
 日报：`scripts/daily_bands.py` 只读框架锚点 + Longbridge 现价 → 写 `output/bands/` → 飞书（**每天都发**；跨带 `@所有人`）。**MUST NOT** 回写框架 MD。
 
+**\(r_f\) 读数行**：已接利率轴的票，eval 干净跑完时把「共识 \(\Delta r_f\)」与「反向压力 ±`rf_cap`」两组 L/M/H 写入 `output/rates/<TICKER>.json`（记下所依据的轴值与底牌锚点）；日报读之，按上市货币段（`_AXIS.rates`，未建段不出）在该票末尾加两行 `利率·共识` / `利率·压力`。只是读数：**MUST NOT** 触发跨带告警、进 `_INDEX` 或 `calibration.py`；轴值或锚点变了而 eval 未重跑 → 打印「过期」而非旧数。
+
 ## 密钥与本地
 
 - **MUST NOT** 提交 `.mcp.json`、`config/mcporter.json`、`_local/`

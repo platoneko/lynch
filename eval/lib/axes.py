@@ -40,6 +40,8 @@ AXIS_OPTICAL = axis_path("optical-comms")
 AXIS_COAL = axis_path("coal-price")
 AXIS_BRENT = axis_path("brent-oil")
 AXIS_SOUTHBOUND = axis_path("southbound-repricing")
+AXIS_CRYPTO = axis_path("crypto-cycle")
+AXIS_RATES = axis_path("rates")
 
 # §2 column order: 状态 | 分配规则 | NVDA | AMD | AVGO | 其余
 COWOS_PLAYERS = ("NVDA", "AMD", "AVGO", "OTHER")
@@ -178,6 +180,32 @@ def check_capex_constituent(guide_low: float, guide_high: float) -> list[str]:
 def capex_constituent_share(guide_low: float, guide_high: float) -> tuple[float, float]:
     """Printable share-of-pool range for a constituent mount."""
     return guide_low / CAPEX_BASE_2026, guide_high / CAPEX_BASE_2026
+
+
+# --- _AXIS.frontier-lab-funding ----------------------------------------------
+# §3b holds the ONE arrival haircut every lab leg shares: the five sellers are
+# priced on the same question (will OpenAI / Anthropic pay from their own
+# revenue), so a per-ticker k would let the same risk be priced five ways.
+# §3b row: | `k_lab` | **0.30** | source |
+AXIS_LAB = axis_path("frontier-lab-funding")
+_K_LAB_ROW = re.compile(r"^\|\s*`k_lab`\s*\|\s*\*\*([0-9.]+)\*\*")
+
+
+def load_k_lab(path: Path | None = None) -> float:
+    for line in (path or AXIS_LAB).read_text(encoding="utf-8").splitlines():
+        m = _K_LAB_ROW.match(line)
+        if m:
+            return float(m.group(1))
+    raise ValueError("k_lab row missing from _AXIS.frontier-lab-funding §3b")
+
+
+def check_lab_mount(k_stated: float) -> list[str]:
+    """A lab leg's k MUST be the axis value, cell for cell."""
+    k_axis = load_k_lab()
+    if abs(k_stated - k_axis) > 1e-9:
+        return [f"k_lab {k_stated} != _AXIS.frontier-lab-funding §3b {k_axis} — "
+                f"change the axis (all five mounts move), never one ticker"]
+    return []
 
 
 # --- _AXIS.fed-path-gold-copper ----------------------------------------------
@@ -778,3 +806,122 @@ def check_coal_mount(
         for tier, axis_tier, got in zip(("L", "M", "H"), _COAL_SIDES[side], stated)
         if abs(got - rungs[axis_tier]) > 0.5
     ]
+
+
+# --- _AXIS.crypto-cycle -------------------------------------------------------
+# §1 rung rows: | **L** | 熊 regime | **14** | 待补 | source | as-of |
+# Column 2 (0-based) = 2028E adjusted EBITDA in USD 亿 (hundreds of millions).
+_CRYPTO_ROW = re.compile(r"^\|\s*\*\*([LMH])\*\*\s*\|")
+_CRYPTO_EBITDA_TOL = 0.5  # 亿 USD; rungs are stated as whole 亿
+
+
+def load_crypto_rungs(path: Path | None = None) -> dict[str, float]:
+    """{tier: 2028E adjusted EBITDA in USD 亿} from _AXIS.crypto-cycle.md §1."""
+    md = (path or AXIS_CRYPTO).read_text(encoding="utf-8")
+    rungs: dict[str, float] = {}
+    for line in md.splitlines():
+        m = _CRYPTO_ROW.match(line)
+        if not m:
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if len(cells) < 3:
+            continue
+        try:
+            rungs[m.group(1)] = float(cells[2].strip("*").replace(",", ""))
+        except ValueError:
+            continue
+    missing = {"L", "M", "H"} - rungs.keys()
+    if missing:
+        raise ValueError(f"crypto axis rungs missing: {sorted(missing)}")
+    if not (rungs["L"] < rungs["M"] < rungs["H"]):
+        raise ValueError(f"crypto rungs not ordered: {rungs}")
+    return rungs
+
+
+def check_crypto_mount(
+    stated: tuple[float, float, float], path: Path | None = None
+) -> list[str]:
+    """Full mount (COIN): the ticker's stated rungs must be the axis's own."""
+    rungs = load_crypto_rungs(path)
+    return [
+        f"{tier} crypto EBITDA rung: stated {got:g} vs axis {rungs[tier]:g}"
+        for tier, got in zip(("L", "M", "H"), stated)
+        if abs(got - rungs[tier]) > _CRYPTO_EBITDA_TOL
+    ]
+
+
+def check_crypto_l_only_mount(
+    l_revenue: float, own_trough: float, stated_axis_l: float, path: Path | None = None
+) -> list[str]:
+    """L-only mount (HOOD, axis §2b): the axis constrains the bear tier alone.
+
+    Two tests, because an L-only mount shares a *constraint*, not a numerator:
+
+    1. The ticker's L-tier crypto revenue must be its own measured trough — the
+       observable that keeps the tier honest.  M/H are not axis-driven, so
+       there is no rung to bridge them from.
+    2. The ticker must restate the axis's L rung even though its formula never
+       consumes it.  The shared claim is "this bear is not worse than the axis
+       L", which no arithmetic can check; restating the rung is what makes
+       editing the axis turn this side red, so the constraint gets re-read
+       instead of silently drifting.
+    """
+    rungs = load_crypto_rungs(path)
+    errors: list[str] = []
+    if abs(l_revenue - own_trough) > 1.0:
+        errors.append(
+            f"L crypto revenue {l_revenue:g} is not the own measured trough "
+            f"{own_trough:g} (axis §2b L-only mount)"
+        )
+    if abs(stated_axis_l - rungs["L"]) > _CRYPTO_EBITDA_TOL:
+        errors.append(
+            f"restated axis L rung {stated_axis_l:g} vs axis {rungs['L']:g} — "
+            f"re-read whether this ticker's L tier is still no more bearish "
+            f"than the axis L (axis §2b)"
+        )
+    return errors
+
+
+# --- _AXIS.rates ----------------------------------------------------------------
+# §1 segment rows: | **USD** | **4.00%** | **5.12%** | **4.75%** | **+75bp** | **50bp** | **50bp** | as-of |
+# HKD rides USD (linked peg), so it has no numbers of its own.
+_RATES_ROW = re.compile(r"^\|\s*\**([A-Z]{3})\**\s*\|")
+_RATES_PEG = {"HKD": "USD"}
+_RATES_FIELDS = ("rf_mid", "rf_now", "rf_cons", "delta_cons", "rf_step", "rf_cap")
+
+
+def _rate_cell(cell: str) -> float:
+    s = cell.strip().strip("*").replace("+", "")
+    if s.endswith("bp"):
+        return float(s[:-2]) / 1e4
+    if s.endswith("%"):
+        return float(s[:-1]) / 100
+    raise ValueError(f"rate cell {cell!r} is neither % nor bp")
+
+
+def load_rates(ccy: str, path: Path | None = None) -> dict[str, float]:
+    """Listing-currency segment of _AXIS.rates §1 as decimals.
+
+    Raises on an unbuilt segment (`待建`) rather than defaulting, and when the
+    stated Δ_cons disagrees with 共识 − 中枢 — the column is a restatement, so
+    editing one cell alone must fail.
+    """
+    ccy = _RATES_PEG.get(ccy, ccy)
+    md = (path or AXIS_RATES).read_text(encoding="utf-8")
+    for line in md.splitlines():
+        m = _RATES_ROW.match(line)
+        if not m or m.group(1) != ccy:
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        try:
+            seg = dict(zip(_RATES_FIELDS, (_rate_cell(c) for c in cells[1:7])))
+        except ValueError as e:
+            raise ValueError(f"rates axis {ccy} segment not built: {e}") from None
+        if abs(seg["rf_cons"] - seg["rf_mid"] - seg["delta_cons"]) > 5e-5:
+            raise ValueError(
+                f"rates axis {ccy}: stated Δ_cons {seg['delta_cons']:.4f} ≠ "
+                f"共识 {seg['rf_cons']:.4f} − 中枢 {seg['rf_mid']:.4f}"
+            )
+        return seg
+    raise ValueError(f"rates axis has no {ccy} segment")
+

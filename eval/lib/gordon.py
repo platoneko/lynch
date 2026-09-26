@@ -66,6 +66,44 @@ def check_r(r: float, where: str, basket: int | None = None) -> list[str]:
     return []
 
 
+# valuation-rules.md「篮子对」: a leg may name two baskets -- what the business
+# is today (the journey) and what it becomes in the steady state (the terminal).
+# Both are basket values, so this widens the schema without reopening the dial
+# that 硬约束 14 closes.  Only a leg whose high rate means "not yet proven" may
+# fade; a commodity leg's rate is a permanent property and stays paired to
+# itself.  That judgement is evidence, not arithmetic, so it lives in the
+# framework's r row -- what is mechanical, and checked here, is that the pair
+# only ever fades and that the haircut carrying the arrival risk was declared.
+# The steady state does not have to be reached today: not having arrived is
+# what k prices, and gating the terminal rate on arrival would charge the
+# story-stock rate to the steady state after all.
+def check_basket_pair(r_journey: float, r_terminal: float, where: str,
+                      basket_journey: int | None = None,
+                      basket_terminal: int | None = None) -> list[str]:
+    """Both rates are baskets and the pair only fades."""
+    errs = check_r(r_journey, f"{where} r_journey", basket_journey)
+    errs += check_r(r_terminal, f"{where} r_terminal", basket_terminal)
+    if errs:
+        return errs
+    if r_terminal > r_journey + 1e-9:
+        return [f"{where}: r_terminal={r_terminal} above r_journey={r_journey} — a pair prices a "
+                f"business that settles down, never one that gets riskier forever "
+                f"(valuation-rules.md「篮子对」)"]
+    return []
+
+
+def check_k_declared(r_journey: float, r_terminal: float, ks, where: str) -> list[str]:
+    """A faded terminal MUST name the haircut that carries the risk of never arriving."""
+    if r_terminal >= r_journey - 1e-9:
+        return []
+    missing = [tier for tier, k in zip(("L", "M", "H"), ks) if k is None]
+    if missing:
+        return [f"{where}: r_terminal {r_terminal} < r_journey {r_journey} but k is missing for "
+                f"{'/'.join(missing)} — the transition is too short to price arrival risk, so it "
+                f"MUST sit in the numerator (valuation-rules.md「篮子对」k 强制)"]
+    return []
+
+
 # valuation-rules.md「永续增长口径」: a perpetual g above the cap is a dial, not a
 # state.  The cap keeps at least 4pp between r and g (between r - g = 2% and 4%
 # the multiple's elasticity to g passes 25x; 1pp of g moved MRVL.US's M by ~30%)
@@ -162,7 +200,8 @@ def justified_pb(g: float, roe: float, r: float) -> float:
     return (roe - g) / (r - g)
 
 
-def two_stage_pe(g1: float, n: int, g2: float, roe: float, r: float) -> float:
+def two_stage_pe(g1: float, n: int, g2: float, roe: float, r: float,
+                 r_terminal: float | None = None) -> float:
     """Multiple on NEXT-period earnings: n years of transition growth g1 after
     them, then perpetual g2.
 
@@ -181,17 +220,37 @@ def two_stage_pe(g1: float, n: int, g2: float, roe: float, r: float) -> float:
     it is the only way this form can express a company that has stopped
     buying back stock and is selling it instead.  Stage 2 keeps the payout
     cap, since no perpetual state hands back more than it earns.
+
+    `r_terminal` splits the two jobs this rate silently does at once
+    (valuation-rules.md「篮子对」).  `r` prices the journey -- stage-1 cash and
+    the n years the tail is discounted back over -- while `r_terminal`
+    capitalises the steady state itself.  A leg whose high `r` says "not yet
+    proven" rather than "permanently cyclical" reaches a steady state that
+    belongs in a calmer basket, and charging the story-stock rate to a
+    perpetuity asserts the business never matures.  Default None keeps `r` in
+    both jobs, which is every leg that has not declared a pair.
+
+    The split is worth little on its own: `n` is capped at the consensus years
+    (`check_transition_years`), so discounting the tail back at 15% instead of
+    10% over one year moves BE.US by 4.3%.  That is why the rule pairs it with
+    a mandatory numerator haircut -- the risk of never arriving has no room to
+    live in an exponent this small, and must be priced where it is visible.
+    At n=0 the exponent is gone entirely and `r` has no arithmetic role; the
+    pair still holds, with the haircut carrying all of the arrival risk.
+    Keeping `r` on the tail there would charge the story-stock rate to the
+    steady state -- the exact error the pair exists to remove.
     """
     if roe <= 0:
         raise ValueError(f"roe must be positive, got {roe}")
-    if r - g2 <= 0:
-        raise ValueError(f"perpetuity diverges: g2={g2} >= r={r}")
+    r_tv = r if r_terminal is None else r_terminal
+    if r_tv - g2 <= 0:
+        raise ValueError(f"perpetuity diverges: g2={g2} >= r_terminal={r_tv}")
     p1 = 1.0 - g1 / roe
     p2 = payout(g2, roe)
     # Dividends of E1..E_n fund the next year's g1; E_{n+1} onward is the tail,
     # valued at t=n and discounted from there.
     stage1 = p1 * _stream_pv(g1, r, n)
-    tv = ((1.0 + g1) ** n * p2) / ((r - g2) * (1.0 + r) ** n)
+    tv = ((1.0 + g1) ** n * p2) / ((r_tv - g2) * (1.0 + r) ** n)
     return stage1 + tv
 
 

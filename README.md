@@ -69,10 +69,10 @@ python3 scripts/daily_bands.py
 python3 scripts/daily_bands.py --no-notify
 ```
 
-安装工作日 cron（默认 `7:30` 本机时区，脚本内 as_of 用 `Asia/Shanghai`）：
+安装工作日 cron（`Asia/Shanghai`：`09:03` 早盘 + `16:13` 午后；脚本内 as_of 同此时区）：
 
 ```bash
-./_local/tmp/install-lynch-daily-cron.sh
+bash scripts/install-daily-cron.sh
 ```
 
 **MUST NOT** 让日报改写 `frameworks/*.md`。单票完整公式校验仍用 `python3 eval/<TICKER>.py`。

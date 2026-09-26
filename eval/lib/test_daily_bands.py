@@ -138,6 +138,25 @@ class PoolLinesTests(unittest.TestCase):
 
 
 class DailyPostTests(unittest.TestCase):
+    def test_rf_lines_follow_the_band(self) -> None:
+        meta = _meta(ticker="GOOG.US", path=Path("frameworks/GOOG.US.md"), name="Alphabet",
+                     L=249.62, M=306.60, H=361.61, currency="USD", lynch_primary="stalwart")
+        r = _row(meta, 344.41, "optimistic")
+        r.rf = {"stale": False, "delta_cons": 0.0075, "rf_cap": 0.005,
+                "consensus": (215.70, 264.90, 312.63), "pressure": (225.87, 306.60, 404.67)}
+        lines = daily_bands.format_pool_lines(r)
+        self.assertEqual(lines[-2], "「叙事溢价」 利率·共识(+75bp) P > 312.63 · L/M/H = 215.7/264.9/312.63")
+        self.assertEqual(lines[-1], "「中性」 利率·压力±50bp [266.24, 355.63) · L/M/H = 225.87/306.6/404.67")
+        self.assertFalse(r.any_crossed)
+
+    def test_stale_rf_prints_rerun_hint_not_numbers(self) -> None:
+        meta = _meta(ticker="GOOG.US", path=Path("frameworks/GOOG.US.md"), name="Alphabet",
+                     L=249.62, M=306.60, H=361.61, currency="USD", lynch_primary="stalwart")
+        r = _row(meta, 344.41, "optimistic")
+        r.rf = {"stale": True}
+        self.assertEqual(daily_bands.format_pool_lines(r)[-1],
+                         "利率读数过期（利率轴或锚点已变，重跑 eval/GOOG.US.py）")
+
     def test_blank_line_between_tickers(self) -> None:
         rows = [
             _row(_meta(), price=19.01, zone="neutral"),

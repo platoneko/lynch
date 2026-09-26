@@ -20,7 +20,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from eval.lib.bands_io import build_record, read_previous, write_bands  # noqa: E402
+from eval.lib.axes import load_rates  # noqa: E402
+from eval.lib.bands_io import build_record, read_previous, read_rf_readings, write_bands  # noqa: E402
 from eval.lib.feishu import send_post  # noqa: E402
 from eval.lib.frameworks import FrameworkMeta, load_all_frameworks  # noqa: E402
 from eval.lib.price import fetch_quotes  # noqa: E402
@@ -46,6 +47,8 @@ class Row:
     candidate_zone: str | None = None
     previous_candidate_zone: str | None = None
     candidate_crossed: bool = False
+    # r_f readings from output/rates/ (eval-written); readings only, never a cross.
+    rf: dict | None = None
 
     @property
     def any_crossed(self) -> bool:
@@ -172,7 +175,28 @@ def format_pool_lines(r: Row) -> list[str]:
             f"「{zone_label(r.candidate_zone)}」 候选({r.meta.candidate_label}) "
             f"{cb} · {format_lmh(L3, M3, H3)}"
         )
+    lines.extend(format_rf_lines(r))
     return lines
+
+
+def format_rf_lines(r: Row) -> list[str]:
+    """Two r_f reading lines (valuation-rules「利率轴」): consensus Δ, then reverse pressure.
+
+    「叙事溢价」 利率·共识(+75bp) P > 312.63 · L/M/H = 215.7/264.9/312.63
+    「中性」 利率·压力±50bp [266.24, 355.63) · L/M/H = 225.87/306.6/404.67
+    """
+    if r.rf is None:
+        return []
+    if r.rf["stale"]:
+        return [f"利率读数过期（利率轴或锚点已变，重跑 eval/{r.meta.ticker}.py）"]
+    out = []
+    for label, band in (
+        (f"利率·共识({r.rf['delta_cons'] * 1e4:+.0f}bp)", r.rf["consensus"]),
+        (f"利率·压力±{r.rf['rf_cap'] * 1e4:.0f}bp", r.rf["pressure"]),
+    ):
+        z = zone_of(r.price, *band)
+        out.append(f"「{zone_label(z)}」 {label} {format_zone_bounds(z, *band)} · {format_lmh(*band)}")
+    return out
 
 
 def _join_ticker_blocks(blocks: list[list[str]]) -> list[str]:
@@ -264,6 +288,15 @@ def run(*, dry_run: bool, notify: bool, bands_dir: Path | None) -> int:
         quotes = {}
         errors.append(f"报价整体失败: {e}")
 
+    # _AXIS.rates segment by listing currency; an unbuilt segment (CNY / TWD)
+    # simply prints no r_f lines.
+    rate_segs: dict[str, dict[str, float] | None] = {}
+    for ccy in {m.currency for m in metas}:
+        try:
+            rate_segs[ccy] = load_rates(ccy)
+        except ValueError:
+            rate_segs[ccy] = None
+
     for meta in metas:
         notes: list[str] = []
         try:
@@ -338,6 +371,11 @@ def run(*, dry_run: bool, notify: bool, bands_dir: Path | None) -> int:
                 candidate_zone=cand_zone,
                 previous_candidate_zone=previous_candidate_zone,
                 candidate_crossed=candidate_crossed,
+                rf=(
+                    read_rf_readings(meta.ticker, seg, (meta.L, meta.M, meta.H))
+                    if (seg := rate_segs.get(meta.currency)) and not meta.blocked
+                    else None
+                ),
             )
         )
 
