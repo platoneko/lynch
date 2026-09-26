@@ -217,9 +217,12 @@ def _price_row(row: dict[str, Any], meta: FrameworkMeta, batch: QuoteBatch, us_c
 
 
 def _latest_price(q: Quote, us_close: datetime) -> tuple[float, str | None]:
-    """The regular price, or the newest US extended-hours price printed after the latest regular close.
+    """The newest price by trade time across the regular session, pre-market, post-market and overnight.
 
-    The daily digest keeps the regular price; only the reader follows extended hours.
+    Longbridge gives the regular price no trade time, so it is dated at `us_close`, the
+    latest regular close (a session still running closes in the future: the regular price
+    wins). Non-US rows carry no extended prices. The daily digest keeps the regular price;
+    only the reader follows extended hours.
     """
     later = [x for x in q.extended if x.at > us_close and _is_trade_price(x.last)]
     if not later:

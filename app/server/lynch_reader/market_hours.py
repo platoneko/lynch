@@ -1,8 +1,8 @@
 """When each market's quotes can move, by weekday trading hours (holidays not modelled).
 
 Two readers: the quote cache skips a Longbridge call when no market in the pool has
-traded since the last one, and a US row takes an extended-hours price only when it
-printed after the latest regular close. A holiday counts as a trading day: it costs
+traded since the last one, and a US row dates its regular price (which has no trade
+time) at the latest regular close to pick the newest price across sessions. A holiday counts as a trading day: it costs
 extra fetches, and on a US holiday the prior day's after-hours price is not shown.
 """
 from __future__ import annotations
