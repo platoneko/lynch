@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DayNight makes isLightTheme follow the system dark mode, and the WebView's
+     prefers-color-scheme with it. -->
+<resources>
+    <style name="Theme.Lynch" parent="@android:style/Theme.DeviceDefault.DayNight" />
+</resources>

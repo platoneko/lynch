@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The WebView's prefers-color-scheme follows the theme's isLightTheme (targetSdk 33+).
+     API 26–28 have no DayNight theme, so the web UI stays light there. -->
+<resources>
+    <style name="Theme.Lynch" parent="@android:style/Theme.DeviceDefault.Light" />
+</resources>
