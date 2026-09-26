@@ -9,8 +9,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -28,6 +26,7 @@ var (
 type session struct {
 	srv    *tsnet.Server
 	ln     net.Listener
+	hs     *http.Server
 	secret string
 	done   chan struct{}
 	// started closes once srv.Start has returned: tsnet.Server.Close must not
@@ -48,8 +47,8 @@ type status struct {
 }
 
 // Start brings up the app-private tsnet node and the loopback proxy to target.
-// It returns at once; progress is read through Status.
-func Start(dataDir, target string) error {
+// It listens on 127.0.0.1:port and returns at once; progress is read through Status.
+func Start(dataDir, target string, port int) error {
 	mu.Lock()
 	defer mu.Unlock()
 	if cur != nil {
@@ -57,6 +56,9 @@ func Start(dataDir, target string) error {
 	}
 	if target == "" {
 		return errors.New("server address is empty")
+	}
+	if port < 1024 || port > 65535 {
+		return fmt.Errorf("本机端口 %d 超出 1024–65535，请在设置里换一个端口", port)
 	}
 
 	// Step 1: keep tsnet's state and logs inside the app-private directory.
@@ -81,44 +83,21 @@ func Start(dataDir, target string) error {
 	if err != nil {
 		return err
 	}
-	ln, err := listenLoopback(filepath.Join(dataDir, "proxy-port"))
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
-		return err
+		return fmt.Errorf("本机端口 %d 无法使用（可能被其他 app 占用），请在设置里换一个端口：%w", port, err)
 	}
+	hs := &http.Server{Handler: newGate(secret, newProxy(target, srv.Dial))}
 	s := &session{
-		srv: srv, ln: ln, secret: secret,
+		srv: srv, ln: ln, hs: hs, secret: secret,
 		done: make(chan struct{}), started: make(chan struct{}), state: "starting",
 	}
-	go http.Serve(ln, newGate(secret, newProxy(target, srv.Dial)))
+	go hs.Serve(ln)
 
 	// Step 3: bring the node up and keep Status current in the background.
 	go s.run()
 	cur = s
 	return nil
-}
-
-// listenLoopback reuses the port saved in portFile when it is still free.
-// The WebView keys localStorage (saved filters) by origin, which includes the
-// port, so a fresh port per launch would drop them. Access control rests on
-// the gate's cookie, not on the port being unpredictable.
-func listenLoopback(portFile string) (net.Listener, error) {
-	if b, err := os.ReadFile(portFile); err == nil {
-		if port, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil && port > 0 && port < 65536 {
-			if ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port)); err == nil {
-				return ln, nil
-			}
-		}
-	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return nil, err
-	}
-	port := ln.Addr().(*net.TCPAddr).Port
-	if err := os.WriteFile(portFile, []byte(strconv.Itoa(port)), 0o600); err != nil {
-		ln.Close()
-		return nil, err
-	}
-	return ln, nil
 }
 
 func (s *session) run() {
@@ -223,7 +202,10 @@ func Stop() {
 		return
 	}
 	close(s.done)
-	s.ln.Close()
+	// Close, not just the listener: the port is fixed, so the WebView reuses a
+	// pooled keep-alive connection across restarts, and one still served by
+	// this session's gate (old secret) would answer the new boot URL with 403.
+	s.hs.Close()
 	<-s.started
 	// A Start that failed before tsnet built its system (bad Dir) has nothing to
 	// close, and tsnet's Close would dereference the missing system.

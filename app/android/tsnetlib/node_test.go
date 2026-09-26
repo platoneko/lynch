@@ -1,13 +1,26 @@
 package tsnetlib
 
 import (
-	"encoding/json"
 	"fmt"
+	"io"
 	"net"
-	"os"
-	"path/filepath"
+	"net/http"
+	"net/http/cookiejar"
+	"strconv"
+	"strings"
 	"testing"
 )
+
+// freePort finds a loopback port nothing is listening on right now.
+func freePort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	return ln.Addr().(*net.TCPAddr).Port
+}
 
 func TestStoppedState(t *testing.T) {
 	if got := Status(); got != `{"state":"stopped"}` {
@@ -16,14 +29,14 @@ func TestStoppedState(t *testing.T) {
 	if BootURL() != "" {
 		t.Fatal("BootURL before Start must be empty")
 	}
-	if err := Start(t.TempDir(), ""); err == nil {
+	if err := Start(t.TempDir(), "", freePort(t)); err == nil {
 		t.Fatal("empty target must be rejected")
 	}
 }
 
 // A rotation or quick back-out can Stop while the node is still inside srv.Start.
 func TestStopRightAfterStart(t *testing.T) {
-	if err := Start(t.TempDir(), "127.0.0.1:1"); err != nil {
+	if err := Start(t.TempDir(), "127.0.0.1:1", freePort(t)); err != nil {
 		t.Fatal(err)
 	}
 	Stop()
@@ -43,52 +56,72 @@ func TestStateOf(t *testing.T) {
 	}
 }
 
-func startedPort(t *testing.T, dataDir string) int {
-	t.Helper()
-	if err := Start(dataDir, "127.0.0.1:1"); err != nil {
-		t.Fatal(err)
-	}
-	defer Stop()
-	var st status
-	if err := json.Unmarshal([]byte(Status()), &st); err != nil {
-		t.Fatal(err)
-	}
-	if st.Port == 0 {
-		t.Fatalf("no port in Status()")
-	}
-	return st.Port
-}
-
-// localStorage is per-origin and the origin includes the port, so the port
-// must survive restarts for saved filters to survive them.
-func TestPortStableAcrossRestarts(t *testing.T) {
-	dir := t.TempDir()
-	first := startedPort(t, dir)
-	if second := startedPort(t, dir); second != first {
-		t.Fatalf("port changed across restarts: %d then %d", first, second)
+func TestPortOutOfRangeRejected(t *testing.T) {
+	for _, port := range []int{0, 80, 70000} {
+		if err := Start(t.TempDir(), "127.0.0.1:1", port); err == nil {
+			Stop()
+			t.Fatalf("port %d must be rejected", port)
+		}
+		if got := Status(); got != `{"state":"stopped"}` {
+			t.Fatalf("Status() after rejected port %d = %s", port, got)
+		}
 	}
 }
 
-func TestCorruptPortFileFallsBack(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "proxy-port"), []byte("garbage\x00"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	port := startedPort(t, dir)
-	if again := startedPort(t, dir); again != port {
-		t.Fatalf("fresh port not saved: %d then %d", port, again)
-	}
-}
-
-func TestBusySavedPortFallsBack(t *testing.T) {
-	dir := t.TempDir()
-	port := startedPort(t, dir)
-	busy, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+func TestBusyPortFails(t *testing.T) {
+	busy, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer busy.Close()
-	if got := startedPort(t, dir); got == port {
-		t.Fatalf("reused busy port %d", got)
+	port := busy.Addr().(*net.TCPAddr).Port
+
+	err = Start(t.TempDir(), "127.0.0.1:1", port)
+	if err == nil {
+		Stop()
+		t.Fatalf("Start on busy port %d must fail", port)
+	}
+	if !strings.Contains(err.Error(), strconv.Itoa(port)) {
+		t.Fatalf("error does not name the port %d: %v", port, err)
+	}
+	if got := Status(); got != `{"state":"stopped"}` {
+		t.Fatalf("Status() after failed Start = %s", got)
+	}
+}
+
+// The origin is stable across restarts, so a pooled keep-alive connection
+// outlives Stop; the new session's boot must not be served on it by the old gate.
+func TestRestartOnSamePortAcceptsNewBoot(t *testing.T) {
+	dir, port := t.TempDir(), freePort(t)
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{
+		Jar:           jar,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+
+	for _, round := range []string{"first", "second"} {
+		if err := Start(dir, "127.0.0.1:1", port); err != nil {
+			t.Fatalf("%s Start: %v", round, err)
+		}
+		boot := BootURL()
+		if !strings.HasPrefix(boot, fmt.Sprintf("http://127.0.0.1:%d/", port)) {
+			Stop()
+			t.Fatalf("%s BootURL %q not on port %d", round, boot, port)
+		}
+		resp, err := client.Get(boot)
+		if err != nil {
+			Stop()
+			t.Fatalf("%s boot: %v", round, err)
+		}
+		// Drain before Close so the connection goes back to the client's pool.
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		Stop()
+		if resp.StatusCode != http.StatusFound {
+			t.Fatalf("%s boot: got %d, want 302", round, resp.StatusCode)
+		}
 	}
 }

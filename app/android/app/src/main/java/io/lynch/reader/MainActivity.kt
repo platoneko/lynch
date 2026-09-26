@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.text.InputType
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
@@ -32,6 +33,7 @@ class MainActivity : Activity() {
     private lateinit var loginButton: Button
     private lateinit var retryButton: Button
     private lateinit var addressInput: EditText
+    private lateinit var portInput: EditText
     private lateinit var web: WebView
     private var authUrl: String? = null
     private var loadedPort = 0 // proxy port the WebView was booted against; 0 = not loaded
@@ -53,7 +55,7 @@ class MainActivity : Activity() {
                 Tsnetlib.setInterfaces(NetInterfaces.json())
                 // Activity re-creation must not start a second node.
                 if (JSONObject(Tsnetlib.status()).optString("state") == "stopped") {
-                    Tsnetlib.start(File(filesDir, "tailnet").absolutePath, serverAddress())
+                    Tsnetlib.start(File(filesDir, "tailnet").absolutePath, serverAddress(), localPort().toLong())
                 }
             }.exceptionOrNull()
             main.post { if (err != null) showError(err.message ?: err.toString()) else poll() }
@@ -117,7 +119,6 @@ class MainActivity : Activity() {
 
     private fun configureWeb(w: WebView) {
         w.settings.javaScriptEnabled = true
-        w.settings.domStorageEnabled = true // filters persist in localStorage
         w.settings.allowFileAccess = false
         w.settings.allowContentAccess = false
         w.webViewClient = object : WebViewClient() {
@@ -127,8 +128,8 @@ class MainActivity : Activity() {
                 return !(u.scheme == "http" && u.host == "127.0.0.1" && u.port == loadedPort)
             }
 
-            // Each restart serves on a new port; pages from the old session are dead, so once the
-            // new session's first page commits, drop them or Back walks into connection errors.
+            // Each restart boots a new proxy session; once its first page commits, drop the old
+            // session's pages so Back does not walk into them.
             override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
                 if (clearHistoryOnLoad && Uri.parse(url.orEmpty()).port == loadedPort) {
                     clearHistoryOnLoad = false
@@ -158,6 +159,7 @@ class MainActivity : Activity() {
 
     private fun prefs() = getSharedPreferences("lynch", MODE_PRIVATE)
     private fun serverAddress(): String = prefs().getString(KEY_SERVER, null) ?: DEFAULT_SERVER
+    private fun localPort(): Int = prefs().getInt(KEY_PORT, DEFAULT_PORT)
 
     // The WebView is hidden, never destroyed, so the reader keeps its page state.
     private fun showPanel(text: String, login: Boolean = false) {
@@ -182,10 +184,23 @@ class MainActivity : Activity() {
         }
         retryButton = Button(this).apply { text = "重试"; setOnClickListener { restartTailnet() } }
         addressInput = EditText(this).apply { setSingleLine(); setText(serverAddress()) }
+        portInput = EditText(this).apply {
+            setSingleLine()
+            inputType = InputType.TYPE_CLASS_NUMBER
+            setText(localPort().toString())
+        }
         val save = Button(this).apply {
             text = "保存并重连"
             setOnClickListener {
-                prefs().edit().putString(KEY_SERVER, addressInput.text.toString().trim()).apply()
+                val port = portInput.text.toString().trim().toIntOrNull()
+                if (port == null || port !in 1024..65535) {
+                    showError("本机端口需在 1024–65535 之间")
+                    return@setOnClickListener
+                }
+                prefs().edit()
+                    .putString(KEY_SERVER, addressInput.text.toString().trim())
+                    .putInt(KEY_PORT, port)
+                    .apply()
                 restartTailnet()
             }
         }
@@ -197,6 +212,8 @@ class MainActivity : Activity() {
             addView(retryButton)
             addView(TextView(this@MainActivity).apply { text = "服务器地址"; setPadding(0, pad, 0, 0) })
             addView(addressInput)
+            addView(TextView(this@MainActivity).apply { text = "本机端口"; setPadding(0, pad, 0, 0) })
+            addView(portInput)
             addView(save)
         }
         web = WebView(this).apply { visibility = View.GONE }
@@ -211,5 +228,7 @@ class MainActivity : Activity() {
         const val TAG = "lynch"
         private const val KEY_SERVER = "server"
         private const val DEFAULT_SERVER = "pivot-home.tail090ab2.ts.net:3151"
+        private const val KEY_PORT = "port"
+        private const val DEFAULT_PORT = 31510
     }
 }
