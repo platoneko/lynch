@@ -74,3 +74,8 @@ export function latestAsOf(rows: TickerRow[]): string | null {
   }
   return best;
 }
+
+/** The card's Lynch class line in Chinese; an id the server has no label for shows as is. */
+export function lynchClasses(r: TickerRow, label: (id: string) => string): string {
+  return [r.lynch_primary, r.lynch_secondary].filter((c) => c != null).map(label).join(' / ');
+}

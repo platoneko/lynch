@@ -80,7 +80,7 @@ export function HomePage({ catalog, filter, onFilter, onOpen, onRefresh, refresh
       {catalog.quote_error && <p className="banner-muted">{catalog.quote_error}</p>}
       <main className="cards">
         {rows.map((r) => (
-          <TickerCard key={r.ticker} row={r} zoneLabel={(id) => labels.get(id) ?? id} onOpen={onOpen} />
+          <TickerCard key={r.ticker} row={r} label={(id) => labels.get(id) ?? id} onOpen={onOpen} />
         ))}
         {rows.length === 0 && <p className="empty">没有匹配的标的</p>}
       </main>

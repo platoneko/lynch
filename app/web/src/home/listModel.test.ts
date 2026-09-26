@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TickerRow, ZoneId } from '../types';
-import { applyFilter, DEFAULT_FILTER, latestAsOf } from './listModel';
+import { applyFilter, DEFAULT_FILTER, latestAsOf, lynchClasses } from './listModel';
 
 const ZONES = ['deep_discount', 'conservative', 'neutral', 'optimistic', 'stretched'];
 
@@ -86,5 +86,18 @@ describe('latestAsOf', () => {
   });
   it('is null without any band', () => {
     expect(latestAsOf([row('A.US', { band: null })])).toBeNull();
+  });
+});
+
+describe('lynchClasses', () => {
+  const labels = new Map([['fast_grower', '快速增长'], ['cyclical', '周期']]);
+  const label = (id: string) => labels.get(id) ?? id;
+  it('shows the Chinese labels, primary first', () => {
+    expect(lynchClasses(row('A', { lynch_primary: 'fast_grower', lynch_secondary: 'cyclical' }), label))
+      .toBe('快速增长 / 周期');
+    expect(lynchClasses(row('A', { lynch_primary: 'cyclical' }), label)).toBe('周期');
+  });
+  it('falls back to the id for an unknown class', () => {
+    expect(lynchClasses(row('A', { lynch_primary: 'new_kind' }), label)).toBe('new_kind');
   });
 });

@@ -1,10 +1,10 @@
 import type { TickerRow, ZoneId } from '../types';
-import { rowZone } from './listModel';
+import { lynchClasses, rowZone } from './listModel';
 import { barScale, fmt, PriceBar } from './PriceBar';
 
-export function TickerCard({ row, zoneLabel, onOpen }: {
+export function TickerCard({ row, label, onOpen }: {
   row: TickerRow;
-  zoneLabel: (id: string) => string;
+  label: (id: string) => string; // zone and Lynch class ids → Chinese labels
   onOpen: (ticker: string) => void;
 }) {
   return (
@@ -18,18 +18,15 @@ export function TickerCard({ row, zoneLabel, onOpen }: {
         <div className="card-error">解析失败：{row.error}</div>
       ) : (
         <>
-          <div className="card-classes">
-            {row.lynch_primary}
-            {row.lynch_secondary && ` / ${row.lynch_secondary}`}
-          </div>
-          <CardZone row={row} zoneLabel={zoneLabel} />
+          <div className="card-classes">{lynchClasses(row, label)}</div>
+          <CardZone row={row} label={label} />
         </>
       )}
     </button>
   );
 }
 
-function CardZone({ row, zoneLabel }: { row: TickerRow; zoneLabel: (id: string) => string }) {
+function CardZone({ row, label }: { row: TickerRow; label: (id: string) => string }) {
   // BLOCKED never shows a zone (AGENTS.md「BLOCKED — 题头契约」).
   if (row.blocked) return <div className="tag tag-blocked">BLOCKED</div>;
   const zone = rowZone(row);
@@ -44,17 +41,17 @@ function CardZone({ row, zoneLabel }: { row: TickerRow; zoneLabel: (id: string) 
       <div className={candidate ? 'band' : 'band band-inline'}>
         <div className="band-head">
           {candidate && <span className="band-caption">底牌</span>}
-          <span className={`tag zone-bg-${zone}`}>{zoneLabel(zone)}</span>
+          <span className={`tag zone-bg-${zone}`}>{label(zone)}</span>
         </div>
         <PriceBar price={band.price} anchors={base} scale={scale} zone={zone} />
       </div>
       {candidate && (
         <div className="band">
-          <CandidateHead label={candidate.label} zone={band.candidate_zone} zoneLabel={zoneLabel} />
+          <CandidateHead label={candidate.label} zone={band.candidate_zone} zoneLabel={label} />
           <PriceBar price={band.price} anchors={candidate} scale={scale} zone={band.candidate_zone} />
         </div>
       )}
-      {band.option_zone && <div className="card-extra">+V {zoneLabel(band.option_zone)}</div>}
+      {band.option_zone && <div className="card-extra">+V {label(band.option_zone)}</div>}
     </>
   );
 }
