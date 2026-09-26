@@ -1,4 +1,5 @@
 import type { TickerRow } from '../types';
+import { rowZone } from './listModel';
 import { fmt, PriceBar } from './PriceBar';
 
 export function TickerCard({ row, zoneLabel, onOpen }: {
@@ -31,13 +32,14 @@ export function TickerCard({ row, zoneLabel, onOpen }: {
 function CardZone({ row, zoneLabel }: { row: TickerRow; zoneLabel: (id: string) => string }) {
   // BLOCKED never shows a zone (AGENTS.md「BLOCKED — 题头契约」).
   if (row.blocked) return <div className="tag tag-blocked">BLOCKED</div>;
-  if (!row.band || !row.band.zone) return <div className="tag tag-muted">暂无日报</div>;
+  const zone = rowZone(row);
+  if (!row.band || !zone) return <div className="tag tag-muted">暂无日报</div>;
   const { band } = row;
   return (
     <>
       <div className="card-zone">
-        <span className={`tag zone-bg-${band.zone}`}>{zoneLabel(band.zone!)}</span>
-        <PriceBar price={band.price} L={row.L!} M={row.M!} H={row.H!} zone={band.zone!} />
+        <span className={`tag zone-bg-${zone}`}>{zoneLabel(zone)}</span>
+        <PriceBar price={band.price} L={row.L!} M={row.M!} H={row.H!} zone={zone} />
       </div>
       {(band.option_zone || band.candidate_zone) && (
         <div className="card-extra">

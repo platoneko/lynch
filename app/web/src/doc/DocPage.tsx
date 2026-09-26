@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { fetchFramework } from '../api';
+import { rowZone } from '../home/listModel';
 import type { TickerRow } from '../types';
 import { buildDoc, sectionLabel, type BuiltDoc } from './buildDoc';
 import { currentIndex, isVisible, neighbors, openIdsFor } from './nav';
@@ -78,7 +79,7 @@ export function DocPage({ ticker, row, pool, zoneLabel, onBack }: {
       else n.add(id);
       return n;
     });
-  const zone = row && !row.blocked ? row.band?.zone : null;
+  const zone = row ? rowZone(row) : null;
 
   return (
     <div className="doc">

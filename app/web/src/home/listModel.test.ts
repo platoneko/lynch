@@ -38,6 +38,12 @@ describe('filters', () => {
     const f = { ...DEFAULT_FILTER, zones: ['neutral', 'conservative'] };
     expect(tickers(applyFilter(rows, f, ZONES))).toEqual(['C.US', 'A.US']);
   });
+  it('BLOCKED rows with a stale band zone are excluded by the zone filter', () => {
+    // Marked BLOCKED after the last daily run: the band file still holds yesterday's zone.
+    const rows = [withZone('A.US', 'neutral'), row('B.US', { blocked: 'reason' })];
+    const f = { ...DEFAULT_FILTER, zones: ['neutral'] };
+    expect(tickers(applyFilter(rows, f, ZONES))).toEqual(['A.US']);
+  });
   it('class filter matches primary or secondary', () => {
     const rows = [row('A.US', { lynch_primary: 'cyclical' }),
       row('B.US', { lynch_primary: 'fast_grower', lynch_secondary: 'cyclical' }),
@@ -51,6 +57,11 @@ describe('sort', () => {
     withZone('M.US', 'deep_discount'), row('X.US', { error: 'boom', band: null, name: null })];
   it('zone order, zone-less last, ticker as tiebreak', () => {
     expect(tickers(applyFilter(rows, DEFAULT_FILTER, ZONES))).toEqual(['M.US', 'A.US', 'Z.US', 'N.US', 'X.US']);
+  });
+  it('BLOCKED rows with a stale band zone sort after zoned rows', () => {
+    const blocked = row('A.US', { blocked: 'reason' }); // band.zone 'neutral' left over
+    expect(tickers(applyFilter([blocked, withZone('Z.US', 'stretched')], DEFAULT_FILTER, ZONES)))
+      .toEqual(['Z.US', 'A.US']);
   });
   it('market keeps the server order (US → HK → A)', () => {
     expect(tickers(applyFilter(rows, { ...DEFAULT_FILTER, sort: 'market' }, ZONES)))

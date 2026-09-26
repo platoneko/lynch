@@ -1,4 +1,13 @@
-import type { TickerRow } from '../types';
+import type { TickerRow, ZoneId } from '../types';
+
+/**
+ * The zone a row shows, filters and sorts by. BLOCKED never has one
+ * (AGENTS.md「BLOCKED — 题头契约」), even when its band file still holds the
+ * zone from a daily run before it was blocked.
+ */
+export function rowZone(r: TickerRow): ZoneId | null {
+  return r.blocked ? null : r.band?.zone ?? null;
+}
 
 export type SortKey = 'zone' | 'market' | 'ticker';
 const SORT_KEYS: readonly SortKey[] = ['zone', 'market', 'ticker'];
@@ -28,7 +37,7 @@ function matchesQuery(r: TickerRow, query: string): boolean {
 
 function matchesZones(r: TickerRow, zones: string[]): boolean {
   if (zones.length === 0) return true;
-  const zone = r.band?.zone;
+  const zone = rowZone(r);
   return zone != null && zones.includes(zone);
 }
 
@@ -44,7 +53,8 @@ function comparator(sort: SortKey, zoneOrder: string[], serverOrder: Map<string,
   if (sort === 'market') return (a: TickerRow, b: TickerRow) => serverOrder.get(a.ticker)! - serverOrder.get(b.ticker)!;
   // Rows without a zone (BLOCKED, no band, parse error) sink to the bottom.
   const rank = (r: TickerRow) => {
-    const i = r.band?.zone ? zoneOrder.indexOf(r.band.zone) : -1;
+    const zone = rowZone(r);
+    const i = zone ? zoneOrder.indexOf(zone) : -1;
     return i < 0 ? zoneOrder.length : i;
   };
   return (a: TickerRow, b: TickerRow) => rank(a) - rank(b) || byTicker(a, b);
