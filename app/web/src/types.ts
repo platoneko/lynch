@@ -14,6 +14,16 @@ export interface Band {
   candidate_zone: ZoneId | null;
 }
 
+/** A framework's unmodelled option (AGENTS.md「未建模期权」): the band credited with p_k · V_opt. */
+export interface OptionBand {
+  v_opt: number;
+  L: number;
+  M: number;
+  H: number;
+  line: string | null; // the Outputs `\(V_{opt}\)` bullet, raw markdown
+  rows: { id: string; text: string }[]; // Assumptions rows that line cites: id and text cell, raw markdown
+}
+
 /** A framework's consensus-upgrade candidate band (AGENTS.md「共识升级候选带」). */
 export interface Candidate {
   label: string;
@@ -36,6 +46,7 @@ export interface TickerRow {
   M: number | null;
   H: number | null;
   blocked: string | null;
+  option: OptionBand | null;
   candidate: Candidate | null;
   band: Band | null;
   quote_error: string | null; // why `band` is null for this row alone

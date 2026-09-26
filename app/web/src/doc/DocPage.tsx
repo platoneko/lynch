@@ -1,9 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { fetchFramework } from '../api';
-import { rowZone } from '../home/listModel';
+import { extraBands, rowZone, type ExtraBand } from '../home/listModel';
 import { fmt } from '../home/PriceBar';
-import { CandidateHead } from '../home/TickerCard';
-import type { Candidate, TickerRow, ZoneId } from '../types';
+import { BandHead } from '../home/TickerCard';
+import type { TickerRow } from '../types';
 import { buildDoc, renderFragment, sectionLabel, type BuiltDoc } from './buildDoc';
 import { currentIndex, isVisible, neighbors, openIdsFor } from './nav';
 
@@ -99,15 +99,10 @@ export function DocPage({ ticker, row, pool, zoneLabel, onBack }: {
         <div className="doc-head">
           {zone && <span className={`tag zone-bg-${zone}`}>{zoneLabel(zone)}</span>}
           {row?.blocked && <span className="tag tag-blocked">BLOCKED</span>}
-          {/* A BLOCKED ticker shows no zone at all, candidate included. */}
-          {row?.candidate && !row.blocked && (
-            <CandidateBlock
-              candidate={row.candidate}
-              zone={row.band?.candidate_zone ?? null}
-              pool={pool}
-              zoneLabel={zoneLabel}
-            />
-          )}
+          {/* A BLOCKED ticker shows no zone at all, +V and candidate included. */}
+          {row && !row.blocked && extraBands(row).map((b) => (
+            <BandBlock key={b.kind} band={b} pool={pool} zoneLabel={zoneLabel} />
+          ))}
           <div className="md" dangerouslySetInnerHTML={{ __html: doc.headerHtml }} />
         </div>
         {sections.filter((s) => isVisible(s, open)).map((s) => {
@@ -134,24 +129,35 @@ export function DocPage({ ticker, row, pool, zoneLabel, onBack }: {
   );
 }
 
-/** Why the candidate is only a candidate: its prices and the gate assumption's text, collapsed by default. */
-function CandidateBlock({ candidate, zone, pool, zoneLabel }: {
-  candidate: Candidate;
-  zone: ZoneId | null;
+/**
+ * An extra band's head line and its background, collapsed by default:
+ * +V — the credited prices, the Outputs V_opt line and the assumption rows it cites;
+ * candidate — its prices and the gate assumption's text (why it is only a candidate).
+ */
+function BandBlock({ band, pool, zoneLabel }: {
+  band: ExtraBand;
   pool: ReadonlySet<string>;
   zoneLabel: (id: string) => string;
 }) {
-  const background = useMemo(
-    () => (candidate.background ? renderFragment(candidate.background, pool) : null),
-    [candidate.background, pool],
-  );
+  const { L, M, H } = band.anchors;
+  // Keyed on the catalog's own band object, which stays the same across scroll re-renders.
+  const html = useMemo(() => {
+    const sources = band.kind === 'option'
+      ? [band.anchors.line, ...band.anchors.rows.map((r) => `**${r.id}** ${r.text}`)]
+      : [band.anchors.background];
+    return sources.filter((s) => s !== null).map((s) => renderFragment(s, pool));
+  }, [band.anchors, pool]);
   return (
-    <div className="doc-cand">
-      <CandidateHead label={candidate.label} zone={zone} zoneLabel={zoneLabel} />
+    <div className="doc-band">
+      <BandHead band={band} zoneLabel={zoneLabel} />
       <details>
-        <summary>候选背景</summary>
-        <p className="doc-cand-prices">L′ {fmt(candidate.L)} · M′ {fmt(candidate.M)} · H′ {fmt(candidate.H)}</p>
-        {background && <div className="md" dangerouslySetInnerHTML={{ __html: background }} />}
+        <summary>{band.kind === 'option' ? '期权背景' : '候选背景'}</summary>
+        <p className="doc-band-prices">
+          {band.kind === 'option'
+            ? `+V 修正带 L ${fmt(L)} · M ${fmt(M)} · H ${fmt(H)}`
+            : `L′ ${fmt(L)} · M′ ${fmt(M)} · H′ ${fmt(H)}`}
+        </p>
+        {html.map((h, i) => <div key={i} className="md" dangerouslySetInnerHTML={{ __html: h }} />)}
       </details>
     </div>
   );

@@ -18,7 +18,7 @@ describe('barGeometry', () => {
   });
   it('shares one scale between base and candidate', () => {
     const cand = { L: 20, M: 30, H: 60 };
-    const scale = barScale(BASE, cand);
+    const scale = barScale([BASE, cand]);
     expect(scale).toEqual({ lo: 10, hi: 60 });
     expect(barGeometry(35, BASE, scale)).toMatchObject({ L: 0, H: 60, price: 50 });
     expect(barGeometry(35, cand, scale)).toMatchObject({ L: 20, H: 100, price: 50 });
@@ -26,13 +26,22 @@ describe('barGeometry', () => {
   it('widens the shared scale down to a candidate below the base (AVGO shape)', () => {
     const base = { L: 200, M: 300, H: 400 };
     const cand = { L: 150, M: 250, H: 350 };
-    const scale = barScale(base, cand);
+    const scale = barScale([base, cand]);
     expect(scale).toEqual({ lo: 150, hi: 400 });
     expect(barGeometry(260, base, scale)).toMatchObject({ L: 20, H: 100, price: 44, overflow: null });
     expect(barGeometry(260, cand, scale)).toMatchObject({ L: 0, H: 80, price: 44, overflow: null });
   });
-  it('without a candidate the scale is L..H', () => {
-    expect(barScale(BASE, null)).toEqual(OWN);
+  it('spans every shown band: base, +V and candidate', () => {
+    // +V credits H most (p_H = 1), a candidate can sit lower: each end comes from a different band.
+    const option = { L: 10, M: 25, H: 70 };
+    const cand = { L: 8, M: 18, H: 30 };
+    const scale = barScale([BASE, option, cand]);
+    expect(scale).toEqual({ lo: 8, hi: 70 });
+    expect(barGeometry(39, option, scale)).toMatchObject({ H: 100, price: 50 });
+    expect(barGeometry(39, cand, scale)).toMatchObject({ L: 0, price: 50 });
+  });
+  it('with only the base band the scale is L..H', () => {
+    expect(barScale([BASE])).toEqual(OWN);
   });
   it('pins to the ends with an overflow marker', () => {
     expect(barGeometry(5, BASE, OWN)).toMatchObject({ price: 0, overflow: 'below' });

@@ -1,4 +1,5 @@
-import type { TickerRow, ZoneId } from '../types';
+import type { Candidate, OptionBand, TickerRow, ZoneId } from '../types';
+import { fmt } from './PriceBar';
 
 /**
  * The zone a row shows, filters and sorts by. BLOCKED never has one
@@ -7,6 +8,25 @@ import type { TickerRow, ZoneId } from '../types';
  */
 export function rowZone(r: TickerRow): ZoneId | null {
   return r.blocked ? null : r.band?.zone ?? null;
+}
+
+/** A band shown under the base band: its own bar on the card, its own head line on the doc page. */
+export type ExtraBand =
+  | { kind: 'option'; label: string; anchors: OptionBand; zone: ZoneId | null }
+  | { kind: 'candidate'; label: string; anchors: Candidate; zone: ZoneId | null };
+
+export const EXTRA_CAPTION: Record<ExtraBand['kind'], string> = { option: '+V', candidate: '候选' };
+
+/** The row's extra bands in display order: +V, then candidate. Zones come only from the server. */
+export function extraBands(r: TickerRow): ExtraBand[] {
+  const out: ExtraBand[] = [];
+  if (r.option) {
+    out.push({ kind: 'option', label: `+V ${fmt(r.option.v_opt)}`, anchors: r.option, zone: r.band?.option_zone ?? null });
+  }
+  if (r.candidate) {
+    out.push({ kind: 'candidate', label: r.candidate.label, anchors: r.candidate, zone: r.band?.candidate_zone ?? null });
+  }
+  return out;
 }
 
 export type SortKey = 'zone' | 'market' | 'ticker';

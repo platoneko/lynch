@@ -1,5 +1,5 @@
-import type { TickerRow, ZoneId } from '../types';
-import { lynchClasses, rowZone } from './listModel';
+import type { TickerRow } from '../types';
+import { EXTRA_CAPTION, extraBands, lynchClasses, rowZone, type ExtraBand } from './listModel';
 import { barScale, fmt, PriceBar } from './PriceBar';
 
 export function TickerCard({ row, label, onOpen }: {
@@ -31,40 +31,40 @@ function CardZone({ row, label }: { row: TickerRow; label: (id: string) => strin
   if (row.blocked) return <div className="tag tag-blocked">BLOCKED</div>;
   const zone = rowZone(row);
   if (!row.band || !zone) return <div className="tag tag-muted">{row.quote_error ?? '无报价'}</div>;
-  const { band, candidate } = row;
+  const { band } = row;
   const base = { L: row.L!, M: row.M!, H: row.H! };
-  // Both bars share one scale so the candidate's shift against the base is visible.
-  const scale = barScale(base, candidate);
+  const extras = extraBands(row);
+  // All bars share one scale so each extra band's shift against the base is visible.
+  const scale = barScale([base, ...extras.map((e) => e.anchors)]);
   return (
     <>
-      {/* Alone, the base band keeps its one-line card layout; with a candidate the two stack. */}
-      <div className={candidate ? 'band' : 'band band-inline'}>
+      {/* Alone, the base band keeps its one-line card layout; with extra bands they stack. */}
+      <div className={extras.length ? 'band' : 'band band-inline'}>
         <div className="band-head">
-          {candidate && <span className="band-caption">底牌</span>}
+          {extras.length > 0 && <span className="band-caption">底牌</span>}
           <span className={`tag zone-bg-${zone}`}>{label(zone)}</span>
         </div>
         <PriceBar price={band.price} anchors={base} scale={scale} zone={zone} />
       </div>
-      {candidate && (
-        <div className="band">
-          <CandidateHead label={candidate.label} zone={band.candidate_zone} zoneLabel={label} />
-          <PriceBar price={band.price} anchors={candidate} scale={scale} zone={band.candidate_zone} />
+      {extras.map((e) => (
+        <div key={e.kind} className="band">
+          <BandHead band={e} zoneLabel={label} />
+          <PriceBar price={band.price} anchors={e.anchors} scale={scale} zone={e.zone} />
         </div>
-      )}
-      {band.option_zone && <div className="card-extra">+V {label(band.option_zone)}</div>}
+      ))}
     </>
   );
 }
 
-/** 「候选 [zone] label」, shared by the card and the doc page header. */
-export function CandidateHead({ label, zone, zoneLabel }: {
-  label: string;
-  zone: ZoneId | null;
+/** 「+V [zone] +V 18.17」 or 「候选 [zone] label」, shared by the card and the doc page header. */
+export function BandHead({ band, zoneLabel }: {
+  band: ExtraBand;
   zoneLabel: (id: string) => string;
 }) {
+  const { zone, label } = band;
   return (
     <div className="band-head">
-      <span className="band-caption">候选</span>
+      <span className="band-caption">{EXTRA_CAPTION[band.kind]}</span>
       {/* Zones come only from the server; a missing one is shown as such, never computed here. */}
       {zone
         ? <span className={`tag zone-bg-${zone}`}>{zoneLabel(zone)}</span>

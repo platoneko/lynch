@@ -6,7 +6,7 @@ export interface Anchors {
   H: number;
 }
 
-/** The price range one card's bars share, so a candidate's shift against the base shows. */
+/** The price range one card's bars share, so each extra band's shift against the base shows. */
 export interface Scale {
   lo: number;
   hi: number;
@@ -17,10 +17,9 @@ const MIN_LABEL_GAP = 16;
 // Within this distance (percent of the bar width) of an end, a centred number would spill past it.
 const LABEL_EDGE = 10;
 
-export function barScale(base: Anchors, candidate: Anchors | null): Scale {
-  return candidate
-    ? { lo: Math.min(base.L, candidate.L), hi: Math.max(base.H, candidate.H) }
-    : { lo: base.L, hi: base.H };
+/** Lowest L to highest H over every band shown on the card. */
+export function barScale(bands: Anchors[]): Scale {
+  return { lo: Math.min(...bands.map((b) => b.L)), hi: Math.max(...bands.map((b) => b.H)) };
 }
 
 /** Percent positions on `scale` of the anchors, the zone cut points A/B and the price. */

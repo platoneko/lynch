@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { TickerRow, ZoneId } from '../types';
-import { applyFilter, DEFAULT_FILTER, latestAsOf, lynchClasses, quoteTimeText } from './listModel';
+import { applyFilter, DEFAULT_FILTER, extraBands, latestAsOf, lynchClasses, quoteTimeText } from './listModel';
 
 const ZONES = ['deep_discount', 'conservative', 'neutral', 'optimistic', 'stretched'];
 
 function row(ticker: string, over: Partial<TickerRow> = {}): TickerRow {
   return {
     ticker, name: `${ticker} name`, market: 'US', lynch_primary: 'stalwart', lynch_secondary: null,
-    currency: 'USD', L: 10, M: 20, H: 40, blocked: null, candidate: null,
+    currency: 'USD', L: 10, M: 20, H: 40, blocked: null, option: null, candidate: null,
     band: { price: 25, as_of: '2026-09-26T09:03:00+08:00', zone: 'neutral', option_zone: null, candidate_zone: null },
     quote_error: null, error: null, ...over,
   };
@@ -108,5 +108,28 @@ describe('lynchClasses', () => {
   });
   it('falls back to the id for an unknown class', () => {
     expect(lynchClasses(row('A', { lynch_primary: 'new_kind' }), label)).toBe('new_kind');
+  });
+});
+
+describe('extraBands', () => {
+  const option = { v_opt: 18.17, L: 10, M: 25, H: 58.17, line: null, rows: [] };
+  const candidate = { label: 'FY28', L: 12, M: 22, H: 44, gate: null, background: null };
+  const zones = { price: 25, as_of: '2026-09-26T09:03:00+08:00', zone: 'neutral', option_zone: 'conservative',
+    candidate_zone: 'optimistic' } as const;
+  it('orders +V before the candidate, each with its own zone and label', () => {
+    const bands = extraBands(row('A.US', { option, candidate, band: zones }));
+    expect(bands.map((b) => [b.kind, b.label, b.zone, b.anchors.H])).toEqual([
+      ['option', '+V 18.17', 'conservative', 58.17],
+      ['candidate', 'FY28', 'optimistic', 44],
+    ]);
+  });
+  it('formats V_opt like the price labels', () => {
+    expect(extraBands(row('A.US', { option: { ...option, v_opt: 4 } }))[0].label).toBe('+V 4.00');
+  });
+  it('keeps a band whose zone is missing, with a null zone', () => {
+    expect(extraBands(row('A.US', { option, band: null })).map((b) => b.zone)).toEqual([null]);
+  });
+  it('is empty without an option or a candidate', () => {
+    expect(extraBands(row('A.US'))).toEqual([]);
   });
 });
