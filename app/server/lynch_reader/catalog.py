@@ -29,7 +29,7 @@ from eval.lib.frameworks import (  # noqa: E402
     market_bucket,
 )
 from eval.lib.price import Quote, fetch_quotes  # noqa: E402
-from eval.lib.zones import ZONE_CN, ZONE_ORDER, price_zones  # noqa: E402
+from eval.lib.zones import ZONE_CN, ZONE_ORDER, credited_option_band, price_zones  # noqa: E402
 
 __all__ = ["FRAMEWORKS_DIR", "REPO_ROOT", "Quote", "QuoteCache", "catalog", "framework_path"]
 
@@ -37,7 +37,7 @@ log = logging.getLogger("lynch_reader")
 
 ROW_KEYS = (
     "ticker", "name", "market", "lynch_primary", "lynch_secondary", "currency",
-    "L", "M", "H", "blocked", "candidate", "band", "quote_error", "error",
+    "L", "M", "H", "blocked", "option", "candidate", "band", "quote_error", "error",
 )
 
 # The home refresh button tolerates this much staleness; it also bounds Longbridge CLI calls.
@@ -51,6 +51,8 @@ TZ = ZoneInfo("Asia/Shanghai")
 
 _ASSUMPTIONS = re.compile(r"^## 2\. Assumptions[^\n]*\n(.*?)(?=^## |\Z)", re.MULTILINE | re.DOTALL)
 _CELL_SEP = re.compile(r"(?<!\\)\|")  # `\|` inside a cell is text, not a separator
+# Assumption ids as the prose cites them: `A12`, `A23a`, `A2e-7c-4`, `A3′`.
+_ASSUMPTION_ID = re.compile(r"(?<![0-9A-Za-z])A[0-9][0-9A-Za-z]*(?:-[0-9A-Za-z]+)*′?")
 
 
 @dataclass(frozen=True)
@@ -161,6 +163,7 @@ def _ticker_row(path: Path) -> tuple[dict[str, Any], FrameworkMeta | None]:
         log.warning("framework parse failed: %s: %s", path.name, e)
         row["error"] = str(e)
         return row, None
+    assumptions = _assumption_rows(md)
     row.update(
         name=meta.name,
         market=market_bucket(meta.ticker),
@@ -171,7 +174,8 @@ def _ticker_row(path: Path) -> tuple[dict[str, Any], FrameworkMeta | None]:
         M=meta.M,
         H=meta.H,
         blocked=meta.blocked,
-        candidate=_candidate(meta, md),
+        option=_option(meta, assumptions),
+        candidate=_candidate(meta, assumptions),
     )
     return row, meta
 
@@ -211,7 +215,21 @@ def _quote_failure(e: Exception) -> str:
     return f"取价失败：{first[:120]}"
 
 
-def _candidate(meta: FrameworkMeta, md: str) -> dict[str, Any] | None:
+def _option(meta: FrameworkMeta, assumptions: dict[str, str]) -> dict[str, Any] | None:
+    """The +V band plus where the option comes from: its Outputs line and the rows it cites."""
+    band = credited_option_band(meta)
+    if band is None:
+        return None
+    line = meta.option_line
+    cited = dict.fromkeys(_ASSUMPTION_ID.findall(line)) if line else {}
+    L, M, H = band
+    return {
+        "v_opt": meta.v_opt, "L": L, "M": M, "H": H, "line": line,
+        "rows": [{"id": a, "text": assumptions[a]} for a in cited if a in assumptions],
+    }
+
+
+def _candidate(meta: FrameworkMeta, assumptions: dict[str, str]) -> dict[str, Any] | None:
     """The candidate band plus why it is only a candidate: its gate assumption's text."""
     if meta.candidate is None:
         return None
@@ -219,18 +237,19 @@ def _candidate(meta: FrameworkMeta, md: str) -> dict[str, Any] | None:
     gate = meta.candidate_gate
     return {
         "label": meta.candidate_label, "L": L, "M": M, "H": H,
-        "gate": gate, "background": _assumption_text(md, gate) if gate else None,
+        "gate": gate, "background": assumptions.get(gate) if gate else None,
     }
 
 
-def _assumption_text(md: str, gate: str) -> str | None:
-    """Second cell of the §2 Assumptions row whose first cell is `gate`."""
+def _assumption_rows(md: str) -> dict[str, str]:
+    """{first cell: second cell} of the §2 Assumptions table; the first row of an id wins."""
     section = _ASSUMPTIONS.search(md)
     if section is None:
-        return None
+        return {}
+    rows: dict[str, str] = {}
     for line in section.group(1).splitlines():
         cells = [c.strip() for c in _CELL_SEP.split(line.strip())]
         # `| id | text | …` splits into ['', 'id', 'text', …].
-        if len(cells) >= 3 and cells[0] == "" and cells[1] == gate:
-            return cells[2]
-    return None
+        if len(cells) >= 3 and cells[0] == "":
+            rows.setdefault(cells[1], cells[2])
+    return rows

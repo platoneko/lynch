@@ -40,7 +40,7 @@ def test_parsed_row_is_zoned_on_the_live_price(repo, quotes):
     assert row == {
         "ticker": "AAA.US", "name": "Alpha Corp", "market": "US",
         "lynch_primary": "fast_grower", "lynch_secondary": "cyclical", "currency": "USD",
-        "L": 10.0, "M": 20.0, "H": 40.0, "blocked": None, "candidate": None,
+        "L": 10.0, "M": 20.0, "H": 40.0, "blocked": None, "option": None, "candidate": None,
         "band": {"price": 25.0, "as_of": AS_OF, "zone": zone_of(25.0, 10, 20, 40),
                  "option_zone": None, "candidate_zone": None},
         "quote_error": None, "error": None,
@@ -299,3 +299,72 @@ def test_real_frameworks_candidates(quotes):
     tencent = rows["0700.HK"]["candidate"]
     assert tencent["gate"] == "A1c"
     assert tencent["background"].startswith("**候选带（FY2028E·汇丰单家）**")
+
+
+OPTION_ASSUMPTIONS = """
+## 2. Assumptions
+
+| # | 假设 | 状态 | 来源 | 输入 |
+|---|------|------|------|------|
+| A12 | **SiC 走 \\(V_{opt}\\)**：one-off external price | `active` | x | y |
+| A2e-7c-4 | option ceiling rule | `active` | x | y |
+| A3′ | primed row | `active` | x | y |
+
+## 3. 可演算块
+"""
+OPTION_LINE = ("\\(V_{opt}\\) = **10** · \\(p_L/p_M/p_H\\) = **0 / 0.5 / 1.0** —— "
+               "上限见 A12、A2e-7c-4 与 A3′；A2f 与 A99 不在表里，A12 重复")
+
+
+def write_option(fw, outputs: str, assumptions: str = OPTION_ASSUMPTIONS) -> None:
+    text = framework_md("AAA.US", "Alpha Corp", "`fast_grower`") + assumptions + "\n### Outputs\n\n" + outputs
+    (fw / "AAA.US.md").write_text(text, encoding="utf-8")
+
+
+def test_option_band_with_its_background(repo, quotes):
+    write_option(repo, f"- {OPTION_LINE}\n")
+    assert rows_by_ticker(repo, quotes)["AAA.US"]["option"] == {
+        "v_opt": 10.0, "L": 10.0, "M": 25.0, "H": 50.0, "line": OPTION_LINE,
+        # Ids in the line's order, once each; only those that head an Assumptions row.
+        "rows": [
+            {"id": "A12", "text": "**SiC 走 \\(V_{opt}\\)**：one-off external price"},
+            {"id": "A2e-7c-4", "text": "option ceiling rule"},
+            {"id": "A3′", "text": "primed row"},
+        ],
+    }
+
+
+def test_option_without_outputs_line_keeps_the_band(repo, quotes):
+    # V_opt and p_k written outside Outputs: the band still shows, the missing text is simply absent.
+    elsewhere = OPTION_ASSUMPTIONS + "\n\\(V_{opt}\\) = **10** · \\(p_L/p_M/p_H\\) = **0 / 0.5 / 1.0**\n"
+    write_option(repo, "- 底牌说明\n", elsewhere)
+    option = rows_by_ticker(repo, quotes)["AAA.US"]["option"]
+    assert option == {"v_opt": 10.0, "L": 10.0, "M": 25.0, "H": 50.0, "line": None, "rows": []}
+
+
+@pytest.mark.parametrize("outputs", [
+    "- \\(V_{opt}\\) = **0**\n",
+    "- \\(V_{opt}\\) = **0** · \\(p_L/p_M/p_H\\) = **0 / 0.5 / 1.0**\n",
+    "- \\(V_{opt}\\) = **10**（no per-tier credit）\n",
+], ids=["zero", "zero-with-p", "no-p"])
+def test_no_option_band_is_null(repo, quotes, outputs):
+    write_option(repo, outputs)
+    assert rows_by_ticker(repo, quotes)["AAA.US"]["option"] is None
+
+
+def test_real_frameworks_options(quotes):
+    rows = rows_by_ticker(FRAMEWORKS_DIR, quotes)
+    with_option = {t: r["option"] for t, r in rows.items() if r["option"] is not None}
+    assert len(with_option) >= 20
+    for ticker, option in with_option.items():
+        assert option["v_opt"] > 0, ticker
+        # Every credited band today keeps the strict ladder: no ties.
+        assert option["L"] < option["M"] < option["H"], ticker
+        assert option["line"] and option["line"].startswith("\\(V_{opt}\\)"), ticker
+    # A V_opt = 0 disclosure line is no band.
+    assert rows["0700.HK"]["option"] is None
+    cohr = with_option["COHR.US"]
+    assert cohr["v_opt"] == 18.17
+    assert [round(cohr[k], 2) for k in "LMH"] == [77.82, 197.51, 331.15]
+    assert [r["id"] for r in cohr["rows"]] == ["A12"]
+    assert cohr["rows"][0]["text"].startswith("**SiC 子公司不进底牌")
