@@ -113,7 +113,13 @@ button { font: inherit; color: inherit; }
 .sec-3 > .md { padding-left: 14px; }
 .sec-caret { flex: none; width: 1em; color: var(--muted); }
 
-.md { overflow-wrap: anywhere; }
+/* Reading typography: CJK prose mixed with Latin and inline math needs more
+   leading and a little tracking than UI text; KaTeX's default 1.21em makes
+   inline formulas visibly larger than the surrounding text. */
+.md { overflow-wrap: anywhere; font-size: 16px; line-height: 1.8; letter-spacing: 0.02em; }
+.md p, .md li { margin: 0.6em 0; }
+.md .katex { font-size: 1.05em; letter-spacing: normal; margin: 0 0.12em; }
+.md table, .md code, .md pre { letter-spacing: normal; }
 .md h1 { font-size: 20px; line-height: 1.35; margin: 4px 0 8px; }
 .md blockquote { margin: 8px 0; padding: 4px 12px; border-left: 3px solid var(--line); color: var(--muted); font-size: 13px; }
 .md .table-scroll { overflow-x: auto; margin: 8px 0; -webkit-overflow-scrolling: touch; }
