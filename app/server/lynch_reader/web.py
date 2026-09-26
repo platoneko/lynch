@@ -1,4 +1,4 @@
-"""HTTP surface: ticker catalog, raw framework markdown, and the built web UI.
+"""HTTP surface: ticker catalog with zones on live quotes, raw framework markdown, and the built web UI.
 
 Read-only by contract (AGENTS.md): nothing here writes frameworks/ or output/.
 """
@@ -15,7 +15,7 @@ from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from lynch_reader.catalog import BANDS_DIR, FRAMEWORKS_DIR, REPO_ROOT, catalog, framework_path
+from lynch_reader.catalog import FRAMEWORKS_DIR, REPO_ROOT, QuoteCache, catalog, framework_path
 
 WEB_DIST = REPO_ROOT / "app" / "web" / "dist"
 # The personal tailnet address of this host; other local users must not reach it via 0.0.0.0.
@@ -38,9 +38,9 @@ class WebDist(StaticFiles):
         return response
 
 
-def create_app(frameworks_dir: Path, bands_dir: Path, web_dist: Path) -> Starlette:
+def create_app(frameworks_dir: Path, web_dist: Path, quotes: QuoteCache) -> Starlette:
     def tickers(_: Request) -> Response:
-        return JSONResponse(catalog(frameworks_dir, bands_dir))
+        return JSONResponse(catalog(frameworks_dir, quotes))
 
     def framework(request: Request) -> Response:
         path = framework_path(request.path_params["ticker"], frameworks_dir)
@@ -63,7 +63,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    uvicorn.run(create_app(FRAMEWORKS_DIR, BANDS_DIR, WEB_DIST), host=args.host, port=args.port)
+    uvicorn.run(create_app(FRAMEWORKS_DIR, WEB_DIST, QuoteCache()), host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

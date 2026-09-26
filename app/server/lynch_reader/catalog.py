@@ -1,20 +1,26 @@
-"""Ticker rows for the reader: framework header fields plus the latest band artifact."""
+"""Ticker rows for the reader: framework header fields plus zones on a live Longbridge quote."""
 from __future__ import annotations
 
 import logging
 import math
 import re
+import subprocess
 import sys
+import threading
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import datetime
+from functools import partial
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from eval.lib.bands_io import BANDS_DIR, bands_path, read_previous  # noqa: E402
 from eval.lib.frameworks import (  # noqa: E402
-    _CANDIDATE,
     FRAMEWORKS_DIR,
     FrameworkMeta,
     LYNCH_CN,
@@ -22,30 +28,87 @@ from eval.lib.frameworks import (  # noqa: E402
     load_framework,
     market_bucket,
 )
-from eval.lib.zones import ZONE_CN, ZONE_ORDER  # noqa: E402
+from eval.lib.price import Quote, fetch_quotes  # noqa: E402
+from eval.lib.zones import ZONE_CN, ZONE_ORDER, price_zones  # noqa: E402
 
-__all__ = ["BANDS_DIR", "FRAMEWORKS_DIR", "REPO_ROOT", "catalog", "framework_path"]
+__all__ = ["FRAMEWORKS_DIR", "REPO_ROOT", "Quote", "QuoteCache", "catalog", "framework_path"]
 
 log = logging.getLogger("lynch_reader")
 
 ROW_KEYS = (
     "ticker", "name", "market", "lynch_primary", "lynch_secondary", "currency",
-    "L", "M", "H", "blocked", "candidate", "band", "error",
+    "L", "M", "H", "blocked", "candidate", "band", "quote_error", "error",
 )
-# Only what a card shows; the rest of the artifact belongs to the daily digest.
-BAND_KEYS = ("price", "as_of", "zone", "option_zone", "candidate_zone")
 
-# The candidate line names its gate after the primed anchors: `… · 门槛 A1c（note）`.
-_GATE = re.compile(r"门槛\s*(A[0-9A-Za-z]+′?)")
+# The home refresh button tolerates this much staleness; it also bounds Longbridge CLI calls.
+QUOTE_TTL_S = 30.0
+QUOTE_TIMEOUT_S = 15
+NO_QUOTE = "无报价（停牌或代码变更）"
+# Same timestamp form as the daily digest's `_as_of_iso` (scripts/daily_bands.py).
+TZ = ZoneInfo("Asia/Shanghai")
+
 _ASSUMPTIONS = re.compile(r"^## 2\. Assumptions[^\n]*\n(.*?)(?=^## |\Z)", re.MULTILINE | re.DOTALL)
 _CELL_SEP = re.compile(r"(?<!\\)\|")  # `\|` inside a cell is text, not a separator
 
 
-def catalog(frameworks_dir: Path, bands_dir: Path) -> dict[str, Any]:
+@dataclass(frozen=True)
+class QuoteBatch:
+    symbols: tuple[str, ...]
+    quotes: dict[str, Quote]
+    fetched_at: float  # clock seconds since the epoch
+
+
+class QuoteCache:
+    """One batched quote call for the whole pool, reused for QUOTE_TTL_S.
+
+    The lock makes concurrent requests wait for one CLI call instead of each
+    starting their own. A failed call is not cached, so a refresh retries it.
+    """
+
+    def __init__(
+        self,
+        fetch: Callable[[list[str]], dict[str, Quote]] = partial(
+            fetch_quotes, allow_missing=True, timeout_s=QUOTE_TIMEOUT_S
+        ),
+        clock: Callable[[], float] = time.time,
+    ) -> None:
+        self._fetch = fetch
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._batch: QuoteBatch | None = None
+
+    def get(self, symbols: list[str]) -> QuoteBatch:
+        with self._lock:
+            b = self._batch
+            # A pool that changed since (framework added or renamed) needs its own batch.
+            if b is None or b.symbols != tuple(symbols) or self._clock() - b.fetched_at >= QUOTE_TTL_S:
+                quotes = self._fetch(list(symbols))
+                b = self._batch = QuoteBatch(tuple(symbols), quotes, self._clock())
+            return b
+
+
+def catalog(frameworks_dir: Path, quotes: QuoteCache) -> dict[str, Any]:
+    # Step 1: framework header fields; a bad file costs only its own row.
+    parsed = [_ticker_row(p) for p in list_framework_paths(frameworks_dir)]
+    priced = [(row, meta) for row, meta in parsed if meta is not None]
+
+    # Step 2: one quote batch for every parsed row. When the whole call fails the list
+    # still loads with every band empty; an old snapshot is never shown in its place.
+    quote_error = None
+    try:
+        batch = quotes.get([meta.ticker for _, meta in priced])
+    except Exception as e:  # noqa: BLE001 — external CLI: missing, non-zero exit, timeout, bad JSON
+        log.warning("quote fetch failed: %s", e)
+        quote_error = _quote_failure(e)
+    else:
+        for row, meta in priced:
+            _price_row(row, meta, batch)
+
     return {
         "zones": [{"id": z, "label": ZONE_CN[z]} for z in ZONE_ORDER],
         "lynch_classes": [{"id": k, "label": v} for k, v in LYNCH_CN.items()],
-        "tickers": [_ticker_row(p, bands_dir) for p in list_framework_paths(frameworks_dir)],
+        "quote_error": quote_error,
+        "tickers": [row for row, _ in parsed],
     }
 
 
@@ -57,15 +120,16 @@ def framework_path(ticker: str, frameworks_dir: Path) -> Path | None:
     return None
 
 
-def _ticker_row(path: Path, bands_dir: Path) -> dict[str, Any]:
+def _ticker_row(path: Path) -> tuple[dict[str, Any], FrameworkMeta | None]:
     row: dict[str, Any] = dict.fromkeys(ROW_KEYS)
     row["ticker"] = path.stem
     try:
         meta = load_framework(path)
-    except Exception as e:  # noqa: BLE001 — one bad header must not blank the whole list
+        md = path.read_text(encoding="utf-8")
+    except Exception as e:  # noqa: BLE001 — one bad file must not blank the whole list
         log.warning("framework parse failed: %s: %s", path.name, e)
         row["error"] = str(e)
-        return row
+        return row, None
     row.update(
         name=meta.name,
         market=market_bucket(meta.ticker),
@@ -76,10 +140,41 @@ def _ticker_row(path: Path, bands_dir: Path) -> dict[str, Any]:
         M=meta.M,
         H=meta.H,
         blocked=meta.blocked,
-        candidate=_candidate(meta, path.read_text(encoding="utf-8")),
-        band=_read_band(meta.ticker, bands_dir),
+        candidate=_candidate(meta, md),
     )
-    return row
+    return row, meta
+
+
+def _price_row(row: dict[str, Any], meta: FrameworkMeta, batch: QuoteBatch) -> None:
+    """The row's band: live price, fetch time, and zones by the daily digest's own rules."""
+    q = batch.quotes.get(meta.ticker)
+    # NaN / inf cannot be serialized, and a price ≤ 0 is no trade price.
+    if q is None or not math.isfinite(q.last) or q.last <= 0:
+        log.warning("no usable quote: %s: %s", meta.ticker, q)
+        row["quote_error"] = NO_QUOTE
+        return
+    try:
+        zone, option_zone, candidate_zone = price_zones(q.last, meta)
+    except ValueError as e:  # a +V band out of order is not caught at parse time
+        log.warning("zones failed: %s: %s", meta.ticker, e)
+        row["error"] = str(e)
+        return
+    row["band"] = {
+        "price": q.last,
+        "as_of": datetime.fromtimestamp(batch.fetched_at, TZ).isoformat(timespec="seconds"),
+        "zone": zone,
+        "option_zone": option_zone,
+        "candidate_zone": candidate_zone,
+    }
+
+
+def _quote_failure(e: Exception) -> str:
+    """One short banner line; a timeout's own message carries the whole symbol list."""
+    if isinstance(e, subprocess.TimeoutExpired):
+        return f"取价超时（{QUOTE_TIMEOUT_S} 秒）"
+    text = str(e).strip()
+    first = text.splitlines()[0] if text else type(e).__name__
+    return f"取价失败：{first[:120]}"
 
 
 def _candidate(meta: FrameworkMeta, md: str) -> dict[str, Any] | None:
@@ -87,22 +182,11 @@ def _candidate(meta: FrameworkMeta, md: str) -> dict[str, Any] | None:
     if meta.candidate is None:
         return None
     L, M, H = meta.candidate
-    gate = _candidate_gate(md)
+    gate = meta.candidate_gate
     return {
         "label": meta.candidate_label, "L": L, "M": M, "H": H,
         "gate": gate, "background": _assumption_text(md, gate) if gate else None,
     }
-
-
-def _candidate_gate(md: str) -> str | None:
-    # Reuse eval's own candidate regex so the gate comes from the very line the anchors did;
-    # only the rest of that line after H′ is searched (a label may name an id too).
-    m = _CANDIDATE.search(md)
-    if m is None:
-        return None
-    end = md.find("\n", m.end())
-    gate = _GATE.search(md, m.end(), len(md) if end < 0 else end)
-    return gate.group(1) if gate else None
 
 
 def _assumption_text(md: str, gate: str) -> str | None:
@@ -116,27 +200,3 @@ def _assumption_text(md: str, gate: str) -> str | None:
         if len(cells) >= 3 and cells[0] == "" and cells[1] == gate:
             return cells[2]
     return None
-
-
-def _read_band(ticker: str, bands_dir: Path) -> dict[str, Any] | None:
-    # read_previous only absorbs OSError/JSONDecodeError; a non-UTF-8 file
-    # (UnicodeDecodeError, a ValueError) must also cost just this row.
-    try:
-        record = read_previous(ticker, bands_dir)
-    except (ValueError, OSError) as e:
-        log.warning("band artifact unreadable: %s: %s", ticker, e)
-        return None
-    if record is None:
-        if bands_path(ticker, bands_dir).exists():
-            log.warning("band artifact unreadable: %s", ticker)
-        return None
-    if not isinstance(record, dict):
-        log.warning("band artifact is not an object: %s", ticker)
-        return None
-    price = record.get("price")
-    # json.loads accepts NaN/Infinity, which the JSON response cannot carry.
-    if (isinstance(price, bool) or not isinstance(price, (int, float))
-            or not math.isfinite(price) or "as_of" not in record):
-        log.warning("band artifact lacks price/as_of: %s", ticker)
-        return None
-    return {k: record.get(k) for k in BAND_KEYS}

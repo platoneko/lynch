@@ -1,12 +1,13 @@
-"""Fake frameworks/ and bands/ trees shaped like the real repo."""
+"""A fake frameworks/ tree shaped like the real repo, and a fake Longbridge quote batch."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
 
-AS_OF = "2026-09-26T09:03:00+08:00"
+from lynch_reader.catalog import Quote, QuoteCache
+
+NOW = 1_790_000_000.0  # fake wall clock, seconds since the epoch
 
 
 def framework_md(ticker: str, name: str, lynch: str, blocked: str | None = None) -> str:
@@ -23,24 +24,52 @@ def framework_md(ticker: str, name: str, lynch: str, blocked: str | None = None)
 
 
 @pytest.fixture
-def repo(tmp_path: Path) -> tuple[Path, Path]:
+def repo(tmp_path: Path) -> Path:
     fw = tmp_path / "frameworks"
-    bands = tmp_path / "bands"
     fw.mkdir()
-    bands.mkdir()
     (fw / "AAA.US.md").write_text(framework_md("AAA.US", "Alpha Corp", "`fast_grower` / `cyclical`"), encoding="utf-8")
     (fw / "BBB.US.md").write_text(
         framework_md("BBB.US", "Beta Inc", "`stalwart`", blocked="test reason; unblock when X"), encoding="utf-8"
     )
     (fw / "0001.HK.md").write_text("# 0001.HK — Broken\n\nno anchors here\n", encoding="utf-8")
     (fw / "_TEMPLATE.md").write_text("# template\n", encoding="utf-8")
-    (bands / "AAA.US.json").write_text(
-        json.dumps({"price": 25.0, "as_of": AS_OF, "zone": "neutral", "option_zone": None,
-                    "candidate_zone": "optimistic", "anchors": {"L": 10}}),
-        encoding="utf-8",
-    )
-    (bands / "BBB.US.json").write_text(
-        json.dumps({"price": 5.0, "as_of": AS_OF, "zone": None, "option_zone": None, "candidate_zone": None}),
-        encoding="utf-8",
-    )
-    return fw, bands
+    return fw
+
+
+class FakeFetch:
+    """Stands in for `fetch_quotes`: fixed last prices, a call log, and an optional failure."""
+
+    def __init__(self, prices: dict[str, float], error: Exception | None = None) -> None:
+        self.prices = prices
+        self.error = error
+        self.calls: list[list[str]] = []
+
+    def __call__(self, symbols: list[str]) -> dict[str, Quote]:
+        self.calls.append(list(symbols))
+        if self.error is not None:
+            raise self.error
+        return {s: Quote(symbol=s, last=p, prev_close=None, status="Normal")
+                for s, p in self.prices.items() if s in symbols}
+
+
+class FakeClock:
+    def __init__(self) -> None:
+        self.now = NOW
+
+    def __call__(self) -> float:
+        return self.now
+
+
+@pytest.fixture
+def fetch() -> FakeFetch:
+    return FakeFetch({"AAA.US": 25.0, "BBB.US": 5.0})
+
+
+@pytest.fixture
+def clock() -> FakeClock:
+    return FakeClock()
+
+
+@pytest.fixture
+def quotes(fetch: FakeFetch, clock: FakeClock) -> QuoteCache:
+    return QuoteCache(fetch=fetch, clock=clock)
