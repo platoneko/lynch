@@ -1,5 +1,6 @@
 package io.lynch.reader
 
+import android.util.Log
 import java.net.NetworkInterface
 import org.json.JSONArray
 import org.json.JSONObject
@@ -17,7 +18,9 @@ object NetInterfaces {
         val rows = JSONArray()
         val all = NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
         for (ni in all) {
-            val row = runCatching { row(ni) }.getOrNull() ?: continue
+            val row = runCatching { row(ni) }
+                .onFailure { Log.w(MainActivity.TAG, "skipping interface ${ni.name}", it) }
+                .getOrNull() ?: continue
             rows.put(row)
         }
         return rows.toString()

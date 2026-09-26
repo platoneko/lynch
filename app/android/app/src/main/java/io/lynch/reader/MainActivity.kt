@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
@@ -34,6 +35,7 @@ class MainActivity : Activity() {
     private lateinit var web: WebView
     private var authUrl: String? = null
     private var loadedPort = 0 // proxy port the WebView was booted against; 0 = not loaded
+    private var clearHistoryOnLoad = false // set when a new proxy session is booted
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -95,7 +97,10 @@ class MainActivity : Activity() {
     }
 
     private fun refreshInterfaces() {
-        Thread { runCatching { Tsnetlib.setInterfaces(NetInterfaces.json()) } }.start()
+        Thread {
+            runCatching { Tsnetlib.setInterfaces(NetInterfaces.json()) }
+                .onFailure { Log.w(TAG, "setInterfaces failed", it) }
+        }.start()
     }
 
     // ── Step 2: WebView pinned to the loopback proxy ──
@@ -103,6 +108,7 @@ class MainActivity : Activity() {
     private fun openWeb(port: Int) {
         if (loadedPort != port) {
             loadedPort = port
+            clearHistoryOnLoad = true
             web.loadUrl(Tsnetlib.bootURL())
         }
         panel.visibility = View.GONE
@@ -119,6 +125,15 @@ class MainActivity : Activity() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val u = request.url
                 return !(u.scheme == "http" && u.host == "127.0.0.1" && u.port == loadedPort)
+            }
+
+            // Each restart serves on a new port; pages from the old session are dead, so once the
+            // new session's first page commits, drop them or Back walks into connection errors.
+            override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
+                if (clearHistoryOnLoad && Uri.parse(url.orEmpty()).port == loadedPort) {
+                    clearHistoryOnLoad = false
+                    view.clearHistory()
+                }
             }
         }
     }
@@ -193,6 +208,7 @@ class MainActivity : Activity() {
     }
 
     companion object {
+        const val TAG = "lynch"
         private const val KEY_SERVER = "server"
         private const val DEFAULT_SERVER = "pivot-home.tail090ab2.ts.net:3151"
     }
