@@ -42,6 +42,8 @@ ROW_KEYS = (
 
 # The home refresh button tolerates this much staleness; it also bounds Longbridge CLI calls.
 QUOTE_TTL_S = 30.0
+# During an outage each call can take the whole timeout; requests in this window share one failure.
+QUOTE_BACKOFF_S = 5.0
 QUOTE_TIMEOUT_S = 15
 NO_QUOTE = "无报价（停牌或代码变更）"
 # Same timestamp form as the daily digest's `_as_of_iso` (scripts/daily_bands.py).
@@ -55,14 +57,23 @@ _CELL_SEP = re.compile(r"(?<!\\)\|")  # `\|` inside a cell is text, not a separa
 class QuoteBatch:
     symbols: tuple[str, ...]
     quotes: dict[str, Quote]
-    fetched_at: float  # clock seconds since the epoch
+    fetched_at: float  # wall clock, seconds since the epoch: only for `as_of`
+    fetched_mono: float  # monotonic clock: for the TTL
+
+
+@dataclass(frozen=True)
+class QuoteFailure:
+    symbols: tuple[str, ...]
+    error: Exception
+    failed_mono: float
 
 
 class QuoteCache:
     """One batched quote call for the whole pool, reused for QUOTE_TTL_S.
 
     The lock makes concurrent requests wait for one CLI call instead of each
-    starting their own. A failed call is not cached, so a refresh retries it.
+    starting their own; those that waited get that call's batch or failure.
+    A failure is reused only for QUOTE_BACKOFF_S, and never replaced by an older batch.
     """
 
     def __init__(
@@ -70,21 +81,41 @@ class QuoteCache:
         fetch: Callable[[list[str]], dict[str, Quote]] = partial(
             fetch_quotes, allow_missing=True, timeout_s=QUOTE_TIMEOUT_S
         ),
-        clock: Callable[[], float] = time.time,
+        monotonic: Callable[[], float] = time.monotonic,
+        wall: Callable[[], float] = time.time,
     ) -> None:
         self._fetch = fetch
-        self._clock = clock
+        self._monotonic = monotonic
+        self._wall = wall
         self._lock = threading.Lock()
         self._batch: QuoteBatch | None = None
+        self._failure: QuoteFailure | None = None
 
     def get(self, symbols: list[str]) -> QuoteBatch:
+        key = tuple(symbols)
         with self._lock:
+            # A pool that changed since (framework added or renamed) needs its own call.
+            f = self._failure
+            if f is not None and f.symbols == key and self._monotonic() - f.failed_mono < QUOTE_BACKOFF_S:
+                raise f.error
             b = self._batch
-            # A pool that changed since (framework added or renamed) needs its own batch.
-            if b is None or b.symbols != tuple(symbols) or self._clock() - b.fetched_at >= QUOTE_TTL_S:
-                quotes = self._fetch(list(symbols))
-                b = self._batch = QuoteBatch(tuple(symbols), quotes, self._clock())
+            if b is None or b.symbols != key or self._monotonic() - b.fetched_mono >= QUOTE_TTL_S:
+                b = self._fetch_batch(key)
             return b
+
+    def _fetch_batch(self, key: tuple[str, ...]) -> QuoteBatch:
+        try:
+            quotes = self._fetch(list(key))
+        except Exception as e:
+            # Stamped after the call returns, so requests queued behind it land inside the back-off.
+            self._failure = QuoteFailure(key, e, self._monotonic())
+            raise
+        self._failure = None
+        for s in key:
+            if not _usable(quotes.get(s)):
+                log.warning("no usable quote: %s: %s", s, quotes.get(s))
+        self._batch = QuoteBatch(key, quotes, self._wall(), self._monotonic())
+        return self._batch
 
 
 def catalog(frameworks_dir: Path, quotes: QuoteCache) -> dict[str, Any]:
@@ -148,9 +179,7 @@ def _ticker_row(path: Path) -> tuple[dict[str, Any], FrameworkMeta | None]:
 def _price_row(row: dict[str, Any], meta: FrameworkMeta, batch: QuoteBatch) -> None:
     """The row's band: live price, fetch time, and zones by the daily digest's own rules."""
     q = batch.quotes.get(meta.ticker)
-    # NaN / inf cannot be serialized, and a price ≤ 0 is no trade price.
-    if q is None or not math.isfinite(q.last) or q.last <= 0:
-        log.warning("no usable quote: %s: %s", meta.ticker, q)
+    if not _usable(q):  # logged once when the batch was fetched
         row["quote_error"] = NO_QUOTE
         return
     try:
@@ -166,6 +195,11 @@ def _price_row(row: dict[str, Any], meta: FrameworkMeta, batch: QuoteBatch) -> N
         "option_zone": option_zone,
         "candidate_zone": candidate_zone,
     }
+
+
+def _usable(q: Quote | None) -> bool:
+    # NaN / inf cannot be serialized, and a price ≤ 0 is no trade price.
+    return q is not None and math.isfinite(q.last) and q.last > 0
 
 
 def _quote_failure(e: Exception) -> str:

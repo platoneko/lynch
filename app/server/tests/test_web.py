@@ -36,7 +36,9 @@ def test_non_finite_price_nulls_only_its_row(repo, tmp_path, fetch, quotes):
 
 
 def test_quote_failure_is_200_with_top_level_error(repo, tmp_path, clock):
-    quotes = QuoteCache(fetch=FakeFetch({}, error=RuntimeError("longbridge CLI not found on PATH")), clock=clock)
+    quotes = QuoteCache(
+        fetch=FakeFetch({}, error=RuntimeError("longbridge CLI not found on PATH")), monotonic=clock, wall=clock
+    )
     r = client(repo, tmp_path, quotes).get("/api/tickers")
     assert r.status_code == 200
     body = r.json()

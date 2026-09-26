@@ -3,14 +3,17 @@ from __future__ import annotations
 import logging
 import re
 import subprocess
+import threading
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pytest
 
 from eval.lib.zones import zone_of
-from lynch_reader.catalog import FRAMEWORKS_DIR, NO_QUOTE, QUOTE_TTL_S, QuoteCache, catalog, framework_path
-from tests.conftest import NOW, FakeFetch, framework_md
+from lynch_reader.catalog import (
+    FRAMEWORKS_DIR, NO_QUOTE, QUOTE_BACKOFF_S, QUOTE_TTL_S, QuoteCache, catalog, framework_path,
+)
+from tests.conftest import NOW, FakeClock, FakeFetch, framework_md
 
 AS_OF = datetime.fromtimestamp(NOW, ZoneInfo("Asia/Shanghai")).isoformat(timespec="seconds")
 
@@ -107,6 +110,17 @@ def test_missing_symbol_nulls_only_its_row(repo, fetch, quotes, caplog):
     assert any("AAA.US" in r.getMessage() for r in caplog.records)
 
 
+def test_no_usable_quote_is_logged_once_per_batch(repo, fetch, clock, quotes, caplog):
+    del fetch.prices["AAA.US"]
+    with caplog.at_level(logging.WARNING, logger="lynch_reader"):
+        catalog(repo, quotes)
+        catalog(repo, quotes)  # cache hit: same batch, no new warning
+        assert sum("AAA.US" in r.getMessage() for r in caplog.records) == 1
+        clock.now += QUOTE_TTL_S
+        catalog(repo, quotes)  # a new batch warns again
+        assert sum("AAA.US" in r.getMessage() for r in caplog.records) == 2
+
+
 @pytest.mark.parametrize("price", [float("nan"), float("inf"), 0.0, -1.0], ids=["nan", "inf", "zero", "negative"])
 def test_unusable_price_nulls_only_its_row(repo, fetch, quotes, price):
     fetch.prices["AAA.US"] = price
@@ -122,19 +136,71 @@ def test_unusable_price_nulls_only_its_row(repo, fetch, quotes, price):
 ], ids=["not-on-path", "non-zero-exit", "timeout"])
 def test_whole_call_failure_nulls_every_band(repo, clock, error):
     fetch = FakeFetch({}, error=error)
-    out = catalog(repo, QuoteCache(fetch=fetch, clock=clock))
+    out = catalog(repo, QuoteCache(fetch=fetch, monotonic=clock, wall=clock))
     assert out["quote_error"]
     assert all(r["band"] is None for r in out["tickers"])
     assert all(r["quote_error"] is None for r in out["tickers"])
 
 
-def test_whole_call_failure_is_not_cached(repo, clock):
+def test_whole_call_failure_backs_off_then_retries(repo, clock):
     fetch = FakeFetch({"AAA.US": 25.0}, error=RuntimeError("boom"))
-    quotes = QuoteCache(fetch=fetch, clock=clock)
-    assert catalog(repo, quotes)["quote_error"]
+    quotes = QuoteCache(fetch=fetch, monotonic=clock, wall=clock)
+    assert catalog(repo, quotes)["quote_error"] == "取价失败：boom"
+    # Within the back-off the failure is reused, even once the CLI would succeed.
     fetch.error = None
+    clock.now += QUOTE_BACKOFF_S - 1
+    assert catalog(repo, quotes)["quote_error"] == "取价失败：boom"
+    assert len(fetch.calls) == 1
+    # Past it the call is retried; the failure is never served longer.
+    clock.now += 1
     out = catalog(repo, quotes)
     assert out["quote_error"] is None and len(fetch.calls) == 2
+
+
+def test_failure_after_a_good_batch_does_not_serve_the_old_batch(repo, fetch, clock, quotes):
+    catalog(repo, quotes)
+    clock.now += QUOTE_TTL_S
+    fetch.error = RuntimeError("boom")
+    out = catalog(repo, quotes)
+    assert out["quote_error"] and all(r["band"] is None for r in out["tickers"])
+
+
+def test_requests_waiting_on_a_failing_call_reuse_its_failure(repo, clock):
+    started, release = threading.Event(), threading.Event()
+    calls: list[list[str]] = []
+
+    def slow_failing_fetch(symbols):
+        calls.append(symbols)
+        started.set()
+        release.wait(5)
+        raise RuntimeError("boom")
+
+    quotes = QuoteCache(fetch=slow_failing_fetch, monotonic=clock, wall=clock)
+    results: dict[str, dict] = {}
+    first = threading.Thread(target=lambda: results.update(first=catalog(repo, quotes)))
+    waiter = threading.Thread(target=lambda: results.update(waiter=catalog(repo, quotes)))
+    first.start()
+    assert started.wait(5)
+    waiter.start()  # blocks on the cache lock behind the in-flight call
+    release.set()
+    first.join(5)
+    waiter.join(5)
+    assert len(calls) == 1
+    assert results["first"]["quote_error"] == results["waiter"]["quote_error"] == "取价失败：boom"
+
+
+def test_ttl_follows_the_monotonic_clock_not_the_wall_clock(repo, fetch, clock):
+    wall = FakeClock()
+    quotes = QuoteCache(fetch=fetch, monotonic=clock, wall=wall)
+    catalog(repo, quotes)
+    wall.now -= 3600  # the wall clock is set back an hour: no effect on the TTL
+    catalog(repo, quotes)
+    assert len(fetch.calls) == 1
+    clock.now += QUOTE_TTL_S
+    band = rows_by_ticker(repo, quotes)["AAA.US"]["band"]
+    assert len(fetch.calls) == 2
+    # `as_of` still reports wall time.
+    assert band["as_of"] == datetime.fromtimestamp(wall.now, ZoneInfo("Asia/Shanghai")).isoformat(timespec="seconds")
 
 
 def test_out_of_order_option_band_is_one_row(repo, quotes):

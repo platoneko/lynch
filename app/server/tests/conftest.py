@@ -7,7 +7,7 @@ import pytest
 
 from lynch_reader.catalog import Quote, QuoteCache
 
-NOW = 1_790_000_000.0  # fake wall clock, seconds since the epoch
+NOW = 1_790_000_000.0  # fake clock, seconds since the epoch
 
 
 def framework_md(ticker: str, name: str, lynch: str, blocked: str | None = None) -> str:
@@ -72,4 +72,5 @@ def clock() -> FakeClock:
 
 @pytest.fixture
 def quotes(fetch: FakeFetch, clock: FakeClock) -> QuoteCache:
-    return QuoteCache(fetch=fetch, clock=clock)
+    # One fake serves as both clocks unless a test needs them apart.
+    return QuoteCache(fetch=fetch, monotonic=clock, wall=clock)

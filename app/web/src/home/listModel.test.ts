@@ -39,7 +39,7 @@ describe('filters', () => {
     expect(tickers(applyFilter(rows, f, ZONES))).toEqual(['C.US', 'A.US']);
   });
   it('BLOCKED rows with a stale band zone are excluded by the zone filter', () => {
-    // Marked BLOCKED after the last daily run: the band file still holds yesterday's zone.
+    // The server sends no zone for a BLOCKED row; one left on its band must not match either.
     const rows = [withZone('A.US', 'neutral'), row('B.US', { blocked: 'reason' })];
     const f = { ...DEFAULT_FILTER, zones: ['neutral'] };
     expect(tickers(applyFilter(rows, f, ZONES))).toEqual(['A.US']);
