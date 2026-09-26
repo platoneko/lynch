@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from eval.lib.frameworks import list_framework_paths
 from eval.lib.zones import zone_of
 from lynch_reader.catalog import (
     FRAMEWORKS_DIR, NO_QUOTE, QUOTE_BACKOFF_S, QUOTE_TTL_S, QuoteCache, catalog, framework_path,
@@ -288,8 +289,8 @@ def test_no_candidate_is_null(repo, quotes):
 def test_real_frameworks_candidates(quotes):
     rows = rows_by_ticker(FRAMEWORKS_DIR, quotes)
     line = re.compile(r"^-\s+(?:\*\*)?候选带（", re.MULTILINE)
-    with_line = [p.stem for p in sorted(FRAMEWORKS_DIR.glob("*.md"))
-                 if not p.name.startswith("_") and line.search(p.read_text(encoding="utf-8"))]
+    with_line = [p.stem for p in list_framework_paths(FRAMEWORKS_DIR)
+                 if line.search(p.read_text(encoding="utf-8"))]
     assert with_line
     for ticker in with_line:
         cand = rows[ticker]["candidate"]
