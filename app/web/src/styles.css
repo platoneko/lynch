@@ -60,6 +60,7 @@ button { font: inherit; color: inherit; }
 .card-ticker { font-weight: 600; }
 .card-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
 .card-price { font-variant-numeric: tabular-nums; }
+.card-session { margin-right: 4px; color: var(--muted); font-size: 11px; }
 .card-classes { color: var(--muted); font-size: 13px; margin-top: 2px; }
 .band { margin-top: 8px; }
 .band-inline { display: flex; align-items: flex-start; gap: 10px; }

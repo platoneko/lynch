@@ -4,13 +4,14 @@ import logging
 import re
 import subprocess
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
 
 from eval.lib.frameworks import list_framework_paths
 from eval.lib.zones import zone_of
+from eval.lib.price import SessionQuote
 from lynch_reader.catalog import (
     FRAMEWORKS_DIR, NO_QUOTE, QUOTE_BACKOFF_S, QUOTE_MAX_AGE_S, QUOTE_REFRESH_MAX_AGE_S, QuoteCache, catalog, framework_path,
 )
@@ -44,7 +45,7 @@ def test_parsed_row_is_zoned_on_the_live_price(repo, quotes):
         "ticker": "AAA.US", "name": "Alpha Corp", "market": "US",
         "lynch_primary": "fast_grower", "lynch_secondary": "cyclical", "currency": "USD",
         "L": 10.0, "M": 20.0, "H": 40.0, "option": None, "candidate": None,
-        "band": {"price": 25.0, "as_of": AS_OF, "zone": zone_of(25.0, 10, 20, 40),
+        "band": {"price": 25.0, "session": None, "as_of": AS_OF, "zone": zone_of(25.0, 10, 20, 40),
                  "option_zone": None, "candidate_zone": None},
         "quote_error": None, "error": None,
     }
@@ -379,3 +380,40 @@ def test_real_frameworks_options(quotes):
     assert [round(cohr[k], 2) for k in "LMH"] == [77.82, 197.51, 331.15]
     assert [r["id"] for r in cohr["rows"]] == ["A12"]
     assert cohr["rows"][0]["text"].startswith("**SiC 子公司不进底牌")
+
+
+def ny(day: int, hh: int, mm: int = 0) -> float:
+    # 2026-09-21 is a Monday; 09-25 a Friday.
+    return datetime(2026, 9, day, hh, mm, tzinfo=ZoneInfo("America/New_York")).timestamp()
+
+
+def test_quotes_are_reused_while_no_market_has_traded(repo, fetch, clock, quotes):
+    # The pool is US-only: Friday's post-market has settled, Monday's overnight opens Sunday 20:00.
+    clock.now = ny(25, 20, 30)
+    catalog(repo, quotes)
+    clock.now = ny(26, 12)
+    catalog(repo, quotes, refresh=True)
+    assert len(fetch.calls) == 1
+    clock.now = ny(27, 20, 30)
+    catalog(repo, quotes)
+    assert len(fetch.calls) == 2
+
+
+@pytest.mark.parametrize("now, price, session", [
+    (ny(25, 18), 27.0, "post"),  # post-market after Friday's close
+    (ny(26, 12), 27.0, "post"),  # the weekend keeps Friday's post-market price
+    (ny(28, 7), 24.0, "pre"),  # Monday pre-market is newer than Friday's post-market
+    (ny(28, 10), 25.0, None),  # Monday's regular session has opened: extended prices are older
+])
+def test_us_row_takes_the_newest_price_since_the_regular_close(repo, fetch, clock, quotes, now, price, session):
+    printed = (
+        SessionQuote("post", 27.0, datetime.fromtimestamp(ny(25, 17, 30), timezone.utc)),
+        SessionQuote("pre", 24.0, datetime.fromtimestamp(ny(28, 6), timezone.utc)),
+        SessionQuote("overnight", 26.0, datetime.fromtimestamp(ny(25, 3), timezone.utc)),  # before Friday's open
+    )
+    # Only trades printed by `now` can be in the quote.
+    fetch.extended["AAA.US"] = tuple(x for x in printed if x.at.timestamp() <= now)
+    clock.now = now
+    band = rows_by_ticker(repo, quotes)["AAA.US"]["band"]
+    assert (band["price"], band["session"]) == (price, session)
+    assert band["zone"] == zone_of(price, 10, 20, 40)

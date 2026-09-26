@@ -2,6 +2,8 @@ import type { TickerRow } from '../types';
 import { EXTRA_CAPTION, extraBands, lynchClasses, rowZone, type ExtraBand } from './listModel';
 import { barScale, fmt, PriceBar } from './PriceBar';
 
+const SESSION_CN = { pre: '盘前', post: '盘后', overnight: '夜盘' } as const;
+
 export function TickerCard({ row, label, onOpen }: {
   row: TickerRow;
   label: (id: string) => string; // zone and Lynch class ids → Chinese labels
@@ -12,7 +14,12 @@ export function TickerCard({ row, label, onOpen }: {
       <div className="card-line1">
         <span className="card-ticker">{row.ticker}</span>
         <span className="card-name">{row.name ?? ''}</span>
-        {row.band && <span className="card-price">{fmt(row.band.price)} {row.currency}</span>}
+        {row.band && (
+          <span className="card-price">
+            {row.band.session && <span className="card-session">{SESSION_CN[row.band.session]}</span>}
+            {fmt(row.band.price)} {row.currency}
+          </span>
+        )}
       </div>
       {row.error ? (
         <div className="card-error">解析失败：{row.error}</div>

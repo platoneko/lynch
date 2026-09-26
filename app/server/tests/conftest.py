@@ -6,8 +6,9 @@ from pathlib import Path
 import pytest
 
 from lynch_reader.catalog import Quote, QuoteCache
+from eval.lib.price import SessionQuote  # after catalog, which puts the repo root on sys.path
 
-NOW = 1_790_000_000.0  # fake clock, seconds since the epoch
+NOW = 1_790_000_000.0  # fake clock, seconds since the epoch: Mon 2026-09-21 10:13 in New York, US market open
 
 
 def framework_md(ticker: str, name: str, lynch: str) -> str:
@@ -33,10 +34,11 @@ def repo(tmp_path: Path) -> Path:
 
 
 class FakeFetch:
-    """Stands in for `fetch_quotes`: fixed last prices, a call log, and an optional failure."""
+    """Stands in for `fetch_quotes`: fixed last prices, extended-hours quotes, a call log, and an optional failure."""
 
     def __init__(self, prices: dict[str, float], error: Exception | None = None) -> None:
         self.prices = prices
+        self.extended: dict[str, tuple[SessionQuote, ...]] = {}
         self.error = error
         self.calls: list[list[str]] = []
 
@@ -44,7 +46,7 @@ class FakeFetch:
         self.calls.append(list(symbols))
         if self.error is not None:
             raise self.error
-        return {s: Quote(symbol=s, last=p, prev_close=None, status="Normal")
+        return {s: Quote(symbol=s, last=p, prev_close=None, status="Normal", extended=self.extended.get(s, ()))
                 for s, p in self.prices.items() if s in symbols}
 
 

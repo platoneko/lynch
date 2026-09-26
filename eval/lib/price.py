@@ -5,14 +5,28 @@ import json
 import shutil
 import subprocess
 from dataclasses import dataclass
+from datetime import datetime
+
+# US extended-hours blocks of a quote row, by the session id this module reports.
+EXTENDED_SESSIONS = {"pre": "pre_market", "post": "post_market", "overnight": "overnight"}
+
+
+@dataclass(frozen=True)
+class SessionQuote:
+    """A US extended-hours last price; `at` is its trade time (aware, UTC)."""
+
+    session: str  # a key of EXTENDED_SESSIONS
+    last: float
+    at: datetime
 
 
 @dataclass(frozen=True)
 class Quote:
     symbol: str
-    last: float
+    last: float  # regular session only
     prev_close: float | None
     status: str | None
+    extended: tuple[SessionQuote, ...] = ()
 
 
 def _parse_float(v: object) -> float | None:
@@ -70,8 +84,24 @@ def fetch_quotes(
             last=last,
             prev_close=_parse_float(row.get("prev_close")),
             status=str(row.get("status")) if row.get("status") is not None else None,
+            extended=_extended(row),
         )
     missing = [s for s in symbols if s not in out]
     if missing and not allow_missing:
         raise RuntimeError(f"missing quotes for: {', '.join(missing)}")
     return out
+
+
+def _extended(row: dict) -> tuple[SessionQuote, ...]:
+    """The extended-hours blocks that carry both a price and a trade time; absent for non-US rows."""
+    out = []
+    for session, key in EXTENDED_SESSIONS.items():
+        block = row.get(key)
+        if not isinstance(block, dict):
+            continue
+        last = _parse_float(block.get("last"))
+        ts = block.get("timestamp")
+        if last is None or not ts:
+            continue
+        out.append(SessionQuote(session, last, datetime.fromisoformat(str(ts).replace("Z", "+00:00"))))
+    return tuple(out)

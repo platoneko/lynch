@@ -8,6 +8,7 @@ export interface Labeled {
 /** Zones of the latest Longbridge quote, computed by the server with the daily digest's rules. */
 export interface Band {
   price: number;
+  session: 'pre' | 'post' | 'overnight' | null; // a US extended-hours price; null for the regular session
   as_of: string; // when the server fetched the quote
   zone: ZoneId | null;
   option_zone: ZoneId | null;

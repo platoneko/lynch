@@ -8,12 +8,12 @@ function row(ticker: string, over: Partial<TickerRow> = {}): TickerRow {
   return {
     ticker, name: `${ticker} name`, market: 'US', lynch_primary: 'stalwart', lynch_secondary: null,
     currency: 'USD', L: 10, M: 20, H: 40, option: null, candidate: null,
-    band: { price: 25, as_of: '2026-09-26T09:03:00+08:00', zone: 'neutral', option_zone: null, candidate_zone: null },
+    band: { price: 25, session: null, as_of: '2026-09-26T09:03:00+08:00', zone: 'neutral', option_zone: null, candidate_zone: null },
     quote_error: null, error: null, ...over,
   };
 }
 const withZone = (t: string, zone: ZoneId | null) =>
-  row(t, { band: { price: 1, as_of: '2026-09-26T09:03:00+08:00', zone, option_zone: null, candidate_zone: null } });
+  row(t, { band: { price: 1, session: null, as_of: '2026-09-26T09:03:00+08:00', zone, option_zone: null, candidate_zone: null } });
 const tickers = (rows: TickerRow[]) => rows.map((r) => r.ticker);
 
 describe('search', () => {
@@ -70,7 +70,7 @@ describe('sort', () => {
 
 describe('latestAsOf', () => {
   it('picks the newest timestamp', () => {
-    const rows = [row('A.US'), row('B.US', { band: { price: 1, as_of: '2026-09-26T16:13:00+08:00', zone: null, option_zone: null, candidate_zone: null } })];
+    const rows = [row('A.US'), row('B.US', { band: { price: 1, session: null, as_of: '2026-09-26T16:13:00+08:00', zone: null, option_zone: null, candidate_zone: null } })];
     expect(latestAsOf(rows)).toBe('2026-09-26T16:13:00+08:00');
   });
   it('is null without any band', () => {
@@ -103,7 +103,7 @@ describe('lynchClasses', () => {
 describe('extraBands', () => {
   const option = { v_opt: 18.17, L: 10, M: 25, H: 58.17, line: null, rows: [] };
   const candidate = { label: 'FY28', L: 12, M: 22, H: 44, gate: null, background: null };
-  const zones = { price: 25, as_of: '2026-09-26T09:03:00+08:00', zone: 'neutral', option_zone: 'conservative',
+  const zones = { price: 25, session: null, as_of: '2026-09-26T09:03:00+08:00', zone: 'neutral', option_zone: 'conservative',
     candidate_zone: 'optimistic' } as const;
   it('orders +V before the candidate, each with its own zone and label', () => {
     const bands = extraBands(row('A.US', { option, candidate, band: zones }));

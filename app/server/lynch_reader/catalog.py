@@ -30,6 +30,7 @@ from eval.lib.frameworks import (  # noqa: E402
 )
 from eval.lib.price import Quote, fetch_quotes  # noqa: E402
 from eval.lib.zones import ZONE_CN, ZONE_ORDER, credited_option_band, price_zones  # noqa: E402
+from lynch_reader.market_hours import traded_between, us_regular_close  # noqa: E402
 
 __all__ = ["FRAMEWORKS_DIR", "REPO_ROOT", "Quote", "QuoteCache", "catalog", "framework_path"]
 
@@ -40,7 +41,8 @@ ROW_KEYS = (
     "L", "M", "H", "option", "candidate", "band", "quote_error", "error",
 )
 
-# Quotes are reused up to this age: it bounds Longbridge CLI calls.
+# Quotes are reused up to this age: it bounds Longbridge CLI calls. Past it they are
+# still reused while no market in the pool has traded since (market_hours.py).
 QUOTE_MAX_AGE_S = 300.0
 # The refresh button is mainly for re-reading frameworks; its quotes need only be this fresh.
 QUOTE_REFRESH_MAX_AGE_S = 60.0
@@ -73,7 +75,8 @@ class QuoteFailure:
 
 
 class QuoteCache:
-    """One batched quote call for the whole pool, reused while younger than the caller's max age.
+    """One batched quote call for the whole pool, reused while younger than the caller's max age
+    or while no market in the pool has traded since.
 
     The lock makes concurrent requests wait for one CLI call instead of each
     starting their own; those that waited get that call's batch or failure.
@@ -103,9 +106,16 @@ class QuoteCache:
             if f is not None and f.symbols == key and self._monotonic() - f.failed_mono < QUOTE_BACKOFF_S:
                 raise f.error
             b = self._batch
-            if b is None or b.symbols != key or self._monotonic() - b.fetched_mono >= max_age_s:
+            if b is None or b.symbols != key or not self._current(b, max_age_s):
                 b = self._fetch_batch(key)
             return b
+
+    def _current(self, b: QuoteBatch, max_age_s: float) -> bool:
+        if self._monotonic() - b.fetched_mono < max_age_s:
+            return True
+        # Market hours are wall-clock hours; the age above stays monotonic.
+        now = self._wall()
+        return not any(traded_between(m, b.fetched_at, now) for m in {market_bucket(s) for s in b.symbols})
 
     def _fetch_batch(self, key: tuple[str, ...]) -> QuoteBatch:
         try:
@@ -137,8 +147,9 @@ def catalog(frameworks_dir: Path, quotes: QuoteCache, refresh: bool = False) -> 
         log.warning("quote fetch failed: %s", e)
         quote_error = _quote_failure(e)
     else:
+        us_close = us_regular_close(batch.fetched_at)
         for row, meta in priced:
-            _price_row(row, meta, batch)
+            _price_row(row, meta, batch, us_close)
 
     return {
         "zones": [{"id": z, "label": ZONE_CN[z]} for z in ZONE_ORDER],
@@ -182,20 +193,22 @@ def _ticker_row(path: Path) -> tuple[dict[str, Any], FrameworkMeta | None]:
     return row, meta
 
 
-def _price_row(row: dict[str, Any], meta: FrameworkMeta, batch: QuoteBatch) -> None:
+def _price_row(row: dict[str, Any], meta: FrameworkMeta, batch: QuoteBatch, us_close: datetime) -> None:
     """The row's band: live price, fetch time, and zones by the daily digest's own rules."""
     q = batch.quotes.get(meta.ticker)
     if not _usable(q):  # logged once when the batch was fetched
         row["quote_error"] = NO_QUOTE
         return
+    price, session = _latest_price(q, us_close)
     try:
-        zone, option_zone, candidate_zone = price_zones(q.last, meta)
+        zone, option_zone, candidate_zone = price_zones(price, meta)
     except ValueError as e:  # a +V band out of order is not caught at parse time
         log.warning("zones failed: %s: %s", meta.ticker, e)
         row["error"] = str(e)
         return
     row["band"] = {
-        "price": q.last,
+        "price": price,
+        "session": session,
         "as_of": datetime.fromtimestamp(batch.fetched_at, TZ).isoformat(timespec="seconds"),
         "zone": zone,
         "option_zone": option_zone,
@@ -203,9 +216,25 @@ def _price_row(row: dict[str, Any], meta: FrameworkMeta, batch: QuoteBatch) -> N
     }
 
 
+def _latest_price(q: Quote, us_close: datetime) -> tuple[float, str | None]:
+    """The regular price, or the newest US extended-hours price printed after the latest regular close.
+
+    The daily digest keeps the regular price; only the reader follows extended hours.
+    """
+    later = [x for x in q.extended if x.at > us_close and _is_trade_price(x.last)]
+    if not later:
+        return q.last, None
+    newest = max(later, key=lambda x: x.at)
+    return newest.last, newest.session
+
+
 def _usable(q: Quote | None) -> bool:
+    return q is not None and _is_trade_price(q.last)
+
+
+def _is_trade_price(p: float) -> bool:
     # NaN / inf cannot be serialized, and a price ≤ 0 is no trade price.
-    return q is not None and math.isfinite(q.last) and q.last > 0
+    return math.isfinite(p) and p > 0
 
 
 def _quote_failure(e: Exception) -> str:
