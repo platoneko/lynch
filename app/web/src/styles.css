@@ -1,0 +1,70 @@
+:root {
+  --bg: #f6f6f4;
+  --card: #ffffff;
+  --text: #1c1c1e;
+  --muted: #6b6b70;
+  --line: #e2e2e0;
+  --accent: #2f6fdf;
+  --bar-h: 88px;
+  --zone-deep_discount: #1f8a4c;
+  --zone-conservative: #4caf6e;
+  --zone-neutral: #d9a400;
+  --zone-optimistic: #e07b1a;
+  --zone-stretched: #d13f3f;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111113;
+    --card: #1c1c1f;
+    --text: #ececef;
+    --muted: #9a9aa2;
+    --line: #2c2c31;
+    --accent: #6d9cff;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); }
+body { font: 15px/1.55 -apple-system, "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif; overflow-x: hidden; }
+button { font: inherit; color: inherit; }
+
+.zone-bg-deep_discount { background: var(--zone-deep_discount); color: #fff; }
+.zone-bg-conservative { background: var(--zone-conservative); color: #fff; }
+.zone-bg-neutral { background: var(--zone-neutral); color: #1c1c1e; }
+.zone-bg-optimistic { background: var(--zone-optimistic); color: #fff; }
+.zone-bg-stretched { background: var(--zone-stretched); color: #fff; }
+
+.status-screen { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 16px; text-align: center; }
+.banner-error { background: var(--zone-stretched); color: #fff; padding: 8px 16px; font-size: 13px; }
+
+/* Home */
+.home-top { position: sticky; top: 0; z-index: 2; background: var(--bg); padding: 10px 16px 6px; border-bottom: 1px solid var(--line); }
+.home-search-row { display: flex; gap: 8px; }
+.home-search { flex: 1; min-width: 0; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--text); font-size: 16px; }
+.icon-btn { width: 40px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+.chips { display: flex; gap: 6px; overflow-x: auto; padding-top: 8px; scrollbar-width: none; }
+.chip { flex: none; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); font-size: 13px; }
+.chip-on { border-color: transparent; background: var(--accent); color: #fff; }
+.home-meta { display: flex; justify-content: space-between; align-items: center; padding-top: 8px; color: var(--muted); font-size: 13px; }
+.home-meta select { font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 2px 6px; }
+.cards { padding: 10px 16px; display: flex; flex-direction: column; gap: 10px; }
+.empty, .home-foot { color: var(--muted); text-align: center; font-size: 13px; }
+.home-foot { padding: 8px 16px 24px; }
+
+.card { display: block; width: 100%; text-align: left; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; }
+.card-line1 { display: flex; align-items: baseline; gap: 8px; }
+.card-ticker { font-weight: 600; }
+.card-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.card-price { font-variant-numeric: tabular-nums; }
+.card-classes { color: var(--muted); font-size: 13px; margin-top: 2px; }
+.card-zone { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.card-extra { display: flex; gap: 12px; margin-top: 6px; color: var(--muted); font-size: 12px; }
+.card-error { color: var(--zone-stretched); font-size: 13px; margin-top: 4px; word-break: break-all; }
+.tag { flex: none; display: inline-block; padding: 1px 8px; border-radius: 6px; font-size: 12px; }
+.tag-blocked { background: #8a8a90; color: #fff; margin-top: 8px; }
+.tag-muted { border: 1px solid var(--line); color: var(--muted); margin-top: 8px; }
+
+.pricebar { flex: 1; display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.pricebar-track { position: relative; flex: 1; height: 4px; border-radius: 2px; background: var(--line); }
+.pricebar-mid { position: absolute; top: -3px; width: 1px; height: 10px; background: var(--muted); }
+.pricebar-dot { position: absolute; top: 50%; width: 12px; height: 12px; margin-left: -6px; border-radius: 50%; transform: translateY(-50%); font-size: 7px; line-height: 12px; text-align: center; }

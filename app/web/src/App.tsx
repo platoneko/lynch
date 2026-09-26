@@ -1,0 +1,86 @@
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { fetchCatalog } from './api';
+import { HomePage } from './home/HomePage';
+import { browserStorage, loadFilter, saveFilter, type HomeFilter } from './home/listModel';
+import { docHash, parseRoute, type Route } from './route';
+import type { Catalog } from './types';
+
+export function zoneLabels(catalog: Catalog): Map<string, string> {
+  return new Map(catalog.zones.map((z) => [z.id, z.label]));
+}
+
+export function App() {
+  const [route, setRoute] = useState<Route>(() => parseRoute(window.location.hash));
+  const [catalog, setCatalog] = useState<Catalog | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  // Filter lives here, not in HomePage, so the query survives a trip into a doc.
+  const [filter, setFilter] = useState<HomeFilter>(() => loadFilter(browserStorage()));
+  const homeScroll = useRef(0);
+  const openedFromHome = useRef(false);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    fetchCatalog()
+      .then(setCatalog, (e: unknown) => setError(String(e instanceof Error ? e.message : e)))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(load, [load]);
+
+  useEffect(() => {
+    const onHash = () => setRoute(parseRoute(window.location.hash));
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+
+  useLayoutEffect(() => {
+    window.scrollTo(0, route.page === 'home' ? homeScroll.current : 0);
+  }, [route]);
+
+  const updateFilter = (f: HomeFilter) => {
+    setFilter(f);
+    saveFilter(browserStorage(), f);
+  };
+  const openDoc = (ticker: string) => {
+    homeScroll.current = window.scrollY;
+    openedFromHome.current = true;
+    window.location.hash = docHash(ticker);
+  };
+  // Mirror Android back when we came from the list; a cold deep link has nothing to go back to.
+  const goBack = () => {
+    if (openedFromHome.current) window.history.back();
+    else window.location.hash = '#/';
+  };
+
+  if (!catalog) {
+    return (
+      <div className="status-screen">
+        {error ? (
+          <>
+            <p>加载失败：{error}</p>
+            <button onClick={load}>重试</button>
+          </>
+        ) : (
+          <p>加载中…</p>
+        )}
+      </div>
+    );
+  }
+  if (route.page === 'doc') {
+    return (
+      <div className="status-screen">
+        <p>{route.ticker}</p>
+        <button onClick={goBack}>返回</button>
+      </div>
+    );
+  }
+  return (
+    <>
+      {error && <div className="banner-error" onClick={load}>刷新失败：{error}（点此重试）</div>}
+      <HomePage catalog={catalog} filter={filter} onFilter={updateFilter} onOpen={openDoc}
+        onRefresh={load} refreshing={loading} />
+    </>
+  );
+}
