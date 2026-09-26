@@ -42,9 +42,70 @@ function createMarkdown(): MarkdownIt {
   };
   m.renderer.rules.link_close = (_tokens, _idx, _opts, env: RenderEnv) =>
     env.linkIsInternal.pop() ? '</a>' : '</span>';
-  m.renderer.rules.table_open = () => '<div class="table-scroll"><table>\n';
+  m.core.ruler.push('table_layout', (state) => {
+    state.tokens.forEach((t, i) => t.type === 'table_open' && layoutTable(state.tokens, i));
+  });
+  m.renderer.rules.table_open = (tokens, idx, opts, _env, self) =>
+    `<div class="table-scroll">${self.renderToken(tokens, idx, opts)}`;
   m.renderer.rules.table_close = () => '</table></div>\n';
+  // A prose cell carries its column header, shown only when the phone stacks rows into cards;
+  // a folded cell uses that header as its tap-to-expand summary instead.
+  m.renderer.rules.td_open = (tokens, idx, opts, env, self) => {
+    const td = self.renderToken(tokens, idx, opts);
+    const cell = tokens[idx].meta as ProseCell | null;
+    if (!cell) return td;
+    const label = self.renderInline(cell.header?.children ?? [], opts, env);
+    return cell.fold
+      ? `${td}<details class="cell-fold"><summary>${label}</summary>`
+      : `${td}<span class="cell-label">${label}</span>`;
+  };
+  m.renderer.rules.td_close = (tokens, idx, opts, _env, self) =>
+    ((tokens[idx].meta as ProseCell | null)?.fold ? '</details>' : '') + self.renderToken(tokens, idx, opts);
   return m;
+}
+
+// A table with any cell longer than this is prose (Assumptions, Inputs, zone scenarios): kept on
+// one line it would run thousands of pixels wide, so the phone shows its rows as cards instead.
+// Tables of short cells stay a scrollable grid, where comparing down a column matters.
+const PROSE_CELL_CHARS = 40;
+// In a card, the first prose column is the row's subject and always shows; later cells this long
+// (evidence, impact) fold behind their header.
+const FOLD_CELL_CHARS = 80;
+
+interface ProseCell {
+  header: Token | undefined; // the column's header inline
+  fold: boolean;
+}
+
+/** Marks a prose table and annotates its body cells (on td_open and td_close) for the renderer. */
+function layoutTable(tokens: Token[], open: number): void {
+  // Step 1: collect the header inlines and each body cell as its td_open index.
+  const headers: Token[] = [];
+  const rows: number[][] = [];
+  for (let i = open + 1; tokens[i].type !== 'table_close'; i++) {
+    if (tokens[i].type === 'th_open') headers.push(tokens[i + 1]);
+    if (tokens[i].type !== 'td_open') continue;
+    if (tokens[i - 1].type === 'tr_open') rows.push([]);
+    rows[rows.length - 1].push(i);
+  }
+  const length = (tdOpen: number) => tokens[tdOpen + 1].content.length;
+
+  // Step 2: the subject column is the first one holding a prose cell; none means a grid.
+  const subject = Math.min(
+    ...rows.flatMap((cells) => cells.flatMap((td, col) => (length(td) > PROSE_CELL_CHARS ? [col] : []))),
+  );
+  if (subject === Infinity) return;
+
+  // Step 3: annotate. Token layout per cell is td_open, inline, td_close.
+  tokens[open].attrJoin('class', 'table-prose');
+  for (const cells of rows) {
+    cells.forEach((td, col) => {
+      const cell: ProseCell = { header: headers[col], fold: col > subject && length(td) > FOLD_CELL_CHARS };
+      tokens[td].meta = cell;
+      tokens[td + 2].meta = cell;
+      if (length(td) === 0) tokens[td].attrJoin('class', 'cell-empty');
+    });
+  }
 }
 
 // Frameworks name code identifiers inside `\text{…}` with a bare `_` (e.g. `\text{perpetual_pe}`),
