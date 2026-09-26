@@ -221,6 +221,12 @@ class ContentRepoLayoutTest(unittest.TestCase):
             with self.assertRaisesRegex(FileNotFoundError, "lynch-frameworks"):
                 list_framework_paths(Path(d) / "frameworks")
 
+    def test_empty_frameworks_dir_raises(self) -> None:
+        # A present-but-empty checkout (e.g. an aborted clone) must not read as an empty pool either.
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaisesRegex(FileNotFoundError, "lynch-frameworks"):
+                list_framework_paths(Path(d))
+
     def test_repo_docs_are_not_tickers(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)

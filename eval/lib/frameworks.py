@@ -200,6 +200,8 @@ def list_framework_paths(frameworks_dir: Path | None = None) -> list[Path]:
         if p.name.startswith("_") or p.name in _REPO_DOCS:
             continue
         out.append(p)
+    if not out:
+        raise FileNotFoundError(f"{d} has no frameworks — clone lynch-frameworks there")
     return out
 
 

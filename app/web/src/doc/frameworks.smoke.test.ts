@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -6,10 +6,15 @@ import { buildDoc } from './buildDoc';
 
 // Every real framework must render: this is where odd math and table shapes show up.
 const DIR = fileURLToPath(new URL('../../../../frameworks/', import.meta.url));
-const files = readdirSync(DIR).filter((f) => f.endsWith('.md') && !f.startsWith('_'));
+// The content repo (lynch-frameworks, cloned at frameworks/) keeps its own docs there; they are not tickers.
+const REPO_DOCS = new Set(['AGENTS.md', 'README.md']);
+const HAS_CONTENT = existsSync(DIR);
+const files = HAS_CONTENT
+  ? readdirSync(DIR).filter((f) => f.endsWith('.md') && !f.startsWith('_') && !REPO_DOCS.has(f))
+  : [];
 const pool = new Set(files.map((f) => f.slice(0, -'.md'.length)));
 
-describe('real frameworks', () => {
+describe.skipIf(!HAS_CONTENT)('real frameworks', () => {
   it('finds the pool', () => {
     expect(files.length).toBeGreaterThan(50);
   });

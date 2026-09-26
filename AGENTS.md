@@ -21,6 +21,7 @@ lynch 的**代码仓库**：估值 / 解析 / zone 规则库 `eval/lib/`、日�
 - 每票脚本 **MUST** 放在 `frameworks/eval/`；本仓库 `eval/` 顶层只放库（有测试守着）。
 - 库改动若改变框架解析或 zone 结果，**MUST** 在 `frameworks/` 里跑 `just check`，并在本仓库跑全部测试。
 - `frameworks/` 缺失时库直接报错；读真实框架的测试自动跳过。
+- 在 git worktree 里改库：先在 worktree 根执行 `ln -s ~/plat1ko/lynch/frameworks frameworks`（已被忽略），否则读真实框架的测试只会跳过、`@frameworks/AGENTS.md` 也读不到。
 
 ## 测试
 

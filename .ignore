@@ -1,0 +1,2 @@
+# Let ripgrep-based search (Claude Code Grep/Glob) see the content checkout that .gitignore hides from git.
+!/frameworks/
