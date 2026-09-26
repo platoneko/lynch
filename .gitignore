@@ -17,3 +17,6 @@ output/
 # Python
 __pycache__/
 *.py[cod]
+
+# Content repo lynch-frameworks, checked out here
+/frameworks/
