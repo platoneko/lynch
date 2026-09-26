@@ -8,6 +8,12 @@ const SORTS: { id: SortKey; label: string }[] = [
   { id: 'ticker', label: '按代码' },
 ];
 
+const MARKETS: { id: string; label: string }[] = [
+  { id: 'A', label: 'A股' },
+  { id: 'HK', label: '港股' },
+  { id: 'US', label: '美股' },
+];
+
 export function HomePage({ catalog, filter, onFilter, onOpen, onRefresh, refreshing }: {
   catalog: Catalog;
   filter: HomeFilter;
@@ -56,6 +62,15 @@ export function HomePage({ catalog, filter, onFilter, onOpen, onRefresh, refresh
           ))}
         </div>
         <div className="home-meta">
+          <div className="chips">
+            {MARKETS.map((m) => (
+              <button key={m.id}
+                className={`chip ${filter.markets.includes(m.id) ? 'chip-on' : ''}`}
+                onClick={() => onFilter({ ...filter, markets: toggle(filter.markets, m.id) })}>
+                {m.label}
+              </button>
+            ))}
+          </div>
           <select value={filter.sort} onChange={(e) => onFilter({ ...filter, sort: e.target.value as SortKey })}>
             {SORTS.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
           </select>

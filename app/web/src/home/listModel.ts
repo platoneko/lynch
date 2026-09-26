@@ -15,15 +15,17 @@ export interface HomeFilter {
   query: string;
   zones: string[];
   classes: string[];
+  markets: string[];
   sort: SortKey;
 }
 
-export const DEFAULT_FILTER: HomeFilter = { query: '', zones: [], classes: [], sort: 'zone' };
+export const DEFAULT_FILTER: HomeFilter = { query: '', zones: [], classes: [], markets: [], sort: 'zone' };
 
 export function applyFilter(rows: TickerRow[], f: HomeFilter, zoneOrder: string[]): TickerRow[] {
   const serverOrder = new Map(rows.map((r, i) => [r.ticker, i]));
   const kept = rows.filter(
-    (r) => matchesQuery(r, f.query) && matchesZones(r, f.zones) && matchesClasses(r, f.classes),
+    (r) => matchesQuery(r, f.query) && matchesZones(r, f.zones) && matchesClasses(r, f.classes)
+      && matchesMarkets(r, f.markets),
   );
   return kept.sort(comparator(f.sort, zoneOrder, serverOrder));
 }
@@ -43,6 +45,11 @@ function matchesZones(r: TickerRow, zones: string[]): boolean {
 function matchesClasses(r: TickerRow, classes: string[]): boolean {
   if (classes.length === 0) return true;
   return [r.lynch_primary, r.lynch_secondary].some((c) => c != null && classes.includes(c));
+}
+
+function matchesMarkets(r: TickerRow, markets: string[]): boolean {
+  if (markets.length === 0) return true;
+  return r.market != null && markets.includes(r.market);
 }
 
 function comparator(sort: SortKey, zoneOrder: string[], serverOrder: Map<string, number>) {

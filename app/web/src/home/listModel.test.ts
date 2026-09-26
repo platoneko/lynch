@@ -50,6 +50,12 @@ describe('filters', () => {
       row('C.US', { lynch_primary: 'stalwart' })];
     expect(tickers(applyFilter(rows, { ...DEFAULT_FILTER, classes: ['cyclical'] }, ZONES))).toEqual(['A.US', 'B.US']);
   });
+  it('market filter is multi-select and drops rows with an unknown market', () => {
+    const rows = [row('A.US'), row('0700.HK', { market: 'HK' }), row('601899.SH', { market: 'A' }),
+      row('X.XX', { market: null })];
+    const f = { ...DEFAULT_FILTER, sort: 'ticker' as const, markets: ['A', 'HK'] };
+    expect(tickers(applyFilter(rows, f, ZONES))).toEqual(['0700.HK', '601899.SH']);
+  });
 });
 
 describe('sort', () => {
