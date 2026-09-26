@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -13,7 +14,9 @@ if str(REPO_ROOT) not in sys.path:
 
 from eval.lib.bands_io import BANDS_DIR, bands_path, read_previous  # noqa: E402
 from eval.lib.frameworks import (  # noqa: E402
+    _CANDIDATE,
     FRAMEWORKS_DIR,
+    FrameworkMeta,
     LYNCH_CN,
     list_framework_paths,
     load_framework,
@@ -27,10 +30,15 @@ log = logging.getLogger("lynch_reader")
 
 ROW_KEYS = (
     "ticker", "name", "market", "lynch_primary", "lynch_secondary", "currency",
-    "L", "M", "H", "blocked", "candidate_label", "band", "error",
+    "L", "M", "H", "blocked", "candidate", "band", "error",
 )
 # Only what a card shows; the rest of the artifact belongs to the daily digest.
 BAND_KEYS = ("price", "as_of", "zone", "option_zone", "candidate_zone")
+
+# The candidate line names its gate after the primed anchors: `… · 门槛 A1c（note）`.
+_GATE = re.compile(r"门槛\s*(A[0-9A-Za-z]+′?)")
+_ASSUMPTIONS = re.compile(r"^## 2\. Assumptions[^\n]*\n(.*?)(?=^## |\Z)", re.MULTILINE | re.DOTALL)
+_CELL_SEP = re.compile(r"(?<!\\)\|")  # `\|` inside a cell is text, not a separator
 
 
 def catalog(frameworks_dir: Path, bands_dir: Path) -> dict[str, Any]:
@@ -68,10 +76,46 @@ def _ticker_row(path: Path, bands_dir: Path) -> dict[str, Any]:
         M=meta.M,
         H=meta.H,
         blocked=meta.blocked,
-        candidate_label=meta.candidate_label,
+        candidate=_candidate(meta, path.read_text(encoding="utf-8")),
         band=_read_band(meta.ticker, bands_dir),
     )
     return row
+
+
+def _candidate(meta: FrameworkMeta, md: str) -> dict[str, Any] | None:
+    """The candidate band plus why it is only a candidate: its gate assumption's text."""
+    if meta.candidate is None:
+        return None
+    L, M, H = meta.candidate
+    gate = _candidate_gate(md)
+    return {
+        "label": meta.candidate_label, "L": L, "M": M, "H": H,
+        "gate": gate, "background": _assumption_text(md, gate) if gate else None,
+    }
+
+
+def _candidate_gate(md: str) -> str | None:
+    # Reuse eval's own candidate regex so the gate comes from the very line the anchors did;
+    # only the rest of that line after H′ is searched (a label may name an id too).
+    m = _CANDIDATE.search(md)
+    if m is None:
+        return None
+    end = md.find("\n", m.end())
+    gate = _GATE.search(md, m.end(), len(md) if end < 0 else end)
+    return gate.group(1) if gate else None
+
+
+def _assumption_text(md: str, gate: str) -> str | None:
+    """Second cell of the §2 Assumptions row whose first cell is `gate`."""
+    section = _ASSUMPTIONS.search(md)
+    if section is None:
+        return None
+    for line in section.group(1).splitlines():
+        cells = [c.strip() for c in _CELL_SEP.split(line.strip())]
+        # `| id | text | …` splits into ['', 'id', 'text', …].
+        if len(cells) >= 3 and cells[0] == "" and cells[1] == gate:
+            return cells[2]
+    return None
 
 
 def _read_band(ticker: str, bands_dir: Path) -> dict[str, Any] | None:
