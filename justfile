@@ -311,3 +311,7 @@ app-status:
     fi
     code=$(curl --noproxy '*' -sS -o /dev/null -w '%{http_code}' "http://{{app_host}}:{{app_port}}/api/tickers" || true)
     echo "GET /api/tickers -> ${code:-unreachable}"
+
+[doc('构建手机阅读 app 的 debug APK')]
+app-apk:
+    app/android/build-apk.sh
