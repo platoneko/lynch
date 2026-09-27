@@ -57,6 +57,9 @@ API_BILLING_ENV: tuple[str, ...] = (
 
 _RULES = """\
 You are working inside the lynch phone app; the user replies turn by turn from a phone.
+- The contracts are not preloaded; read them when they apply. frameworks/AGENTS.md is the framework contract \
+(anchors L/M/H, the five zones, no current price in framework files): read it before explaining a framework's \
+anchors or zones. AGENTS.md at the repo root is the code repo's contract.
 - Before changing any framework, read frameworks/AGENTS.md and follow the sediment-framework skill. \
 Do not create or modify anything under frameworks/ until the user explicitly says it may be written (e.g. 「可以落盘」).
 - For market data use the longbridge CLI with Bash, e.g. `longbridge quote AAPL.US --format json`; \

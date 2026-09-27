@@ -84,6 +84,8 @@ def test_ticker_prompt_names_its_files_and_rules():
     assert "frameworks/NVDA.US.md" in p
     assert "frameworks/eval/" not in p  # read only when the numbers are checked, not up front
     assert "git -C frameworks" in p and "sediment-framework" in p
+    # `claude -p` with project-only settings does not load AGENTS.md, so the prompt names the contracts
+    assert "frameworks/AGENTS.md" in p and "AGENTS.md at the repo root" in p
     assert "longbridge quote" in p
 
 
