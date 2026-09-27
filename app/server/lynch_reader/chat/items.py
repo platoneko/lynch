@@ -1,0 +1,102 @@
+"""Claude Code messages → the app's chat items.
+
+The live stream and the transcript carry user/assistant messages in the same shape
+(`{"type", "uuid", "message": {"content": ...}}`), so one mapping serves both.
+"""
+from __future__ import annotations
+
+import uuid as uuidlib
+from pathlib import Path
+
+OUTPUT_MAX = 4000
+# Tool results that mean "the whitelist refused this call" (verified texts, spec §9 第 2 条).
+DENIAL_MARKERS = (
+    "requires approval",
+    "haven't granted it yet",
+    "changes directory before running a version-control command",
+)
+INTERRUPT_PREFIX = "[Request interrupted by user"
+# User-role entries Claude Code writes for itself: local-command echoes and the post-compaction summary.
+_INTERNAL_PREFIXES = (
+    "<local-command-caveat>", "<local-command-stdout>", "<command-name>", "<command-message>",
+    "This session is being continued from a previous conversation",
+)
+_NOT_FRAMEWORKS = {"AGENTS", "README"}
+
+
+def message_items(entry: dict) -> list[dict]:
+    """Items for one user/assistant message; tool results come back as `tool_result` patches."""
+    if entry.get("isSidechain") or entry.get("isMeta") or entry.get("isCompactSummary"):
+        return []
+    content = entry["message"]["content"]
+    if entry["type"] == "assistant":
+        return [item for i, block in enumerate(content) for item in _assistant_block(entry["uuid"], i, block)]
+    if isinstance(content, str):
+        return _user_text(entry["uuid"], content)
+    patches = [_tool_result(b) for b in content if b.get("type") == "tool_result"]
+    texts = [b["text"] for b in content if b.get("type") == "text"]
+    return patches + (_user_text(entry["uuid"], "\n".join(texts)) if texts else [])
+
+
+def compact_item(uuid: str, meta: dict) -> dict:
+    return {
+        "kind": "compact", "key": uuid, "trigger": meta.get("trigger"),
+        "pre_tokens": meta.get("preTokens", meta.get("pre_tokens")),
+        "post_tokens": meta.get("postTokens", meta.get("post_tokens")),
+    }
+
+
+def notice_item(text: str) -> dict:
+    return {"kind": "notice", "key": str(uuidlib.uuid4()), "text": text}
+
+
+def context_tokens(message: dict) -> int | None:
+    usage = message.get("usage")
+    if not usage:
+        return None
+    return (usage.get("input_tokens", 0) + usage.get("cache_read_input_tokens", 0)
+            + usage.get("cache_creation_input_tokens", 0))
+
+
+def framework_ticker(file_path: str, repo_root: Path) -> str | None:
+    """The ticker whose framework `file_path` is (frameworks/<TICKER>.md), else None."""
+    path = Path(file_path)
+    if not path.is_absolute():
+        path = repo_root / path
+    try:
+        rel = path.resolve().relative_to((repo_root / "frameworks").resolve())
+    except ValueError:
+        return None
+    if len(rel.parts) != 1 or rel.suffix != ".md" or rel.stem.startswith("_") or rel.stem in _NOT_FRAMEWORKS:
+        return None
+    return rel.stem
+
+
+def _assistant_block(uuid: str, index: int, block: dict) -> list[dict]:
+    if block.get("type") == "text" and block["text"].strip():
+        return [{"kind": "text", "key": f"{uuid}#{index}", "text": block["text"]}]
+    if block.get("type") == "tool_use":
+        return [{"kind": "tool", "key": block["id"], "id": block["id"], "name": block["name"],
+                 "input": block.get("input") or {}, "output": None, "is_error": False, "denied": False}]
+    return []  # thinking and anything newer
+
+
+def _user_text(uuid: str, text: str) -> list[dict]:
+    if text.startswith(INTERRUPT_PREFIX):
+        return [{"kind": "notice", "key": uuid, "text": "已停止"}]
+    if text.lstrip().startswith(_INTERNAL_PREFIXES):
+        return []
+    return [{"kind": "user", "key": uuid, "uuid": uuid, "text": text}]
+
+
+def _tool_result(block: dict) -> dict:
+    raw = block.get("content")
+    text = raw if isinstance(raw, str) else "\n".join(
+        part.get("text", "") for part in raw or [] if part.get("type") == "text")
+    is_error = bool(block.get("is_error"))
+    return {
+        "kind": "tool_result", "id": block["tool_use_id"],
+        "output": text if len(text) <= OUTPUT_MAX else text[: OUTPUT_MAX - 1] + "…",
+        "is_error": is_error,
+        "denied": is_error and any(m in text for m in DENIAL_MARKERS),
+    }
