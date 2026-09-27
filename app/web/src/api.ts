@@ -1,9 +1,25 @@
 import type { Catalog } from './types';
 
-async function get(path: string): Promise<Response> {
+export async function get(path: string): Promise<Response> {
   const res = await fetch(path, { cache: 'no-store' });
   // The phone proxy explains a dead server in the body; surface it verbatim.
   if (!res.ok) throw new Error(`${res.status} ${(await res.text()).slice(0, 300)}`);
+  return res;
+}
+
+/** A JSON POST; the server explains a refusal in `{"error": ...}`, surfaced verbatim. */
+export async function post(path: string, body?: unknown): Promise<Response> {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    let reason = text.slice(0, 300);
+    try { reason = (JSON.parse(text) as { error?: string }).error ?? reason; } catch { /* not JSON */ }
+    throw new Error(reason);
+  }
   return res;
 }
 
