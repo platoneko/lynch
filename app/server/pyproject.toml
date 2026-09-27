@@ -1,7 +1,7 @@
 [project]
 name = "lynch-reader"
 version = "0.1.0"
-description = "Read-only HTTP surface for the lynch mobile reader"
+description = "HTTP surface for the lynch mobile app: reader and chats"
 requires-python = ">=3.12"
 dependencies = ["starlette>=0.47", "uvicorn>=0.35"]
 
