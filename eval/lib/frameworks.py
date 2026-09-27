@@ -229,9 +229,13 @@ def _parse_anchors(md: str) -> tuple[float, float, float]:
 
 
 def _parse_option(md: str) -> tuple[float | None, tuple[float, float, float] | None]:
-    """V_opt and the three per-tier credits; both absent is the common case."""
-    vm = _V_OPT.search(md)
-    pm = _P_TIERS.search(md)
+    """V_opt and the three per-tier credits; both absent is the common case.
+
+    Read from Outputs (the line contract): §0 prose may name another V_opt first.
+    """
+    scope = _outputs_section(md) or md
+    vm = _V_OPT.search(scope)
+    pm = _P_TIERS.search(scope)
     v_opt = float(vm.group(1)) if vm else None
     p_tiers = (
         (float(pm.group(1)), float(pm.group(2)), float(pm.group(3))) if pm else None
@@ -291,6 +295,32 @@ def _parse_currency(md: str) -> str:
         f"{ticker or md[:40]!r}: cannot determine currency — label the 价带锚点 line "
         f"(e.g. 「价带锚点（CNY）」) or use a market-suffixed ticker"
     )
+
+
+# AGENTS.md「现价 — 禁写契约」: the machine-shaped forms of the ticker's own current
+# price.  Prose that argues from the price cannot be caught by pattern; these can.
+_OWN_PRICE_ROW = re.compile(r"^\|\s*(price|price_a|price_h|a_share_price|ha_ratio)\s*\|", re.MULTILINE)
+_PRICE_FREE_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (_OWN_PRICE_ROW, "Inputs row of the ticker's own price"),
+    (re.compile(r"zone = \*\*`"), "stated current zone"),
+    # `→ zone+V ≈ …` is the option band's label, not a price reading.
+    (re.compile(r"→\s*zone\s*[=`*]"), "price → zone reading"),
+    # 实现价 (realised selling price) is not 现价.
+    (re.compile(r"(?<!实)现价\s?(?:\*\*)?[0-9]"), "current price figure"),
+    (re.compile(r"已过 A2f"), "A2f verdict (a research-time check)"),
+    (re.compile(r"状态：\**\s*BLOCKED"), "BLOCKED status line (BLOCKED never lands)"),
+)
+
+
+def price_free_violations(md: str) -> list[str]:
+    """`line N: what` for each own-price form outside §4 Changelog (event history keeps them)."""
+    m_log = re.search(r"^## 4\.", md, re.MULTILINE)
+    body = md[: m_log.start()] if m_log else md
+    out: list[str] = []
+    for rx, what in _PRICE_FREE_RULES:
+        for m in rx.finditer(body):
+            out.append(f"line {body.count(chr(10), 0, m.start()) + 1}: {what}")
+    return out
 
 
 def load_framework(path: Path) -> FrameworkMeta:

@@ -26,7 +26,6 @@ _STATED = {
     "A": re.compile(r"A = \*\*([0-9.]+)\*\*"),
     "B": re.compile(r"B = \*\*([0-9.]+)\*\*"),
 }
-_STATED_ZONE = re.compile(r"zone = \*\*`([a-z_]+)`\*\*")
 
 
 def parse_inputs(md: str) -> dict[str, float]:
@@ -69,28 +68,16 @@ def stated_anchors(md: str) -> dict[str, float | None]:
             for k, pat in _STATED.items()}
 
 
-def stated_zone(md: str) -> str | None:
-    m = _STATED_ZONE.search(outputs_section(md))
-    return m.group(1) if m else None
-
-
 def check_missing(inp: dict[str, float], required: list[str]) -> list[str]:
     missing = [k for k in required if k not in inp]
     return [f"missing inputs {missing}"] if missing else []
 
 
-def check_against_stated(
-    md: str,
-    computed: dict[str, float],
-    zone: str | None,
-    tol: float = 0.05,
-) -> list[str]:
-    """Compare recomputed anchors/cut-points/zone with what the framework says.
+def check_against_stated(md: str, computed: dict[str, float], tol: float = 0.05) -> list[str]:
+    """Compare recomputed anchors/cut-points with what the framework says.
 
-    Framework docs are dropping the current price, and with it the stated zone
-    (the digest and the app zone on live quotes).  Until every doc is migrated,
-    a doc that states no zone skips the zone comparison; one that still states
-    a zone must match the eval's, and an eval that no longer computes one fails.
+    No zone: framework docs carry no current price (the digest and the app
+    zone on live quotes); `frameworks.price_free_violations` guards that.
     """
     errors: list[str] = []
     stated = stated_anchors(md)
@@ -100,13 +87,6 @@ def check_against_stated(
             errors.append(f"stated {key} not found in Outputs")
         elif abs(said - value) > tol:
             errors.append(f"{key}: stated {said} vs recomputed {value:.4f}")
-    said_zone = stated_zone(md)
-    if said_zone is None:
-        return errors
-    if zone is None:
-        errors.append(f"zone: stated {said_zone} but the eval computes none")
-    elif said_zone != zone:
-        errors.append(f"zone: stated {said_zone} vs recomputed {zone}")
     return errors
 
 

@@ -345,12 +345,11 @@ def test_option_band_with_its_background(repo, quotes):
     }
 
 
-def test_option_without_outputs_line_keeps_the_band(repo, quotes):
-    # V_opt and p_k written outside Outputs: the band still shows, the missing text is simply absent.
+def test_option_outside_outputs_is_ignored(repo, quotes):
+    # The line contract puts V_opt and p_k in Outputs; prose elsewhere (ORCL.US's old §0) is not an option.
     elsewhere = OPTION_ASSUMPTIONS + "\n\\(V_{opt}\\) = **10** · \\(p_L/p_M/p_H\\) = **0 / 0.5 / 1.0**\n"
     write_option(repo, "- 底牌说明\n", elsewhere)
-    option = rows_by_ticker(repo, quotes)["AAA.US"]["option"]
-    assert option == {"v_opt": 10.0, "L": 10.0, "M": 25.0, "H": 50.0, "line": None, "rows": []}
+    assert rows_by_ticker(repo, quotes)["AAA.US"]["option"] is None
 
 
 @pytest.mark.parametrize("outputs", [

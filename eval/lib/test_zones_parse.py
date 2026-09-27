@@ -146,6 +146,12 @@ class OptionTests(unittest.TestCase):
         m = self._load("- \\(V_{opt}\\) = **10** · \\(p_L/p_M/p_H\\) = **0 / 0.5 / 1.0** —— 见表3（A12）\n")
         self.assertEqual(m.option_line, "\\(V_{opt}\\) = **10** · \\(p_L/p_M/p_H\\) = **0 / 0.5 / 1.0** —— 见表3（A12）")
 
+    def test_option_values_come_from_outputs_not_earlier_prose(self) -> None:
+        # ORCL.US / WOLF.US shape: a §0 sentence named another V_opt before Outputs.
+        md = self._MD.replace("{outputs}", "- \\(V_{opt}\\) = **12** · \\(p_L/p_M/p_H\\) = **0 / 0.5 / 1.0**\n")
+        m = ParseTests._load_md(md.replace("（§0 shorthand", " · \\(p_L/p_M/p_H\\) = **0 / 0.2 / 0.3**（§0 shorthand"))
+        self.assertEqual((m.v_opt, m.p_tiers), (12.0, (0.0, 0.5, 1.0)))
+
     def test_no_outputs_bullet_is_none(self) -> None:
         self.assertIsNone(self._load("").option_line)
 
