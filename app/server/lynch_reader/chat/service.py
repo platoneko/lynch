@@ -43,6 +43,10 @@ class Live:
     partial: str = ""  # streamed text not yet closed by its full message
     context_tokens: int | None = None
     subscribers: set[asyncio.Queue] = field(default_factory=set)
+    # Held by public commands that spawn or stop this chat's own process (send; Task 7: edit, archive),
+    # so two of them never race on `proc`. `_spawn` / `_stop` / `_make_room` never take it:
+    # `_make_room` stops other chats' idle processes without their lock, so no lock-order deadlock.
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 class ChatService:
@@ -110,9 +114,10 @@ class ChatService:
         if not text.strip():
             raise Invalid("empty message")
         live = self._live.setdefault(conv_id, Live())
-        if live.proc is None or not live.proc.alive:
-            await self._spawn(conv)
-        await self._write_user(conv_id, text)
+        async with live.lock:
+            if live.proc is None or not live.proc.alive:
+                await self._spawn(conv)
+            await self._write_user(conv_id, text)
 
     async def interrupt(self, conv_id: str) -> None:
         self._conv(conv_id)
@@ -143,7 +148,7 @@ class ChatService:
         resume = self._transcript(conv.id).exists()
         argv = launch_argv(self._launch, conv, resume=resume, resume_at=resume_at)
         proc = ChatProcess(argv, self._env, self._launch.repo_root,
-                           on_message=lambda msg: self._on_message(conv.id, msg),
+                           on_message=lambda msg: self._on_message(conv.id, proc, msg),
                            on_exit=lambda p, expected, err: self._on_exit(conv.id, p, expected, err))
         try:
             await proc.start()
@@ -176,8 +181,9 @@ class ChatService:
         proc, live.proc = live.proc, None  # detach first: its exit is then ignored as stale
         if proc is not None:
             await proc.close()
-        live.partial = ""
-        self._set_state(conv_id, "dormant")
+        if live.proc is None:  # a send may have attached a new process while we waited
+            live.partial = ""
+            self._set_state(conv_id, "dormant")
 
     async def _make_room(self) -> None:
         alive = [(cid, live) for cid, live in self._live.items() if live.proc and live.proc.alive]
@@ -200,10 +206,10 @@ class ChatService:
 
     # ---- stream messages
 
-    def _on_message(self, conv_id: str, msg: dict) -> None:
+    def _on_message(self, conv_id: str, proc: ChatProcess, msg: dict) -> None:
         live = self._live.get(conv_id)
-        if live is None:
-            return
+        if live is None or live.proc is not proc:
+            return  # a detached process still draining its output
         kind = msg.get("type")
         if kind == "stream_event":
             self._on_stream_event(conv_id, live, msg.get("event") or {})
@@ -242,14 +248,21 @@ class ChatService:
 
     def _on_system(self, conv_id: str, live: Live, msg: dict) -> None:
         if msg.get("subtype") == "status":
-            self._set_state(conv_id, "compacting" if msg.get("status") == "compacting" else "running")
+            if msg.get("status") == "compacting":
+                self._set_state(conv_id, "compacting")
+            elif live.state == "compacting":  # a stray status outside a turn must not wedge "running"
+                self._set_state(conv_id, "running")
         elif msg.get("subtype") == "compact_boundary":
             live.context_tokens = None
             self._broadcast(conv_id, "item", compact_item(msg["uuid"], msg.get("compact_metadata") or {}))
             self._broadcast(conv_id, "context", self._context(conv_id))
 
     def _on_result(self, conv_id: str, live: Live, msg: dict) -> None:
-        window = next(iter((msg.get("modelUsage") or {}).values()), {}).get("contextWindow")
+        # The result may list helper models too; the window that matters is the conversation's own model's.
+        usage = msg.get("modelUsage") or {}
+        model = self._index.get(conv_id).model
+        own = [u for name, u in usage.items() if name.startswith(model)]
+        window = (own[0] if own else next(iter(usage.values()), {})).get("contextWindow")
         self._index.update(conv_id, updated_at=self._wall(),
                            **({"context_window": window} if window else {}))
         live.partial = ""

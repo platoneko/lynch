@@ -131,6 +131,70 @@ def test_start_failure_leaves_a_notice_and_dormant(tmp_path):
     assert refused is None or "Claude" in refused
 
 
+def test_concurrent_sends_to_a_dormant_chat_share_one_process(tmp_path):
+    async def main():
+        svc, log = make_service(tmp_path)
+        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium")
+        await until(lambda: state_of(svc, conv.id) == "idle")
+        await svc.shutdown()
+        await asyncio.gather(svc.send(conv.id, "two"), svc.send(conv.id, "three"))
+        await until(lambda: ("text", "echo: three") in texts(svc.snapshot(conv.id)))
+        await svc.shutdown()
+        pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        return svc.snapshot(conv.id), launches(log), pending
+    snap, runs, pending = asyncio.run(main())
+    assert len(runs) == 2  # the create, then one resume
+    assert ("text", "echo: two") in texts(snap) and ("text", "echo: three") in texts(snap)
+    assert pending == []
+
+
+def test_a_send_during_a_stop_keeps_its_new_process(tmp_path):
+    async def main():
+        svc, _ = make_service(tmp_path)
+        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium")
+        await until(lambda: state_of(svc, conv.id) == "idle")
+        stopping = asyncio.create_task(svc._stop(conv.id))
+        await asyncio.sleep(0)  # the stop detaches the old process and waits for it to close
+        await svc.send(conv.id, "slow")
+        await stopping
+        state = state_of(svc, conv.id)
+        await until(lambda: any(i["kind"] == "tool" for i in svc.snapshot(conv.id)["items"]))
+        await svc.interrupt(conv.id)
+        await until(lambda: state_of(svc, conv.id) == "idle")
+        snap = svc.snapshot(conv.id)
+        await svc.shutdown()
+        return state, snap
+    state, snap = asyncio.run(main())
+    assert state == "running"
+    assert texts(snap)[-1] == ("notice", "已停止")
+
+
+def test_a_stray_status_outside_a_turn_keeps_idle(tmp_path):
+    async def main():
+        svc, _ = make_service(tmp_path)
+        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium")
+        await until(lambda: state_of(svc, conv.id) == "idle")
+        svc._on_message(conv.id, svc._live[conv.id].proc, {"type": "system", "subtype": "status", "status": None})
+        state = state_of(svc, conv.id)
+        await svc.shutdown()
+        return state
+    assert asyncio.run(main()) == "idle"
+
+
+def test_context_window_comes_from_the_conversation_model(tmp_path):
+    async def main():
+        svc, _ = make_service(tmp_path)
+        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium")
+        await until(lambda: state_of(svc, conv.id) == "idle")
+        svc._on_message(conv.id, svc._live[conv.id].proc, {"type": "result", "modelUsage": {
+            "claude-haiku-4-5": {"contextWindow": 200000},
+            "claude-opus-5-5[1m]": {"contextWindow": 1000000}}})
+        window = svc.snapshot(conv.id)["context"]["window"]
+        await svc.shutdown()
+        return window
+    assert asyncio.run(main()) == 1000000
+
+
 def test_deltas_stream_then_clear_on_the_full_text(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)
