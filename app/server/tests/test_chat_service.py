@@ -278,6 +278,23 @@ def test_a_rename_beats_a_title_still_on_its_way(tmp_path):
         return title
     assert asyncio.run(main()) == "mine"
 
+
+def test_a_rename_before_the_first_reply_ends_skips_the_title_request(tmp_path):
+    async def main():
+        svc, _ = make_service(tmp_path)
+        conv = await svc.create("ticker", "AAA.US", "slow", "claude-opus-5-5", "medium")  # a turn that waits
+        await until(lambda: state_of(svc, conv.id) == "running")
+        svc.rename(conv.id, "mine")
+        await svc.interrupt(conv.id)  # the first reply ends here
+        await until(lambda: state_of(svc, conv.id) == "idle")
+        await asyncio.sleep(0.2)  # time for a title answer, had one been asked for
+        live = svc._live[conv.id]
+        asked = (live.title_from, live.title_request)
+        title = svc._index.get(conv.id).title
+        await svc.shutdown()
+        return asked, title
+    assert asyncio.run(main()) == ((None, None), "mine")
+
 def test_deltas_stream_then_clear_on_the_full_text(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)
