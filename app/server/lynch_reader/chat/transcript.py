@@ -33,7 +33,8 @@ def projects_dir_for(repo_root: Path, home: Path) -> Path:
 
 def read_entries(path: Path) -> list[dict]:
     entries = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    # errors="replace": a torn last line may end inside a multi-byte character
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         try:
             entries.append(json.loads(line))
         except json.JSONDecodeError:
@@ -58,13 +59,17 @@ def current_branch(entries: list[dict]) -> list[dict]:
     return chain
 
 
-def history(branch: list[dict]) -> History:
+def history(branch: list[dict], entries: list[dict] | None = None) -> History:
+    """Items of `branch`; tool results are looked up in `entries` (the whole file, default the branch)
+    because parallel tool results other than the last hang off the branch."""
+    results = _tool_results(branch if entries is None else entries)
     items: list[dict] = []
-    tools: dict[str, dict] = {}
     tokens: int | None = None
+    last: dict | None = None  # the branch's final item or tool-result patch
     for entry in branch:
         if _is_compaction(entry):
-            items.append(compact_item(entry["uuid"], entry.get("compactMetadata") or {}))
+            last = compact_item(entry["uuid"], entry.get("compactMetadata") or {})
+            items.append(last)
             tokens = None
             continue
         if entry.get("type") not in ("user", "assistant"):
@@ -72,17 +77,17 @@ def history(branch: list[dict]) -> History:
         if entry["type"] == "assistant":
             tokens = context_tokens(entry["message"]) or tokens
         for item in message_items(entry):
+            last = item
             if item["kind"] == "tool_result":
-                if item["id"] in tools:
-                    tools[item["id"]].update(output=item["output"], is_error=item["is_error"], denied=item["denied"])
                 continue
+            if item["kind"] == "tool" and item["id"] in results:
+                result = results[item["id"]]
+                item.update(output=result["output"], is_error=result["is_error"], denied=result["denied"])
             items.append(item)
-            if item["kind"] == "tool":
-                tools[item["id"]] = item
-    last = next((i for i in reversed(items) if i["kind"] != "notice"), None)
-    unfinished = last is not None and (last["kind"] == "user" or (last["kind"] == "tool" and last["output"] is None))
-    if items and items[-1]["kind"] == "notice":
-        unfinished = False  # an interrupt marker closes the turn
+    # Open turn: the model owes a reply to a user message, a pending tool call, or a tool result.
+    # An interrupt notice, a reply text or a compaction closes it.
+    unfinished = last is not None and (
+        last["kind"] in ("user", "tool_result") or (last["kind"] == "tool" and last["output"] is None))
     return History(items, tokens, unfinished)
 
 
@@ -101,6 +106,12 @@ def edit_cut(branch: list[dict], message_uuid: str) -> str:
         if entry.get("type") == "assistant":
             return entry["uuid"]
     raise EditRejected("no earlier reply to cut at")
+
+
+def _tool_results(entries: list[dict]) -> dict[str, dict]:
+    """tool_use_id → result patch; tool ids are unique, so results of a dropped branch match no shown tool."""
+    return {item["id"]: item for entry in entries if entry.get("type") == "user"
+            for item in message_items(entry) if item["kind"] == "tool_result"}
 
 
 def _items_of(entry: dict) -> list[dict]:

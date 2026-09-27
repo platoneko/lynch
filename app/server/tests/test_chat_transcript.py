@@ -44,6 +44,15 @@ def test_read_entries_skips_a_torn_last_line(tmp_path):
     assert [e["uuid"] for e in read_entries(p)] == ["u1"]
 
 
+def test_read_entries_skips_a_last_line_torn_inside_a_cjk_character(tmp_path):
+    p = tmp_path / "c.jsonl"
+    whole = json.dumps(u("u1", None, "你好"), ensure_ascii=False).encode("utf-8")
+    torn = '{"type": "user", "uuid": "u2", "message": {"content": "估'.encode("utf-8")[:-1]  # 2 of 3 bytes
+    p.write_bytes(whole + b"\n" + torn)
+    entries = read_entries(p)
+    assert [e["uuid"] for e in entries] == ["u1"] and entries[0]["message"]["content"] == "你好"
+
+
 def test_linear_history_with_tool_result_folded():
     entries = [u("u1", None, "hi"), a("a1", "u1", tool="t1"),
                u("r1", "a1", [{"type": "tool_result", "tool_use_id": "t1", "content": "file body"}]),
@@ -52,6 +61,20 @@ def test_linear_history_with_tool_result_folded():
     assert kinds(h.items) == [("user", "hi"), ("tool", None), ("text", "done")]
     assert h.items[1]["output"] == "file body"
     assert h.context_tokens == 500 and not h.unfinished
+
+
+def test_parallel_tool_results_off_the_branch_are_folded():
+    # Parallel tool_use blocks chain as assistant entries; every result but the last hangs off its own
+    # tool_use entry, so it is not on the parent chain from the tip.
+    entries = [u("u1", None, "hi"), a("a1", "u1", tool="t1"), a("a2", "a1", tool="t2"),
+               u("r1", "a1", [{"type": "tool_result", "tool_use_id": "t1", "content": "first"}]),
+               u("r2", "a2", [{"type": "tool_result", "tool_use_id": "t2", "content": "second"}]),
+               a("a3", "r2", text="done"), META]
+    branch = current_branch(entries)
+    assert "r1" not in [e["uuid"] for e in branch]
+    h = history(branch, entries)
+    assert [(i["id"], i["output"]) for i in h.items if i["kind"] == "tool"] == [("t1", "first"), ("t2", "second")]
+    assert not h.unfinished
 
 
 def test_truncated_branch_is_hidden():
@@ -80,6 +103,9 @@ def test_context_unknown_right_after_compaction():
 def test_unfinished_turns():
     assert history(current_branch([u("u1", None, "hi")])).unfinished
     assert history(current_branch([u("u1", None, "hi"), a("a1", "u1", tool="t1")])).unfinished
+    after_result = [u("u1", None, "hi"), a("a1", "u1", tool="t1"),
+                    u("r1", "a1", [{"type": "tool_result", "tool_use_id": "t1", "content": "x"}])]
+    assert history(current_branch(after_result)).unfinished  # the model is still working on the result
     stopped = [u("u1", None, "hi"), a("a1", "u1", tool="t1"),
                u("r1", "a1", [{"type": "tool_result", "tool_use_id": "t1", "is_error": True, "content": "no"}]),
                u("i1", "r1", "[Request interrupted by user for tool use]")]
