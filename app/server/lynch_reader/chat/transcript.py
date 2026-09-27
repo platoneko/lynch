@@ -42,14 +42,13 @@ def read_entries(path: Path) -> list[dict]:
     return entries
 
 
-def current_branch(entries: list[dict]) -> list[dict]:
+def current_branch(entries: list[dict], tip_uuid: str | None = None) -> list[dict]:
+    """The chain ending at `tip_uuid`, by default at the newest message."""
     by_uuid = {e["uuid"]: e for e in entries if "uuid" in e}
     tips = [e for e in entries if e.get("type") in _MESSAGE_TYPES and "uuid" in e and not e.get("isSidechain")]
-    if not tips:
-        return []
+    cur: dict | None = by_uuid.get(tip_uuid) if tip_uuid else (tips[-1] if tips else None)
     chain: list[dict] = []
     seen: set[str] = set()
-    cur: dict | None = tips[-1]
     while cur is not None and cur["uuid"] not in seen:
         seen.add(cur["uuid"])
         chain.append(cur)
@@ -57,6 +56,11 @@ def current_branch(entries: list[dict]) -> list[dict]:
         cur = by_uuid.get(parent) if parent else None
     chain.reverse()
     return chain
+
+
+def has_message_after(entries: list[dict], count: int) -> bool:
+    """Whether a message entry was appended after the first `count` entries."""
+    return any(e.get("type") in _MESSAGE_TYPES for e in entries[count:])
 
 
 def history(branch: list[dict], entries: list[dict] | None = None) -> History:

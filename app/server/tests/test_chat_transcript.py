@@ -85,6 +85,13 @@ def test_truncated_branch_is_hidden():
         ("user", "one"), ("text", "r1"), ("user", "three"), ("text", "r3")]
 
 
+def test_branch_from_a_given_tip():
+    entries = [u("u1", None, "one"), a("a1", "u1", text="r1"),
+               u("u2", "a1", "two"), a("a2", "u2", text="r2"), META]
+    assert [e["uuid"] for e in current_branch(entries, "a1")] == ["u1", "a1"]
+    assert [e["uuid"] for e in current_branch(entries)] == ["u1", "a1", "u2", "a2"]
+
+
 def test_compaction_hops_back_via_logical_parent():
     entries = [u("u1", None, "one"), a("a1", "u1", text="r1", tokens=900), boundary("b1", "a1"),
                u("s1", "b1", "summary", isCompactSummary=True),

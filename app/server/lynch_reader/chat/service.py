@@ -5,6 +5,7 @@ Everything here runs on the server's event loop; nothing blocks it except small 
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 import uuid
 from collections.abc import Callable, Mapping
@@ -18,6 +19,8 @@ from lynch_reader.chat.config import (CHAT_EFFORTS, CHAT_MODELS, DEFAULT_EFFORT,
 from lynch_reader.chat.index import ChatIndex, Conversation, make_title
 from lynch_reader.chat.items import compact_item, context_tokens, framework_ticker, message_items, notice_item
 from lynch_reader.chat.process import ChatProcess
+
+log = logging.getLogger(__name__)
 
 BUSY = ("running", "compacting")
 COMPACT_COMMAND = "/compact"
@@ -45,6 +48,9 @@ class Live:
     partial: str = ""  # streamed text not yet closed by its full message
     context_tokens: int | None = None
     subscribers: set[asyncio.Queue] = field(default_factory=set)
+    # (resume uuid, transcript entry count) of an edit whose new process has not written yet;
+    # until it does, the file's newest message is still the edited-away branch.
+    pending_cut: tuple[str, int] | None = None
     # Held by public commands that spawn or stop this chat's own process (send, edit, archive),
     # so two of them never race on `proc`. `_spawn` / `_stop` / `_make_room` never take it:
     # `_make_room` stops other chats' idle processes without their lock, so no lock-order deadlock.
@@ -82,8 +88,15 @@ class ChatService:
         live = self._live.get(conv_id) or Live()
         path = self._transcript(conv_id)
         entries = transcript.read_entries(path) if path.exists() else []
+        tip = None
+        if live.pending_cut is not None:
+            cut, count = live.pending_cut
+            if transcript.has_message_after(entries, count):
+                live.pending_cut = None
+            else:
+                tip = cut
         # All entries, not just the branch: parallel tool results hang off the branch (Task 4 fix).
-        hist = transcript.history(transcript.current_branch(entries), entries)
+        hist = transcript.history(transcript.current_branch(entries, tip), entries)
         items = list(hist.items)
         if hist.unfinished and live.state == "dormant":
             items.append({"kind": "notice", "key": "interrupted", "text": "上次回答被中断"})
@@ -118,6 +131,7 @@ class ChatService:
             raise Invalid("empty message")
         live = self._live.setdefault(conv_id, Live())
         async with live.lock:
+            self._check_not_archived(conv_id, live)
             if text.lstrip().startswith(COMPACT_COMMAND) and live.state in BUSY:
                 raise Conflict("等这一轮结束再压缩")
             if live.proc is None or not live.proc.alive:
@@ -135,18 +149,21 @@ class ChatService:
         conv = self._conv(conv_id)
         live = self._live.setdefault(conv_id, Live())
         async with live.lock:
+            self._check_not_archived(conv_id, live)
             if live.state in BUSY:
                 raise Conflict("回答进行中，先停止再编辑")
             if not text.strip():
                 raise Invalid("empty message")
             path = self._transcript(conv_id)
-            branch = transcript.current_branch(transcript.read_entries(path)) if path.exists() else []
+            entries = transcript.read_entries(path) if path.exists() else []
             try:
-                cut = transcript.edit_cut(branch, message_uuid)
+                cut = transcript.edit_cut(transcript.current_branch(entries), message_uuid)
             except transcript.EditRejected as e:
                 raise Invalid(str(e)) from e
             await self._stop(conv_id)
             await self._spawn(conv, resume_at=cut)
+            live.pending_cut = (cut, len(entries))
+            live.context_tokens = None  # the pre-edit count belongs to the dropped turns
             self._broadcast(conv_id, "reset", {})  # the branch changed: watchers refetch a snapshot
             await self._write_user(conv_id, text)
 
@@ -162,9 +179,14 @@ class ChatService:
 
     async def archive_ticker(self, ticker: str) -> int:
         ids = [c.id for c in self._index.all() if c.ticker == ticker and self._visible(c)]
+        archived = 0
         for conv_id in ids:
-            await self.archive(conv_id)
-        return len(ids)
+            try:
+                await self.archive(conv_id)
+            except NotFound:
+                continue  # archived by someone else while we were stopping an earlier one
+            archived += 1
+        return archived
 
     async def reap_idle(self) -> None:
         now = self._now()
@@ -230,8 +252,10 @@ class ChatService:
         proc, live.proc = live.proc, None  # detach first: its exit is then ignored as stale
         if proc is not None:
             await proc.close()
-        if live.proc is None:  # a send may have attached a new process while we waited
+        # While we waited, an archive may have dropped this chat, or a send attached a new process.
+        if self._live.get(conv_id) is live and live.proc is None:
             live.partial = ""
+            live.pending_cut = None  # the next process resumes from the file's newest message
             self._set_state(conv_id, "dormant")
 
     async def _make_room(self) -> None:
@@ -248,6 +272,7 @@ class ChatService:
         was_busy = live.state in BUSY
         live.proc = None
         live.partial = ""
+        live.pending_cut = None  # an edit whose process died unwritten is lost: the next resume sees the old tip
         self._set_state(conv_id, "dormant")
         if not expected:
             text = "Claude 进程意外退出" + ("，本轮中断" if was_busy else "")
@@ -368,7 +393,12 @@ class ChatService:
     def _spawn_task(self, coro) -> None:
         task = asyncio.get_running_loop().create_task(coro)
         self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        task.add_done_callback(self._task_done)
+
+    def _task_done(self, task: asyncio.Task) -> None:
+        self._tasks.discard(task)
+        if not task.cancelled() and task.exception() is not None:
+            log.error("chat background task failed", exc_info=task.exception())
 
     def _context(self, conv_id: str) -> dict:
         conv = self._index.get(conv_id)
@@ -383,6 +413,12 @@ class ChatService:
 
     def _visible(self, conv: Conversation) -> bool:
         return not conv.archived and (conv.id in self._live or self._transcript(conv.id).exists())
+
+    def _check_not_archived(self, conv_id: str, live: Live) -> None:
+        """Under the chat's lock: an archive that ran while we waited for it has dropped `live`."""
+        conv = self._index.get(conv_id)
+        if self._live.get(conv_id) is not live or conv is None or conv.archived:
+            raise NotFound(conv_id)
 
     def _conv(self, conv_id: str) -> Conversation:
         conv = self._index.get(conv_id)
