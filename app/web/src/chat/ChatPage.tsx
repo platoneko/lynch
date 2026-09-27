@@ -176,12 +176,15 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
           {id !== null && <button className="icon-btn" disabled={gone} onClick={() => setMenu(!menu)} aria-label="更多">⋯</button>}
         </div>
         {menu && (
-          <div className="chat-menu">
-            <button onClick={() => { setMenu(false); setShowTools(!showTools); saveShowTools(!showTools); }}>
-              {showTools ? '隐藏调用过程' : '显示调用过程'}
-            </button>
-            <button disabled={busy} onClick={() => { setMenu(false); setCompactOpen(true); }}>压缩上下文</button>
-          </div>
+          <>
+            <div className="menu-backdrop" onClick={() => setMenu(false)} />
+            <div className="chat-menu">
+              <button onClick={() => { setMenu(false); setShowTools(!showTools); saveShowTools(!showTools); }}>
+                {showTools ? '隐藏调用过程' : '显示调用过程'}
+              </button>
+              <button disabled={busy} onClick={() => { setMenu(false); setCompactOpen(true); }}>压缩上下文</button>
+            </div>
+          </>
         )}
       </header>
 
