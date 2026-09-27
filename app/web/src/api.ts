@@ -7,7 +7,10 @@ export async function get(path: string): Promise<Response> {
   return res;
 }
 
-/** A JSON POST; the server explains a refusal in `{"error": ...}`, surfaced verbatim. */
+/**
+ * A JSON POST; the server explains a refusal in `{"error": ...}`, surfaced verbatim. An empty
+ * explanation falls back to the status code so the UI never shows a blank error.
+ */
 export async function post(path: string, body?: unknown): Promise<Response> {
   const res = await fetch(path, {
     method: 'POST',
@@ -18,7 +21,7 @@ export async function post(path: string, body?: unknown): Promise<Response> {
     const text = await res.text();
     let reason = text.slice(0, 300);
     try { reason = (JSON.parse(text) as { error?: string }).error ?? reason; } catch { /* not JSON */ }
-    throw new Error(reason);
+    throw new Error(reason || String(res.status));
   }
   return res;
 }

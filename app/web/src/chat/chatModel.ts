@@ -21,8 +21,23 @@ export function isBusy(state: ChatState): boolean {
   return state === 'running' || state === 'compacting';
 }
 
-export function fromSnapshot(s: Snapshot, queued: Queued[] = []): ChatView {
+/**
+ * A (re)connect's snapshot as the view. A queued message consumed while the stream was down shows up only
+ * here, never as a live `item`, so each user message new to this view settles one queued echo.
+ */
+export function fromSnapshot(s: Snapshot, prev: ChatView | null = null): ChatView {
+  const known = new Set(prev?.items.map((i) => i.key));
+  let queued = prev?.queued ?? [];
+  for (const it of s.items) {
+    if (it.kind === 'user' && !known.has(it.key)) queued = dropEcho(queued, it.text);
+  }
   return { conv: s.conv, items: s.items, partial: s.partial, usage: s.usage, context: s.context, queued };
+}
+
+/** Removes the first queued message with this text: one arrival settles one echo. */
+function dropEcho(queued: Queued[], text: string): Queued[] {
+  const at = queued.findIndex((q) => q.text === text);
+  return at >= 0 ? queued.filter((_, n) => n !== at) : queued;
 }
 
 /** An SSE frame as a typed event; unknown frames are ignored. */
@@ -49,9 +64,8 @@ export function applyEvent(v: ChatView, e: ChatEvent): ChatView {
       const at = v.items.findIndex((i) => i.key === e.item.key);
       const items = at >= 0 ? v.items.map((i, n) => (n === at ? e.item : i)) : [...v.items, e.item];
       const partial = e.item.kind === 'text' ? '' : v.partial;
-      const item = e.item;
-      const echo = item.kind === 'user' ? v.queued.findIndex((q) => q.text === item.text) : -1;
-      const queued = echo >= 0 ? v.queued.filter((_, n) => n !== echo) : v.queued;
+      // Only a first arrival settles an echo; a folded duplicate was already counted.
+      const queued = e.item.kind === 'user' && at < 0 ? dropEcho(v.queued, e.item.text) : v.queued;
       return { ...v, items, partial, queued };
     }
     case 'tool_result': {

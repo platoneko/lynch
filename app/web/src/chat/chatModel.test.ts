@@ -35,13 +35,44 @@ describe('applyEvent', () => {
     expect(v.items[0]).toMatchObject({ output: 'body', is_error: true, denied: true });
   });
   it('turns a queued echo into the real message', () => {
-    const v = fromSnapshot(snap([]), [{ localId: 'l1', text: 'more' }, { localId: 'l2', text: 'x' }]);
+    const v = { ...fromSnapshot(snap([])), queued: [{ localId: 'l1', text: 'more' }, { localId: 'l2', text: 'x' }] };
     expect(applyEvent(v, { type: 'item', item: user('u9', 'more') }).queued).toEqual([{ localId: 'l2', text: 'x' }]);
+  });
+  it('does not let a folded duplicate settle a queued echo', () => {
+    const v = { ...fromSnapshot(snap([user('u1', 'more')])), queued: [{ localId: 'l1', text: 'more' }] };
+    expect(applyEvent(v, { type: 'item', item: user('u1', 'more') }).queued).toEqual([{ localId: 'l1', text: 'more' }]);
+  });
+  it('settles the same text queued twice one arrival at a time', () => {
+    let v = { ...fromSnapshot(snap([])), queued: [{ localId: 'l1', text: 'go' }, { localId: 'l2', text: 'go' }] };
+    v = applyEvent(v, { type: 'item', item: user('u1', 'go') });
+    expect(v.queued).toEqual([{ localId: 'l2', text: 'go' }]);
+    v = applyEvent(v, { type: 'item', item: user('u2', 'go') });
+    expect(v.queued).toEqual([]);
   });
   it('drops the partial when the turn ends', () => {
     const v = applyEvent({ ...fromSnapshot(snap([])), partial: 'half' }, { type: 'state', state: 'idle' });
     expect(v.partial).toBe('');
     expect(v.conv.state).toBe('idle');
+  });
+  it('keeps the partial while compacting and drops it when dormant', () => {
+    const v = { ...fromSnapshot(snap([])), partial: 'half' };
+    expect(applyEvent(v, { type: 'state', state: 'compacting' }).partial).toBe('half');
+    expect(applyEvent(v, { type: 'state', state: 'dormant' }).partial).toBe('');
+  });
+});
+
+describe('fromSnapshot', () => {
+  const queued = [{ localId: 'l1', text: 'A' }, { localId: 'l2', text: 'B' }];
+  it('settles an echo consumed while the stream was down', () => {
+    const prev = { ...fromSnapshot(snap([user('u1')])), queued };
+    expect(fromSnapshot(snap([user('u1'), user('u2', 'A')]), prev).queued).toEqual([{ localId: 'l2', text: 'B' }]);
+  });
+  it('leaves echoes alone for messages the view already had', () => {
+    const prev = { ...fromSnapshot(snap([user('u1', 'A')])), queued };
+    expect(fromSnapshot(snap([user('u1', 'A')]), prev).queued).toEqual(queued);
+  });
+  it('starts with nothing queued', () => {
+    expect(fromSnapshot(snap([user('u1', 'A')])).queued).toEqual([]);
   });
 });
 
