@@ -145,7 +145,10 @@ class ChatService:
         self._conv(conv_id)
         live = self._live.get(conv_id)
         if live and live.proc and live.proc.alive and live.state in BUSY:
-            await live.proc.interrupt()
+            try:
+                await live.proc.interrupt()
+            except (BrokenPipeError, ConnectionResetError) as e:  # it exited after the alive check
+                raise Conflict("Claude 进程已退出，原因见对话里的提示") from e
 
     async def edit(self, conv_id: str, message_uuid: str, text: str) -> None:
         """Truncate the conversation before `message_uuid` and send `text` in its place. Files are not touched."""

@@ -6,9 +6,12 @@ needs to list, label and relaunch a conversation.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 TITLE_MAX = 40
 
@@ -32,6 +35,26 @@ def make_title(text: str) -> str:
     return line if len(line) <= TITLE_MAX else line[: TITLE_MAX - 1] + "…"
 
 
+def _parse_row(row: object) -> Conversation | None:
+    """A Conversation from one stored row, or None when a field is missing or of the wrong type."""
+    if not isinstance(row, dict):
+        return None
+    known = {f.name for f in fields(Conversation)}
+    try:
+        c = Conversation(**{k: v for k, v in row.items() if k in known})
+    except TypeError:  # a required field is missing
+        return None
+
+    def number(v: object) -> bool:
+        return isinstance(v, (int, float)) and not isinstance(v, bool)
+    well_formed = (all(isinstance(v, str) for v in (c.id, c.kind, c.title, c.model, c.effort))
+                   and (c.ticker is None or isinstance(c.ticker, str))
+                   and number(c.created_at) and number(c.updated_at)
+                   and (c.context_window is None or number(c.context_window))
+                   and isinstance(c.archived, bool))
+    return c if well_formed else None
+
+
 class ChatIndex:
     """Single writer: only the server's event loop touches it, so no lock."""
 
@@ -39,9 +62,11 @@ class ChatIndex:
         self._path = path
         self._rows: dict[str, Conversation] = {}
         if path.exists():
-            known = {f.name for f in fields(Conversation)}
             for row in json.loads(path.read_text(encoding="utf-8")):
-                conv = Conversation(**{k: v for k, v in row.items() if k in known})
+                conv = _parse_row(row)
+                if conv is None:  # one bad row must not take the whole reader down at startup
+                    log.warning("skipping malformed chat index row: %r", row)
+                    continue
                 self._rows[conv.id] = conv
 
     def get(self, conv_id: str) -> Conversation | None:

@@ -88,6 +88,23 @@ def test_interrupt_leaves_a_stopped_notice(tmp_path):
     assert texts(asyncio.run(main()))[-1] == ("notice", "已停止")
 
 
+def test_interrupt_on_a_process_that_just_died_is_a_conflict(tmp_path):
+    async def main():
+        svc, _ = make_service(tmp_path)
+        conv = await svc.create("ticker", "AAA.US", "slow", "claude-opus-5-5", "medium")
+        await until(lambda: any(i["kind"] == "tool" for i in svc.snapshot(conv.id)["items"]))
+
+        async def dead_pipe():  # the process exits between the alive check and the write
+            raise BrokenPipeError
+        svc._live[conv.id].proc.interrupt = dead_pipe
+        try:
+            with pytest.raises(Conflict):
+                await svc.interrupt(conv.id)
+        finally:
+            await svc.shutdown()
+    asyncio.run(main())
+
+
 def test_crash_broadcasts_a_notice_and_goes_dormant(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)

@@ -35,6 +35,17 @@ def test_unknown_fields_are_ignored_on_load(tmp_path):
     assert ChatIndex(path).get("c1") == conv()
 
 
+def test_malformed_rows_are_skipped_on_load(tmp_path, caplog):
+    path = tmp_path / "index.json"
+    good = asdict(conv())
+    missing = {k: v for k, v in asdict(conv(id="c2")).items() if k != "title"}
+    wrong_type = {**asdict(conv(id="c3")), "updated_at": "yesterday"}
+    path.write_text(json.dumps([good, missing, wrong_type, "not a row"]), encoding="utf-8")
+    idx = ChatIndex(path)
+    assert [c.id for c in idx.all()] == ["c1"]
+    assert sum("malformed" in r.message for r in caplog.records) == 3
+
+
 def test_make_title_collapses_whitespace_and_truncates():
     assert make_title("  研究一下\n宁德时代  ") == "研究一下 宁德时代"
     title = make_title("x" * 100)

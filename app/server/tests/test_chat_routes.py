@@ -26,7 +26,7 @@ def test_create_list_send_and_errors(repo, tmp_path, quotes):
         assert [x["id"] for x in c.get("/api/chats").json()["chats"]] == [conv_id]
         assert c.post(f"/api/chats/{conv_id}/messages", json={"text": ""}).status_code == 400
         assert c.post("/api/chats/nope/messages", json={"text": "x"}).status_code == 404
-        assert c.post(f"/api/chats/{conv_id}/interrupt").status_code == 204
+        assert c.post(f"/api/chats/{conv_id}/interrupt", json={}).status_code == 204
         assert c.post(f"/api/chats/{conv_id}/edit", json={"message_uuid": "x", "text": "y"}).status_code in (400, 409)
         assert c.get("/api/chats/nope/events").status_code == 404
         assert c.post("/api/chats/archive", json={"ticker": "AAA.US"}).json() == {"archived": 1}
@@ -88,9 +88,32 @@ def test_archive_one_chat(repo, tmp_path, quotes):
     c, svc = client(repo, tmp_path, quotes)
     with c:
         conv_id = c.post("/api/chats", json={"kind": "research", "text": "hi"}).json()["id"]
-        assert c.post(f"/api/chats/{conv_id}/archive").status_code == 204
+        assert c.post(f"/api/chats/{conv_id}/archive", json={}).status_code == 204
         assert c.get("/api/chats").json()["chats"] == []
-        assert c.post(f"/api/chats/{conv_id}/archive").status_code == 404
+        assert c.post(f"/api/chats/{conv_id}/archive", json={}).status_code == 404
+
+
+def test_posts_without_json_content_type_are_415(repo, tmp_path, quotes):
+    # A cross-site "simple" POST (text/plain) must not create, interrupt or archive a chat.
+    c, svc = client(repo, tmp_path, quotes)
+    with c:
+        forged = c.post("/api/chats", content=json.dumps({"kind": "research", "text": "hi"}),
+                        headers={"Content-Type": "text/plain"})
+        assert forged.status_code == 415 and "error" in forged.json()
+        assert c.get("/api/chats").json()["chats"] == []
+
+        conv_id = c.post("/api/chats", json={"kind": "research", "text": "slow"}).json()["id"]
+        for path in (f"/api/chats/{conv_id}/interrupt", f"/api/chats/{conv_id}/archive",
+                     f"/api/chats/{conv_id}/messages", "/api/chats/archive"):
+            r = c.post(path, content="{}", headers={"Content-Type": "text/plain"})
+            assert r.status_code == 415 and "error" in r.json(), path
+            assert c.post(path).status_code == 415, path  # no Content-Type at all
+        assert [x["id"] for x in c.get("/api/chats").json()["chats"]] == [conv_id]
+        assert svc._live[conv_id].proc is not None  # not killed
+
+        ok = c.post(f"/api/chats/{conv_id}/interrupt", json={},
+                    headers={"Content-Type": "application/json; charset=utf-8"})
+        assert ok.status_code == 204
 
 
 def test_reaper_survives_a_failed_sweep():

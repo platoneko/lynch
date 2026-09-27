@@ -87,7 +87,10 @@ def main(argv: list[str] | None = None) -> None:
         projects_dir_for(REPO_ROOT, Path.home()),
         dict(os.environ),
     )
-    uvicorn.run(create_app(FRAMEWORKS_DIR, WEB_DIST, QuoteCache(), chat=chat), host=args.host, port=args.port)
+    # An open chat stream never ends by itself: without a graceful-shutdown timeout, SIGTERM waits on it
+    # forever and the lifespan shutdown that stops the claude processes never runs.
+    uvicorn.run(create_app(FRAMEWORKS_DIR, WEB_DIST, QuoteCache(), chat=chat), host=args.host, port=args.port,
+                timeout_graceful_shutdown=5)
 
 
 if __name__ == "__main__":

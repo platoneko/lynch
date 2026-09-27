@@ -46,8 +46,17 @@ async def event_stream(service: ChatService, conv_id: str,
         service.unsubscribe(conv_id, q)
 
 
+def _is_json(request: Request) -> bool:
+    return request.headers.get("content-type", "").split(";")[0].strip().lower() == "application/json"
+
+
 def _guarded(handler: Callable[[Request], Awaitable[Response]]) -> Callable[[Request], Awaitable[Response]]:
     async def run(request: Request) -> Response:
+        # CSRF guard: a cross-site form or text/plain POST is a "simple" request the browser sends without a
+        # preflight; requiring JSON forces one, which this same-origin-only server never answers. Body-less
+        # commands (interrupt, archive) included: they kill a running agent.
+        if request.method == "POST" and not _is_json(request):
+            return JSONResponse({"error": "Content-Type must be application/json"}, status_code=415)
         try:
             return await handler(request)
         except NotFound:
