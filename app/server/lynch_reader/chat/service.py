@@ -9,16 +9,18 @@ import time
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 from lynch_reader.chat import transcript
 from lynch_reader.chat.config import (CHAT_EFFORTS, CHAT_MODELS, DEFAULT_EFFORT, DEFAULT_MODEL, IDLE_TIMEOUT_S,
                                       MAX_PROCESSES, LaunchConfig, launch_argv, launch_env)
 from lynch_reader.chat.index import ChatIndex, Conversation, make_title
-from lynch_reader.chat.items import compact_item, context_tokens, message_items, notice_item
+from lynch_reader.chat.items import compact_item, context_tokens, framework_ticker, message_items, notice_item
 from lynch_reader.chat.process import ChatProcess
 
 BUSY = ("running", "compacting")
+COMPACT_COMMAND = "/compact"
 KINDS = ("research", "ticker")
 
 
@@ -43,9 +45,10 @@ class Live:
     partial: str = ""  # streamed text not yet closed by its full message
     context_tokens: int | None = None
     subscribers: set[asyncio.Queue] = field(default_factory=set)
-    # Held by public commands that spawn or stop this chat's own process (send; Task 7: edit, archive),
+    # Held by public commands that spawn or stop this chat's own process (send, edit, archive),
     # so two of them never race on `proc`. `_spawn` / `_stop` / `_make_room` never take it:
     # `_make_room` stops other chats' idle processes without their lock, so no lock-order deadlock.
+    # Eviction (`_make_room`, `reap_idle`) skips a chat whose lock is held: a command is writing to it.
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
@@ -115,6 +118,8 @@ class ChatService:
             raise Invalid("empty message")
         live = self._live.setdefault(conv_id, Live())
         async with live.lock:
+            if text.lstrip().startswith(COMPACT_COMMAND) and live.state in BUSY:
+                raise Conflict("等这一轮结束再压缩")
             if live.proc is None or not live.proc.alive:
                 await self._spawn(conv)
             await self._write_user(conv_id, text)
@@ -124,6 +129,49 @@ class ChatService:
         live = self._live.get(conv_id)
         if live and live.proc and live.proc.alive and live.state in BUSY:
             await live.proc.interrupt()
+
+    async def edit(self, conv_id: str, message_uuid: str, text: str) -> None:
+        """Truncate the conversation before `message_uuid` and send `text` in its place. Files are not touched."""
+        conv = self._conv(conv_id)
+        live = self._live.setdefault(conv_id, Live())
+        async with live.lock:
+            if live.state in BUSY:
+                raise Conflict("回答进行中，先停止再编辑")
+            if not text.strip():
+                raise Invalid("empty message")
+            path = self._transcript(conv_id)
+            branch = transcript.current_branch(transcript.read_entries(path)) if path.exists() else []
+            try:
+                cut = transcript.edit_cut(branch, message_uuid)
+            except transcript.EditRejected as e:
+                raise Invalid(str(e)) from e
+            await self._stop(conv_id)
+            await self._spawn(conv, resume_at=cut)
+            self._broadcast(conv_id, "reset", {})  # the branch changed: watchers refetch a snapshot
+            await self._write_user(conv_id, text)
+
+    async def archive(self, conv_id: str) -> None:
+        """Hide the conversation; its process dies at once, whatever it was doing."""
+        self._conv(conv_id)
+        live = self._live.setdefault(conv_id, Live())
+        async with live.lock:
+            await self._stop(conv_id)
+            self._index.update(conv_id, archived=True)
+            self._broadcast(conv_id, "archived", {})
+        self._live.pop(conv_id, None)
+
+    async def archive_ticker(self, ticker: str) -> int:
+        ids = [c.id for c in self._index.all() if c.ticker == ticker and self._visible(c)]
+        for conv_id in ids:
+            await self.archive(conv_id)
+        return len(ids)
+
+    async def reap_idle(self) -> None:
+        now = self._now()
+        for conv_id, live in list(self._live.items()):
+            if (live.state == "idle" and live.proc and not live.lock.locked()
+                    and now - live.last_used >= self._idle_timeout_s):
+                await self._stop(conv_id)
 
     def subscribe(self, conv_id: str) -> asyncio.Queue:
         self._conv(conv_id)
@@ -155,6 +203,7 @@ class ChatService:
         except OSError as e:
             raise Conflict(f"无法启动 Claude：{e}") from e
         live.proc = proc
+        live.partial = ""
         live.last_used = self._now()
         self._set_state(conv.id, "idle")
 
@@ -188,7 +237,7 @@ class ChatService:
     async def _make_room(self) -> None:
         alive = [(cid, live) for cid, live in self._live.items() if live.proc and live.proc.alive]
         excess = len(alive) + 1 - self._max_processes
-        idle = sorted((live.last_used, cid) for cid, live in alive if live.state == "idle")
+        idle = sorted((live.last_used, cid) for cid, live in alive if live.state == "idle" and not live.lock.locked())
         for _, cid in idle[:max(0, excess)]:
             await self._stop(cid)
 
@@ -277,9 +326,23 @@ class ChatService:
                       "status": info.get("status"), "resets_at": info.get("resetsAt")}
         for cid in self._live:
             self._broadcast(cid, "usage", self.usage)
+        if info.get("isUsingOverage"):
+            self._notice(conv_id, "检测到超额计费（usage credits），已停止本轮")
+            self._spawn_task(self.interrupt(conv_id))
+        elif info.get("status") == "rejected":
+            reset = info.get("resetsAt")
+            when = datetime.fromtimestamp(reset).strftime("%m-%d %H:%M") if reset else "稍后"
+            self._notice(conv_id, f"订阅额度已满，{when} 重置")
 
     def _on_tool(self, conv_id: str, item: dict) -> None:
-        """Task 7 attaches a research conversation to the ticker it lands."""
+        """A research conversation joins the ticker whose framework it writes first."""
+        conv = self._index.get(conv_id)
+        if conv is None or conv.kind != "research" or conv.ticker is not None or item["name"] not in ("Write", "Edit"):
+            return
+        ticker = framework_ticker(str(item["input"].get("file_path", "")), self._launch.repo_root)
+        if ticker is not None:
+            conv = self._index.update(conv_id, ticker=ticker)
+            self._broadcast(conv_id, "conv", self._summary(conv))
 
     # ---- helpers
 
