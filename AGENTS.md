@@ -35,6 +35,14 @@ python3 -m unittest discover -s eval/lib -t . -p 'test_*.py'
 
 `scripts/daily_bands.py` 只读框架锚点 + Longbridge 现价 → 写 `output/bands/` → 飞书。**MUST NOT** 回写 `frameworks/*.md`，也 **MUST NOT** 让弱流水线改框架或概率锚点。`output/bands/` 是日报带时间戳的观测日志（跨带比较用），不是框架现状；框架文档不写现价与现行 zone（`frameworks/AGENTS.md`「现价 — 禁写契约」）。
 
+## app 对话
+
+- app 服务端（`app/server`）自身不写 `frameworks/`、`output/bands/`；**对话**会起 Claude Code 子进程（`claude -p`，走本机登录的订阅额度），它可以按白名单写 `frameworks/`、跑 `just check`、在 `frameworks/` 里提交。启动参数与白名单的唯一真源是 `app/server/lynch_reader/chat/config.py`。
+- app 对话是用户在场、逐轮确认的研究对话，**不属于**框架契约所禁止的「弱流水线」；落盘仍须用户明确说「可以落盘」，并走 `sediment-framework`。
+- 对话历史就是 Claude Code 的会话记录（`~/.claude/projects/<slug>/<id>.jsonl`，30 天清理）；`output/chat/index.json` 只是列表索引。
+- 服务端无鉴权，只绑 tailnet 地址——前提是 tailnet 里只有用户自己的设备。
+- longbridge MCP 用 OAuth：授权过期时在终端交互式 `claude` 里 `/mcp` 重新授权，app 对话随即可用。
+
 ## 密钥与本地
 
 - **MUST NOT** 提交 `.mcp.json`、`config/mcporter.json`、`config/daily.toml`、`_local/`
