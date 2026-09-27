@@ -16,6 +16,7 @@ import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.view.WindowInsets
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -123,6 +124,8 @@ class MainActivity : Activity() {
         w.settings.javaScriptEnabled = true
         w.settings.allowFileAccess = false
         w.settings.allowContentAccess = false
+        w.settings.domStorageEnabled = true // localStorage: chat drafts survive leaving the page
+        w.webChromeClient = WebChromeClient() // without one, JS alert/confirm are silently cancelled
         w.webViewClient = object : WebViewClient() {
             // true = block: only our proxy origin may load in the WebView.
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {

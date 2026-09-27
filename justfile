@@ -293,8 +293,19 @@ app-stop:
     #!/usr/bin/env bash
     set -euo pipefail
     if [ -f "{{app_pid}}" ] && kill -0 "$(cat "{{app_pid}}")" 2>/dev/null; then
-      kill "$(cat "{{app_pid}}")"
-      echo "stopped pid=$(cat {{app_pid}})"
+      pid=$(cat "{{app_pid}}")
+      kill "$pid"
+      # The server gives open chat streams 5 s, then stops its claude processes; wait for that.
+      for _ in $(seq 30); do
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.5
+      done
+      if kill -0 "$pid" 2>/dev/null; then
+        # Keep the pid file so app-start still sees it and does not start a second server.
+        echo "pid=$pid still running after 15 s — check {{app_log}}, or kill -9 $pid" >&2
+        exit 1
+      fi
+      echo "stopped pid=$pid"
     else
       echo "not running"
     fi
