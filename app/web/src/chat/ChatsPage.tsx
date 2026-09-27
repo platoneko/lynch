@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { isBusy } from './chatModel';
+import { ConfirmSheet, type Confirm } from './ConfirmSheet';
 import { groupChats, relativeTime, type ChatGroup } from './listModel';
 import type { ChatList, ChatSummary } from './types';
 
@@ -17,6 +18,7 @@ export function ChatsPage({ list, error, names, onBack, onOpen, onNewResearch, o
 }) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
+  const [confirm, setConfirm] = useState<Confirm | null>(null);
   const view = groupChats(list?.chats ?? [], query, names);
   const searching = query.trim() !== '';
   const now = Date.now() / 1000;
@@ -29,11 +31,15 @@ export function ChatsPage({ list, error, names, onBack, onOpen, onNewResearch, o
     });
   const archiveOne = (c: ChatSummary) => {
     const ask = isBusy(c.state) ? `「${c.title}」正在运行，将直接终止并归档。继续？` : `归档「${c.title}」？`;
-    if (window.confirm(ask)) onArchive(c.id);
+    setConfirm({ message: ask, label: '归档', onConfirm: () => onArchive(c.id) });
   };
   const archiveGroup = (g: ChatGroup) => {
     const running = g.running ? '其中正在运行的将直接终止。' : '';
-    if (window.confirm(`归档 ${g.ticker} 的全部 ${g.chats.length} 个对话？${running}`)) onArchiveTicker(g.ticker);
+    setConfirm({
+      message: `归档 ${g.ticker} 的全部 ${g.chats.length} 个对话？${running}`,
+      label: '归档',
+      onConfirm: () => onArchiveTicker(g.ticker),
+    });
   };
 
   return (
@@ -84,6 +90,7 @@ export function ChatsPage({ list, error, names, onBack, onOpen, onNewResearch, o
           <p className="empty">{searching ? '没有匹配的对话' : '还没有对话'}</p>
         )}
       </main>
+      <ConfirmSheet confirm={confirm} onClose={() => setConfirm(null)} />
     </div>
   );
 }

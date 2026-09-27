@@ -10,12 +10,13 @@ export async function get(path: string): Promise<Response> {
 /**
  * A JSON POST; the server explains a refusal in `{"error": ...}`, surfaced verbatim. An empty
  * explanation falls back to the status code so the UI never shows a blank error.
+ * Always JSON, even without a body: the server refuses other content types (its CSRF guard).
  */
-export async function post(path: string, body?: unknown): Promise<Response> {
+export async function post(path: string, body: unknown = {}): Promise<Response> {
   const res = await fetch(path, {
     method: 'POST',
-    headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     const text = await res.text();

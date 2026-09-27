@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
 import { isBusy } from './chatModel';
+import { ConfirmSheet, type Confirm } from './ConfirmSheet';
 import { relativeTime } from './listModel';
 import type { ChatSummary } from './types';
 
@@ -12,12 +13,16 @@ export function ChatSheetButton({ ticker, chats, onOpen, onNew }: {
   onNew: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [confirm, setConfirm] = useState<Confirm | null>(null);
   const mine = chats.filter((c) => c.ticker === ticker).sort((a, b) => b.updated_at - a.updated_at);
   const running = mine.some((c) => isBusy(c.state));
   const now = Date.now() / 1000;
   const startNew = () => {
-    if (running && !window.confirm(`${ticker} 已有对话在运行，仍要新开一个？`)) return;
-    onNew();
+    if (!running) {
+      onNew();
+      return;
+    }
+    setConfirm({ message: `${ticker} 已有对话在运行，仍要新开一个？`, label: '新开', onConfirm: onNew });
   };
   return (
     <>
@@ -43,6 +48,7 @@ export function ChatSheetButton({ ticker, chats, onOpen, onNew }: {
         </div>,
         document.body,
       )}
+      <ConfirmSheet confirm={confirm} onClose={() => setConfirm(null)} />
     </>
   );
 }
