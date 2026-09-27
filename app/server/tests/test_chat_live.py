@@ -3,8 +3,8 @@
 Guards the undocumented CLI flags and the launch config in lynch_reader/chat/config.py. Uses Haiku at low
 effort to spend little of the subscription. Run it after every Claude Code upgrade.
 
-Needs: a logged-in `claude` (subscription), `.mcp.json` at the repo root, `just`, and `frameworks/` as a real
-directory under the repo. In a git worktree where `frameworks` is a symlink, claude refuses `cd frameworks`,
+Needs: a logged-in `claude` (subscription), `.mcp.json` at the repo root, a logged-in `longbridge` CLI, `just`,
+and `frameworks/` as a real directory under the repo. In a git worktree where `frameworks` is a symlink, claude refuses `cd frameworks`,
 so the interrupt test cannot pass there.
 """
 from __future__ import annotations
@@ -53,7 +53,8 @@ def tool_pending(svc, conv_id):
     return any(i["kind"] == "tool" and i["output"] is None for i in svc.snapshot(conv_id)["items"])
 
 
-def test_launch_config_loads_both_mcp_servers_and_no_claudeai_connectors():
+def one_turn(prompt: str) -> list[dict]:
+    """Every stream message of a fresh process's first turn."""
     async def main():
         got = []
         c = conv(id=str(uuid.uuid4()), model=MODEL, effort=EFFORT)
@@ -61,17 +62,33 @@ def test_launch_config_loads_both_mcp_servers_and_no_claudeai_connectors():
                            got.append, lambda *a: None)
         try:
             await proc.start()
-            await proc.send_user("reply exactly: ok")
+            await proc.send_user(prompt)
             await until(lambda: any(m.get("type") == "result" for m in got), timeout=120)
         finally:
             await proc.close()
-        return next(m for m in got if m.get("subtype") == "init")
-    init = asyncio.run(main())
+        return got
+    return asyncio.run(main())
+
+
+def test_launch_config_loads_wisburg_and_no_claudeai_connectors():
+    init = next(m for m in one_turn("reply exactly: ok") if m.get("subtype") == "init")
     names = {s["name"] for s in init["mcp_servers"]}
-    assert {"wisburg", "longbridge"} <= names
+    assert "wisburg" in names
     assert not [n for n in names if n.startswith("claude.ai")]
     assert "sediment-framework" in init["skills"]
 
+
+
+def test_longbridge_cli_queries_run_and_orders_are_denied():
+    got = one_turn("Run these two Bash commands one at a time, then reply exactly: done\n"
+                   "1. `longbridge quote AAPL.US --format json`\n2. `longbridge order --help`")
+    denied = [d["tool_input"].get("command", "") for m in got if m.get("type") == "result"
+              for d in m.get("permission_denials", [])]
+    results = [b for m in got if m.get("type") == "user" for b in m["message"]["content"]
+               if isinstance(b, dict) and b.get("type") == "tool_result"]
+    assert [c for c in denied if "longbridge order" in c]
+    assert not [c for c in denied if "longbridge quote" in c]
+    assert [r for r in results if not r.get("is_error") and "AAPL" in str(r.get("content"))]
 
 def test_interjection_and_interrupt(tmp_path):
     async def main():

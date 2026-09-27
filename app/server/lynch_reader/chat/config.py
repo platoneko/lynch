@@ -23,15 +23,30 @@ DEFAULT_EFFORT = "medium"
 IDLE_TIMEOUT_S = 3600.0  # the prompt cache lives 1 h, so a lazy resume within it mostly hits the cache
 MAX_PROCESSES = 8
 
+# Market data comes from the longbridge CLI on its own login (the one eval/lib and the daily report use), not
+# the longbridge MCP, which needs a separate OAuth (user, 2026-09-28). Query subcommands only: the CLI can also
+# place orders, read the account, edit watchlists/alerts/DCA plans, post community topics, log out and self-update,
+# and nobody has confirmed its login is a paper account.
+LONGBRIDGE_QUERY_COMMANDS: tuple[str, ...] = (
+    "quote", "depth", "brokers", "trades", "intraday", "kline", "static", "calc-index", "capital", "market-temp",
+    "trading", "security-list", "participants", "option", "warrant", "financial-report", "financial-statement",
+    "business-segments", "industry-rank", "industry-peers", "industry-valuation", "institution-rating", "dividend",
+    "forecast-eps", "consensus", "etf-docs", "macrodata", "finance-calendar", "valuation", "valuation-rank", "news",
+    "filing", "exchange-rate", "shareholder", "company", "executive", "operating", "corp-action", "invest-relation",
+    "constituent", "market-status", "broker-holding", "ah-premium", "trade-stats", "anomaly", "top-movers",
+    "screener", "rank", "compare", "fund-holder", "insider-trades", "investors", "short-positions", "short-trades",
+    "quant", "help",
+)
+
 # spec §9 第 2 条. `cd frameworks && git …` is refused by a built-in rule, hence `git -C frameworks`.
 ALLOWED_TOOLS: tuple[str, ...] = (
     "Read", "Glob", "Grep", "Skill", "WebSearch", "WebFetch",
     "Write(frameworks/**)", "Edit(frameworks/**)",
-    # longbridge includes trading tools; the linked account is a paper account (user, 2026-09-27).
-    "mcp__wisburg__*", "mcp__longbridge__*",
+    "mcp__wisburg__*",
     "Bash(cd frameworks)", "Bash(just check)", "Bash(python3 eval/*)",
     "Bash(git -C frameworks status*)", "Bash(git -C frameworks diff*)", "Bash(git -C frameworks log*)",
     "Bash(git -C frameworks add *)", "Bash(git -C frameworks commit *)", "Bash(git -C frameworks revert *)",
+    *(f"Bash(longbridge {c}*)" for c in LONGBRIDGE_QUERY_COMMANDS),
 )
 
 # Any of these would move billing from the Max subscription to the API.
@@ -44,6 +59,8 @@ _RULES = """\
 You are working inside the lynch phone app; the user replies turn by turn from a phone.
 - Before changing any framework, read frameworks/AGENTS.md and follow the sediment-framework skill. \
 Do not create or modify anything under frameworks/ until the user explicitly says it may be written (e.g. 「可以落盘」).
+- For market data use the longbridge CLI with Bash, e.g. `longbridge quote AAPL.US --format json`; \
+`longbridge help` lists the commands. Only query commands are allowed (no orders, account data or login).
 - Write files only with the Write and Edit tools. Run git only as `git -C frameworks …`; `cd frameworks && git …` is refused.
 - After landing a change, run `cd frameworks && just check`. When it passes, stage only the files this conversation changed and commit.
 - The user may edit an earlier message, which truncates this conversation. File changes made in the truncated turns \

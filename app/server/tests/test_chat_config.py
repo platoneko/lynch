@@ -4,7 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from lynch_reader.chat.config import ALLOWED_TOOLS, LaunchConfig, launch_argv, launch_env, system_prompt
+from lynch_reader.chat.config import (
+    ALLOWED_TOOLS, LONGBRIDGE_QUERY_COMMANDS, LaunchConfig, launch_argv, launch_env, system_prompt,
+)
 from tests.chat_helpers import conv
 
 CFG = LaunchConfig(claude_cmd=("claude",), repo_root=Path("/repo"))
@@ -57,10 +59,18 @@ def test_whitelist_is_the_last_variadic_flag():
 
 def test_whitelist_matches_the_verified_rules():
     # spec §9 第 2 条: plain `git …` rules would never match (git must run as `git -C frameworks …`)
-    assert len(ALLOWED_TOOLS) == 19
+    assert len(ALLOWED_TOOLS) == 18 + len(LONGBRIDGE_QUERY_COMMANDS)
     assert "Bash(git -C frameworks commit *)" in ALLOWED_TOOLS
     assert not [t for t in ALLOWED_TOOLS if t.startswith("Bash(git ") and "-C frameworks" not in t]
     assert "Write(frameworks/**)" in ALLOWED_TOOLS and "Write" not in ALLOWED_TOOLS
+
+
+def test_longbridge_is_the_cli_with_query_commands_only():
+    # user, 2026-09-28: the CLI's own login instead of MCP OAuth; no orders, account data, login or self-update
+    assert not [t for t in ALLOWED_TOOLS if t.startswith("mcp__longbridge")]
+    assert "Bash(longbridge quote*)" in ALLOWED_TOOLS and "Bash(longbridge financial-report*)" in ALLOWED_TOOLS
+    for c in ("order", "auth", "update", "positions", "assets", "watchlist", "alert", "dca", "topic", "sharelist"):
+        assert not [t for t in ALLOWED_TOOLS if t.startswith(f"Bash(longbridge {c}")], c
 
 
 def test_env_drops_api_billing_and_claudeai_connectors():
@@ -73,6 +83,7 @@ def test_ticker_prompt_names_its_files_and_rules():
     p = system_prompt(conv(kind="ticker", ticker="NVDA.US"))
     assert "frameworks/NVDA.US.md" in p and "frameworks/eval/NVDA.US.py" in p
     assert "git -C frameworks" in p and "sediment-framework" in p
+    assert "longbridge quote" in p
 
 
 def test_research_prompt_has_no_ticker():

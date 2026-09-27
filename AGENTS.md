@@ -42,7 +42,7 @@ python3 -m unittest discover -s eval/lib -t . -p 'test_*.py'
 - 对话历史就是 Claude Code 的会话记录（`~/.claude/projects/<slug>/<id>.jsonl`，30 天清理）；`output/chat/index.json` 只是列表索引。
 - 服务端无鉴权，只绑 tailnet 地址——前提是 tailnet 里只有用户自己的设备。
 - 工具白名单是护栏，不是沙箱：agent 能写并运行 `frameworks/eval/` 里的脚本，等于能在本机执行任意代码，所以只能由用户本人驱动对话。
-- longbridge MCP 用 OAuth：授权过期时在终端交互式 `claude` 里 `/mcp` 重新授权，app 对话随即可用。
+- app 对话的行情走 `longbridge` 命令行（和 `eval/lib`、日报共用它的登录），白名单只放行查询类子命令，不放行下单、账户、登录与升级；登录过期时在终端 `longbridge auth login`。
 
 ## 密钥与本地
 
