@@ -246,6 +246,38 @@ def test_rename_sets_the_title_and_tells_an_open_page(tmp_path):
     assert event["title"] == "AAA 估值" and event["state"] == "idle"
     assert stored.title == "AAA 估值"
 
+
+def test_a_new_conversation_takes_claudes_title_after_its_first_reply(tmp_path):
+    async def main():
+        svc, _ = make_service(tmp_path)
+        conv = await svc.create("ticker", "AAA.US", "what is priced in", "claude-opus-5-5", "medium")
+        q = svc.subscribe(conv.id)
+        event = await next_event(q, "conv", lambda d: d["title"] != "what is priced in")
+        await svc.send(conv.id, "second")
+        await until(lambda: len(svc.snapshot(conv.id)["items"]) == 4)
+        title = svc._index.get(conv.id).title
+        await svc.shutdown()
+        return event, title
+    event, title = asyncio.run(main())
+    assert event["title"] == "title: what is priced in"
+    assert title == "title: what is priced in"  # asked once: the second reply does not retitle
+
+
+def test_a_rename_beats_a_title_still_on_its_way(tmp_path):
+    async def main():
+        svc, _ = make_service(tmp_path)
+        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium")
+        await until(lambda: svc._index.get(conv.id).title == "title: one")
+        live = svc._live[conv.id]
+        live.title_request = "title-late"  # as if a request were still out
+        svc.rename(conv.id, "mine")
+        svc._on_message(conv.id, live.proc, {"type": "control_response", "response": {
+            "subtype": "success", "request_id": "title-late", "response": {"title": "late"}}})
+        title = svc._index.get(conv.id).title
+        await svc.shutdown()
+        return title
+    assert asyncio.run(main()) == "mine"
+
 def test_deltas_stream_then_clear_on_the_full_text(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)

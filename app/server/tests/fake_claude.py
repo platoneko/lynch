@@ -153,6 +153,10 @@ def handle(text):
 for line in sys.stdin:
     msg = json.loads(line)
     if msg.get("type") == "control_request":
-        emit({"type": "control_response", "response": {"subtype": "success", "request_id": msg["request_id"]}})
+        request = msg["request"]
+        answer = ({"response": {"title": f"title: {request['description']}"}}
+                  if request["subtype"] == "generate_session_title" else {})
+        emit({"type": "control_response",
+              "response": {"subtype": "success", "request_id": msg["request_id"], **answer}})
         continue
     handle(msg["message"]["content"])

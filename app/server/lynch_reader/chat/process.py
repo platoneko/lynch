@@ -51,6 +51,13 @@ class ChatProcess:
         await self._write({"type": "control_request", "request_id": f"interrupt-{self._requests}",
                            "request": {"subtype": "interrupt"}})
 
+    async def generate_title(self, request_id: str, description: str) -> None:
+        """Claude Code's own session title (a Haiku call on this process's login), also written to the
+        transcript as `ai-title`; the answer arrives as the control_response with this request id."""
+        await self._write({"type": "control_request", "request_id": request_id,
+                           "request": {"subtype": "generate_session_title", "description": description,
+                                       "persist": True}})
+
     async def close(self) -> None:
         """Ends the whole process group; the exit is then reported as expected."""
         if self._proc is None:

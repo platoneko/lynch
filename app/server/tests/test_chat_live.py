@@ -135,3 +135,19 @@ def test_edit_truncates_and_continues_on_the_new_branch(tmp_path):
             await cleanup(svc, conv_id)
     words = asyncio.run(main())
     assert "ALPHA" in words and "CHARLIE" in words and "BRAVO" not in words
+
+
+def test_a_new_conversation_gets_claudes_own_title(tmp_path):
+    async def main():
+        svc = service(tmp_path)
+        conv_id = None
+        try:
+            c = await svc.create("research", None, "Reply exactly: ok. (Topic: AEHR wafer-level burn-in valuation)",
+                                 MODEL, EFFORT)
+            conv_id = c.id
+            await until(lambda: svc._index.get(c.id).title != c.title, timeout=120)
+            return c.title, svc._index.get(c.id).title
+        finally:
+            await cleanup(svc, conv_id)
+    first, titled = asyncio.run(main())
+    assert titled and titled != first

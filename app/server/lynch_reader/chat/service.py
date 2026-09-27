@@ -48,6 +48,10 @@ class Live:
     partial: str = ""  # streamed text not yet closed by its full message
     context_tokens: int | None = None
     subscribers: set[asyncio.Queue] = field(default_factory=set)
+    # A new conversation's first message, until its first reply ends and claude is asked for a title;
+    # then the id of that request, whose answer replaces the title unless the user renamed meanwhile.
+    title_from: str | None = None
+    title_request: str | None = None
     # (resume uuid, transcript entry count) of an edit whose new process has not written yet;
     # until it does, the file's newest message is still the edited-away branch.
     pending_cut: tuple[str, int] | None = None
@@ -128,7 +132,7 @@ class ChatService:
                             title=make_title(text), model=model, effort=effort, created_at=now, updated_at=now,
                             context_window=window)
         self._index.put(conv)
-        self._live[conv.id] = Live()  # visible in the list before its transcript exists
+        self._live[conv.id] = Live(title_from=text)  # visible in the list before its transcript exists
         await self.send(conv.id, text)
         return conv
 
@@ -203,6 +207,9 @@ class ChatService:
         self._conv(conv_id)
         if not isinstance(title, str) or not title.strip():
             raise Invalid("empty title")
+        live = self._live.get(conv_id)
+        if live is not None:  # the user's title wins over claude's, even one still on its way
+            live.title_from = live.title_request = None
         conv = self._index.update(conv_id, title=make_title(title))
         self._broadcast(conv_id, "conv", self._summary(conv))
 
@@ -313,6 +320,8 @@ class ChatService:
             self._on_rate_limit(conv_id, msg.get("rate_limit_info") or {})
         elif kind == "result":
             self._on_result(conv_id, live, msg)
+        elif kind == "control_response":
+            self._on_control_response(conv_id, live, msg.get("response") or {})
 
     def _on_stream_event(self, conv_id: str, live: Live, event: dict) -> None:
         self._mark_busy(conv_id)
@@ -361,6 +370,27 @@ class ChatService:
         live.last_used = self._now()
         self._set_state(conv_id, "idle")
         self._broadcast(conv_id, "context", self._context(conv_id))
+        if live.title_from is not None:
+            self._spawn_task(self._request_title(conv_id, live))
+
+    async def _request_title(self, conv_id: str, live: Live) -> None:
+        text, live.title_from = live.title_from, None
+        if live.proc is None:
+            return
+        live.title_request = f"title-{uuid.uuid4().hex[:8]}"  # set before writing: the answer may be quick
+        try:
+            await live.proc.generate_title(live.title_request, text)
+        except OSError as e:  # the process died: the first-message title stays
+            log.info("chat %s: title request not sent: %s", conv_id, e)
+
+    def _on_control_response(self, conv_id: str, live: Live, response: dict) -> None:
+        if live.title_request is None or response.get("request_id") != live.title_request:
+            return  # an interrupt ack, or a title the user's rename superseded
+        live.title_request = None
+        title = (response.get("response") or {}).get("title")
+        if isinstance(title, str) and title.strip():  # null when generation failed: keep the old title
+            conv = self._index.update(conv_id, title=make_title(title))
+            self._broadcast(conv_id, "conv", self._summary(conv))
 
     def _on_rate_limit(self, conv_id: str, info: dict) -> None:
         windows = info.get("unifiedWindows") or {}
