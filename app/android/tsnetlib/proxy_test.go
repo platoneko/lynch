@@ -115,3 +115,60 @@ func TestProxyReportsDeadServer(t *testing.T) {
 		t.Fatalf("got %d %s %q", resp.StatusCode, resp.Header.Get("Content-Type"), body)
 	}
 }
+
+// At a cold start the node runs before its MagicDNS names resolve; the proxy
+// keeps dialing instead of showing the error page.
+func TestProxyRetriesUntilTheNameResolves(t *testing.T) {
+	defer func(d time.Duration) { lookupRetry = d }(lookupRetry)
+	lookupRetry = time.Millisecond
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "ok")
+	}))
+	defer backend.Close()
+	target := strings.TrimPrefix(backend.URL, "http://")
+
+	var mu sync.Mutex
+	misses := 0
+	dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if misses < 3 {
+			misses++
+			return nil, &net.DNSError{Err: "no such host", Name: "pivot-home.example.ts.net", IsNotFound: true}
+		}
+		return (&net.Dialer{}).DialContext(ctx, network, addr)
+	}
+	front := httptest.NewServer(newProxy(target, dial))
+	defer front.Close()
+
+	resp, err := http.Get(front.URL + "/api/tickers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(body) != "ok" {
+		t.Fatalf("got %d %q", resp.StatusCode, body)
+	}
+}
+
+func TestProxyStopsRetryingAtTheDialDeadline(t *testing.T) {
+	defer func(d, r time.Duration) { dialTimeout, lookupRetry = d, r }(dialTimeout, lookupRetry)
+	dialTimeout, lookupRetry = 50*time.Millisecond, time.Millisecond
+	never := func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return nil, &net.DNSError{Err: "no such host", Name: "pivot-home.example.ts.net", IsNotFound: true}
+	}
+	front := httptest.NewServer(newProxy("pivot-home.example.ts.net:3151", never))
+	defer front.Close()
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(front.URL + "/api/tickers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(string(body), "no such host") {
+		t.Fatalf("got %d %q", resp.StatusCode, body)
+	}
+}

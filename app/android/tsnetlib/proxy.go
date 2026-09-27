@@ -2,6 +2,7 @@ package tsnetlib
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"html"
 	"net"
@@ -19,6 +20,11 @@ type dialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 // instead of returning the 502 page. A var only so tests can shorten it.
 var dialTimeout = 15 * time.Second
 
+// Right after the node reaches Running its netmap may not be in yet, so the
+// MagicDNS target falls through to system DNS and "no such host" (every cold
+// start). Redial at this interval until the name resolves or the dial times out.
+var lookupRetry = 300 * time.Millisecond
+
 // newProxy forwards every request to the single configured target over dial
 // (the tailnet in production); nothing in a request can pick another host.
 func newProxy(target string, dial dialFunc) http.Handler {
@@ -28,7 +34,7 @@ func newProxy(target string, dial dialFunc) http.Handler {
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			ctx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
-			return dial(ctx, network, addr)
+			return dialUntilResolved(ctx, dial, network, addr)
 		},
 		ResponseHeaderTimeout: 30 * time.Second,
 	}
@@ -47,6 +53,21 @@ func newProxy(target string, dial dialFunc) http.Handler {
 		fmt.Fprintf(w, retryPage, html.EscapeString(msg))
 	}
 	return p
+}
+
+func dialUntilResolved(ctx context.Context, dial dialFunc, network, addr string) (net.Conn, error) {
+	for {
+		conn, err := dial(ctx, network, addr)
+		var dnsErr *net.DNSError
+		if err == nil || !errors.As(err, &dnsErr) || !dnsErr.IsNotFound {
+			return conn, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, err // the lookup error says more than "deadline exceeded"
+		case <-time.After(lookupRetry):
+		}
+	}
 }
 
 func isNavigation(r *http.Request) bool {
