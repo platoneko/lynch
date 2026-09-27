@@ -5,7 +5,7 @@ import json
 
 from starlette.testclient import TestClient
 
-from lynch_reader.chat.routes import event_stream
+from lynch_reader.chat.routes import chat_lifespan, event_stream
 from lynch_reader.web import create_app
 from tests.chat_helpers import make_service, state_of, until
 
@@ -72,3 +72,45 @@ def test_event_stream_starts_with_a_snapshot_then_live_events(tmp_path):
 def test_app_without_chat_has_no_chat_routes(repo, tmp_path, quotes):
     c = TestClient(create_app(repo, tmp_path / "no-dist", quotes))
     assert c.get("/api/chats").status_code == 404
+
+
+def test_bad_bodies_are_400(repo, tmp_path, quotes):
+    c, svc = client(repo, tmp_path, quotes)
+    with c:
+        not_utf8 = c.post("/api/chats", content=b"\xff\xfe{", headers={"Content-Type": "application/json"})
+        assert not_utf8.status_code == 400 and "error" in not_utf8.json()
+        wrong_type = c.post("/api/chats", json={"kind": "research", "text": "hi", "model": ["x"]})
+        assert wrong_type.status_code == 400 and "error" in wrong_type.json()
+        assert c.get("/api/chats").json()["chats"] == []
+
+
+def test_archive_one_chat(repo, tmp_path, quotes):
+    c, svc = client(repo, tmp_path, quotes)
+    with c:
+        conv_id = c.post("/api/chats", json={"kind": "research", "text": "hi"}).json()["id"]
+        assert c.post(f"/api/chats/{conv_id}/archive").status_code == 204
+        assert c.get("/api/chats").json()["chats"] == []
+        assert c.post(f"/api/chats/{conv_id}/archive").status_code == 404
+
+
+def test_reaper_survives_a_failed_sweep():
+    class Stub:
+        def __init__(self):
+            self.sweeps = 0
+            self.shut = False
+
+        async def reap_idle(self):
+            self.sweeps += 1
+            if self.sweeps == 1:
+                raise RuntimeError("watcher failed")
+
+        async def shutdown(self):
+            self.shut = True
+
+    async def main():
+        stub = Stub()
+        async with chat_lifespan(stub, reap_interval_s=0.01)(None):
+            await until(lambda: stub.sweeps >= 3)
+        return stub
+    stub = asyncio.run(main())
+    assert stub.sweeps >= 3 and stub.shut

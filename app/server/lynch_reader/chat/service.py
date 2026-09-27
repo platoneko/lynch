@@ -107,6 +107,9 @@ class ChatService:
     # ---- commands
 
     async def create(self, kind: str, ticker: str | None, text: str, model: str, effort: str) -> Conversation:
+        # The values come from a JSON body; a list or dict would break the membership tests below.
+        if not all(isinstance(v, str) for v in (kind, text, model, effort)) or not isinstance(ticker, str | None):
+            raise Invalid("fields must be strings")
         if kind not in KINDS:
             raise Invalid(f"unknown kind {kind!r}")
         if kind == "ticker" and not ticker:

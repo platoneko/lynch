@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from starlette.requests import Request
@@ -14,6 +15,8 @@ from starlette.routing import Route
 from lynch_reader.catalog import framework_path
 from lynch_reader.chat.config import DEFAULT_EFFORT, DEFAULT_MODEL
 from lynch_reader.chat.service import ChatService, Conflict, Invalid, NotFound
+
+log = logging.getLogger(__name__)
 
 HEARTBEAT_S = 15.0  # keeps the phone proxy and WebView from dropping a quiet stream
 REAP_INTERVAL_S = 60.0
@@ -25,8 +28,10 @@ def sse(event: str, data: dict) -> str:
 
 async def event_stream(service: ChatService, conv_id: str,
                        disconnected: Callable[[], Awaitable[bool]]) -> AsyncIterator[str]:
-    # Subscribe, then snapshot, with no await in between: no event can land between the two, so none is
-    # missed or repeated. `delta` events carry no key, so a repeat would double the partial text on the client.
+    # Subscribe, then snapshot, with no await in between: the in-memory state (partial text, state, context,
+    # usage) is exact, so keyless `delta` events are never doubled. The snapshot's items come from the transcript
+    # file, which claude writes at other moments than its stdout: a keyed item may be in the snapshot and then
+    # arrive again as an `item` event; the client folds items by `key`.
     q = service.subscribe(conv_id)
     try:
         yield sse("snapshot", service.snapshot(conv_id))
@@ -57,7 +62,7 @@ def _guarded(handler: Callable[[Request], Awaitable[Response]]) -> Callable[[Req
 async def _body(request: Request) -> dict:
     try:
         body = await request.json()
-    except json.JSONDecodeError as e:
+    except ValueError as e:  # JSONDecodeError, or UnicodeDecodeError on a non-UTF-8 body
         raise Invalid("body is not JSON") from e
     if not isinstance(body, dict):
         raise Invalid("body must be an object")
@@ -123,18 +128,23 @@ def chat_routes(service: ChatService, frameworks_dir: Path) -> list[Route]:
     ]
 
 
-def chat_lifespan(service: ChatService):
+def chat_lifespan(service: ChatService, *, reap_interval_s: float = REAP_INTERVAL_S):
     @asynccontextmanager
     async def lifespan(app):
         async def reap_forever():
             while True:
-                await asyncio.sleep(REAP_INTERVAL_S)
-                await service.reap_idle()
+                await asyncio.sleep(reap_interval_s)
+                try:
+                    await service.reap_idle()
+                except Exception:  # one failed sweep must not end idle recycling for the server's lifetime
+                    log.exception("idle chat reaping failed")
 
         reaper = asyncio.create_task(reap_forever())
         try:
             yield
         finally:
             reaper.cancel()
+            with suppress(asyncio.CancelledError):
+                await reaper
             await service.shutdown()  # a turn in flight is lost; history marks it (spec §3a)
     return lifespan
