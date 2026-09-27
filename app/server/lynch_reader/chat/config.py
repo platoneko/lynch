@@ -76,8 +76,9 @@ class LaunchConfig:
 
 def system_prompt(conv: Conversation) -> str:
     if conv.kind == "ticker":
-        scope = (f"This conversation is about {conv.ticker}: its framework is frameworks/{conv.ticker}.md "
-                 f"and its calculation is frameworks/eval/{conv.ticker}.py.")
+        # The eval script is left unnamed: the framework's header points at it, and naming it here had the
+        # agent read it up front in every chat (about 7k tokens) before any number was in question.
+        scope = f"This conversation is about {conv.ticker}: its framework is frameworks/{conv.ticker}.md."
     else:
         scope = ("This conversation researches a new ticker that has no framework yet; once landed it becomes "
                  "frameworks/<TICKER>.md with frameworks/eval/<TICKER>.py.")

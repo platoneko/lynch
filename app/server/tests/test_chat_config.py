@@ -81,7 +81,8 @@ def test_env_drops_api_billing_and_claudeai_connectors():
 
 def test_ticker_prompt_names_its_files_and_rules():
     p = system_prompt(conv(kind="ticker", ticker="NVDA.US"))
-    assert "frameworks/NVDA.US.md" in p and "frameworks/eval/NVDA.US.py" in p
+    assert "frameworks/NVDA.US.md" in p
+    assert "frameworks/eval/" not in p  # read only when the numbers are checked, not up front
     assert "git -C frameworks" in p and "sediment-framework" in p
     assert "longbridge quote" in p
 
