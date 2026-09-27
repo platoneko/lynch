@@ -187,6 +187,7 @@ button { font: inherit; color: inherit; }
 /* Like .chats: the body carries no bar-height padding, so a fixed bar would cover the first messages. */
 .chat .bar-top { position: sticky; }
 .chat-body { padding: 8px 16px 16px; }
+.chat-body .banner-muted { margin: 8px 0 0; } /* the body already pads the sides */
 .chat-title { flex: 1; min-width: 0; }
 .chat-title-main { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .chat-meta { display: flex; flex-wrap: wrap; gap: 0 10px; color: var(--muted); font-size: 11px; }

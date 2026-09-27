@@ -5,10 +5,13 @@ import {
   applyEvent, compactText, contextText, contextWarn, editableUuids, fromSnapshot, isBusy, stateText, toolDetail,
   toolSummary, turnDocLinks, usageText, type ChatView,
 } from './chatModel';
+import { cancelEdit, composer, draftText, sent, startEdit, typed, type Composer } from './composer';
 import { clearDraft, loadDraft, saveDraft } from './drafts';
 import type { ChatItem, ChatOptions } from './types';
 
 const INPUT_MAX_PX = 160;
+
+type RenderedText = Map<string, { text: string; html: string }>; // item key → its source and HTML
 
 /** One conversation; with `id === null`, the blank page before its first message. */
 export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, onCreated }: {
@@ -22,17 +25,20 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
 }) {
   const draftKey = id ?? `new/${newTicker ?? ''}`;
   const [view, setView] = useState<ChatView | null>(null);
-  const [text, setText] = useState(() => loadDraft(draftKey));
-  const [editing, setEditing] = useState<string | null>(null); // uuid of the message being rewritten
+  const [input, setInput] = useState<Composer>(() => composer(loadDraft(draftKey)));
+  const [sending, setSending] = useState(false);
+  const inFlight = useRef(false); // state lags a render behind; a quick double tap must not send twice
   const [error, setError] = useState<string | null>(null);
   const [lost, setLost] = useState(false); // the stream dropped and a reconnect is pending
+  const [gone, setGone] = useState(false); // archived or cleaned up: nothing more can be sent
   const [menu, setMenu] = useState(false);
   const [compactOpen, setCompactOpen] = useState(false);
   const [compactHint, setCompactHint] = useState('');
   const [model, setModel] = useState('');
   const [effort, setEffort] = useState('');
   const [stream, setStream] = useState(0); // bumping it reopens the event stream (after an edit)
-  const input = useRef<HTMLTextAreaElement>(null);
+  const inputEl = useRef<HTMLTextAreaElement>(null);
+  const rendered = useRef<{ targets: LinkTargets; html: RenderedText }>({ targets, html: new Map() });
   const stick = useRef(true); // follow new output only while the reader is at the bottom
 
   useEffect(() => {
@@ -53,7 +59,9 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
       reset: () => setStream((n) => n + 1),
       gone: () => {
         setLost(false);
-        setError('对话已归档');
+        setGone(true);
+        setMenu(false);
+        setError('对话已归档或不存在');
       },
       lost: () => setLost(true),
     });
@@ -70,29 +78,38 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
     if (stick.current) window.scrollTo(0, document.documentElement.scrollHeight);
   }, [view]);
   useLayoutEffect(() => {
-    const el = input.current;
+    const el = inputEl.current;
     if (!el) return;
     el.style.height = 'auto';
     el.style.height = `${Math.min(el.scrollHeight, INPUT_MAX_PX)}px`;
-  }, [text]);
+  }, [input.text]);
+  useEffect(() => saveDraft(draftKey, draftText(input)), [draftKey, input]);
 
   const items = view?.items ?? [];
-  const html = useMemo(
-    () => new Map(items.flatMap((it) => (it.kind === 'text' ? [[it.key, renderFragment(it.text, targets)] as const] : []))),
-    [items, targets]);
+  // Every event yields a new `items`; render only text that is new, reusing the rest by key.
+  const html = useMemo(() => {
+    const prev: RenderedText = rendered.current.targets === targets ? rendered.current.html : new Map();
+    const next: RenderedText = new Map();
+    for (const it of items) {
+      if (it.kind !== 'text') continue;
+      const hit = prev.get(it.key);
+      next.set(it.key, hit?.text === it.text ? hit : { text: it.text, html: renderFragment(it.text, targets) });
+    }
+    rendered.current = { targets, html: next };
+    return next;
+  }, [items, targets]);
   const editable = useMemo(() => editableUuids(items), [items]);
   const links = useMemo(() => turnDocLinks(items), [items]);
   const busy = view ? isBusy(view.conv.state) : false;
 
-  const onText = (t: string) => {
-    setText(t);
-    saveDraft(draftKey, t);
-  };
+  const { text, editing } = input;
   const fail = (e: unknown) => setError(String(e instanceof Error ? e.message : e));
 
   const submit = async () => {
     const body = text.trim();
-    if (!body) return;
+    if (!body || inFlight.current) return;
+    inFlight.current = true;
+    setSending(true);
     setError(null);
     try {
       if (id === null) {
@@ -103,7 +120,6 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
       }
       if (editing !== null) {
         await editMessage(id, editing, body);
-        setEditing(null);
       } else {
         const localId = `${Date.now()}-${Math.random()}`;
         if (busy) setView((v) => v && { ...v, queued: [...v.queued, { localId, text: body }] });
@@ -114,20 +130,17 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
           throw e;
         }
       }
-      clearDraft(draftKey);
-      setText('');
+      setInput((c) => sent(c, body));
     } catch (e) {
       fail(e);
+    } finally {
+      inFlight.current = false;
+      setSending(false);
     }
   };
-  const startEdit = (it: Extract<ChatItem, { kind: 'user' }>) => {
-    setEditing(it.uuid);
-    onText(it.text);
-    input.current?.focus();
-  };
-  const cancelEdit = () => {
-    setEditing(null);
-    onText('');
+  const edit = (it: Extract<ChatItem, { kind: 'user' }>) => {
+    setInput((c) => startEdit(c, it.uuid, it.text));
+    inputEl.current?.focus();
   };
   const compact = async () => {
     setCompactOpen(false);
@@ -142,7 +155,7 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
 
   const conv = view?.conv;
   const modelLabel = (m: string) => options?.models.find((x) => x.id === m)?.label ?? m;
-  const title = conv?.title ?? (newTicker ? `讨论 ${newTicker}` : '新票调研');
+  const title = conv?.title ?? (id !== null ? '对话' : newTicker ? `讨论 ${newTicker}` : '新票调研');
   const ticker = conv?.ticker ?? newTicker;
 
   return (
@@ -159,7 +172,7 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
               {view?.usage && <span>{usageText(view.usage)}</span>}
             </div>
           </div>
-          {id !== null && <button className="icon-btn" onClick={() => setMenu(!menu)} aria-label="更多">⋯</button>}
+          {id !== null && <button className="icon-btn" disabled={gone} onClick={() => setMenu(!menu)} aria-label="更多">⋯</button>}
         </div>
         {menu && (
           <div className="chat-menu">
@@ -177,11 +190,11 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
               <div className="msg msg-user">
                 <div className="msg-text">{it.text}</div>
                 {editable.has(it.uuid) && (
-                  <button className="edit-btn" disabled={busy} onClick={() => startEdit(it)} aria-label="编辑">✎</button>
+                  <button className="edit-btn" disabled={busy || gone || sending} onClick={() => edit(it)} aria-label="编辑">✎</button>
                 )}
               </div>
             )}
-            {it.kind === 'text' && <div className="msg msg-agent md" dangerouslySetInnerHTML={{ __html: html.get(it.key) ?? '' }} />}
+            {it.kind === 'text' && <div className="msg msg-agent md" dangerouslySetInnerHTML={{ __html: html.get(it.key)?.html ?? '' }} />}
             {it.kind === 'tool' && (
               <details className={`tool ${it.denied ? 'tool-denied' : ''}`}>
                 <summary>{toolSummary(it)}</summary>
@@ -204,7 +217,7 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
 
       <footer className="chat-input">
         {editing !== null && (
-          <div className="chat-editing">编辑消息：发送后将截断此后的对话（文件改动不会撤销）<button onClick={cancelEdit}>取消</button></div>
+          <div className="chat-editing">编辑消息：发送后将截断此后的对话（文件改动不会撤销）<button onClick={() => setInput(cancelEdit)}>取消</button></div>
         )}
         {id === null && options && (
           <div className="model-picker">
@@ -218,10 +231,12 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
         )}
         {view && <div className="chat-status">{stateText(view.conv.state)}</div>}
         <div className="chat-input-row">
-          <textarea ref={input} rows={1} value={text} onChange={(e) => onText(e.target.value)}
+          <textarea ref={inputEl} rows={1} value={text} disabled={gone} onChange={(e) => setInput((c) => typed(c, e.target.value))}
             placeholder={id === null ? (newTicker ? `围绕 ${newTicker} 说点什么` : '想调研哪只票？') : '输入消息'} />
-          <button className="send-btn" onClick={submit} disabled={!text.trim() || (editing !== null && busy)}>发送</button>
-          {busy && id !== null && <button className="stop-btn" onClick={() => interruptChat(id).catch(fail)} aria-label="停止">■</button>}
+          <button className="send-btn" onClick={submit} disabled={!text.trim() || sending || gone || (editing !== null && busy)}>
+            {sending ? '发送中' : '发送'}
+          </button>
+          {busy && id !== null && !gone && <button className="stop-btn" onClick={() => interruptChat(id).catch(fail)} aria-label="停止">■</button>}
         </div>
       </footer>
 
