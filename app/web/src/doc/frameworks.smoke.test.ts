@@ -13,6 +13,9 @@ const files = HAS_CONTENT
   ? readdirSync(DIR).filter((f) => f.endsWith('.md') && !f.startsWith('_') && !REPO_DOCS.has(f))
   : [];
 const pool = new Set(files.map((f) => f.slice(0, -'.md'.length)));
+const AXES_DIR = join(DIR, 'axes');
+const axisFiles = existsSync(AXES_DIR) ? readdirSync(AXES_DIR).filter((f) => f.endsWith('.md')) : [];
+const axes = new Set(axisFiles.map((f) => f.slice(0, -'.md'.length)));
 
 describe.skipIf(!HAS_CONTENT)('real frameworks', () => {
   it('finds the pool', () => {
@@ -20,12 +23,18 @@ describe.skipIf(!HAS_CONTENT)('real frameworks', () => {
   });
 
   it.each(files)('%s renders cleanly', (file) => {
-    const doc = buildDoc(readFileSync(join(DIR, file), 'utf8'), pool);
+    const doc = buildDoc(readFileSync(join(DIR, file), 'utf8'), { pool, axes });
     expect(doc.sections.filter((s) => s.level === 2).map((s) => s.title.split('.')[0])).toEqual(['0', '1', '2', '3', '4']);
     const html = [doc.headerHtml, ...doc.sections.map((s) => s.bodyHtml)].join('\n');
     // Fenced blocks render as `<code class="language-…">`; their literal `\(` is code, not missed math.
     const outsideCode = html.replace(/<code\b[^>]*>[\s\S]*?<\/code>/g, '');
     expect(outsideCode).not.toContain('\\(');
+    expect(html).not.toContain('katex-error');
+  });
+
+  it.each(axisFiles)('axes/%s renders cleanly', (file) => {
+    const doc = buildDoc(readFileSync(join(AXES_DIR, file), 'utf8'), { pool, axes });
+    const html = [doc.headerHtml, ...doc.sections.map((s) => s.bodyHtml)].join('\n');
     expect(html).not.toContain('katex-error');
   });
 });

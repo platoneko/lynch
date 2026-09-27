@@ -1,17 +1,18 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { fetchFramework } from '../api';
-import { extraBands, rowZone, type ExtraBand } from '../home/listModel';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { AxisLine } from '../home/AxisLine';
+import { consensusText, extraBands, rowZone, type ExtraBand } from '../home/listModel';
 import { fmt, priceDecimals } from '../home/PriceBar';
 import { BandHead } from '../home/TickerCard';
-import type { TickerRow } from '../types';
-import { buildDoc, renderFragment, sectionLabel, type BuiltDoc } from './buildDoc';
+import { docHash } from '../route';
+import type { AxisInfo, TickerRow } from '../types';
+import { buildDoc, renderFragment, sectionLabel, type BuiltDoc, type LinkTargets } from './buildDoc';
 import { currentIndex, isVisible, neighbors, openIdsFor } from './nav';
 
-export function DocPage({ ticker, row, pool, zoneLabel, onBack }: {
-  ticker: string;
-  row: TickerRow | undefined;
-  pool: ReadonlySet<string>;
-  zoneLabel: (id: string) => string;
+/** A folding, jumpable markdown document: a ticker's framework or a shared axis. */
+export function DocPage({ load: fetchSource, targets, head, onBack }: {
+  load: () => Promise<string>; // the page is keyed on its document, so this runs once per mount
+  targets: LinkTargets;
+  head: ReactNode; // shown above the document's own title block
   onBack: () => void;
 }) {
   const [source, setSource] = useState<string | null>(null);
@@ -23,11 +24,12 @@ export function DocPage({ ticker, row, pool, zoneLabel, onBack }: {
 
   const load = () => {
     setError(null);
-    fetchFramework(ticker).then(setSource, (e: unknown) => setError(String(e instanceof Error ? e.message : e)));
+    fetchSource().then(setSource, (e: unknown) => setError(String(e instanceof Error ? e.message : e)));
   };
-  useEffect(load, [ticker]);
+  // Once per document: the parent keys the page on it.
+  useEffect(load, []);
 
-  const doc: BuiltDoc | null = useMemo(() => (source ? buildDoc(source, pool) : null), [source, pool]);
+  const doc: BuiltDoc | null = useMemo(() => (source ? buildDoc(source, targets) : null), [source, targets]);
 
   // Track which heading the reader is in: the last one scrolled under the top bar.
   useEffect(() => {
@@ -81,7 +83,6 @@ export function DocPage({ ticker, row, pool, zoneLabel, onBack }: {
       else n.add(id);
       return n;
     });
-  const zone = row ? rowZone(row) : null;
 
   return (
     <div className="doc">
@@ -96,10 +97,7 @@ export function DocPage({ ticker, row, pool, zoneLabel, onBack }: {
 
       <main className="doc-body">
         <div className="doc-head">
-          {zone && <span className={`tag zone-bg-${zone}`}>{zoneLabel(zone)}</span>}
-          {row && extraBands(row).map((b) => (
-            <BandBlock key={b.kind} band={b} pool={pool} zoneLabel={zoneLabel} dp={priceDecimals(ticker)} />
-          ))}
+          {head}
           <div className="md" dangerouslySetInnerHTML={{ __html: doc.headerHtml }} />
         </div>
         {sections.filter((s) => isVisible(s, open)).map((s) => {
@@ -126,14 +124,50 @@ export function DocPage({ ticker, row, pool, zoneLabel, onBack }: {
   );
 }
 
+/** A framework's head: its zone, extra bands, and the axes it is mounted on. */
+export function TickerDocHead({ ticker, row, targets, axes, zoneLabel, onOpenAxis }: {
+  ticker: string;
+  row: TickerRow | undefined;
+  targets: LinkTargets;
+  axes: ReadonlyMap<string, AxisInfo>;
+  zoneLabel: (id: string) => string;
+  onOpenAxis: (name: string) => void;
+}) {
+  const zone = row ? rowZone(row) : null;
+  return (
+    <>
+      {zone && <span className={`tag zone-bg-${zone}`}>{zoneLabel(zone)}</span>}
+      {row && extraBands(row).map((b) => (
+        <BandBlock key={b.kind} band={b} targets={targets} zoneLabel={zoneLabel} dp={priceDecimals(ticker)} />
+      ))}
+      {row && <AxisLine row={row} axes={axes} onOpenAxis={onOpenAxis} />}
+    </>
+  );
+}
+
+/** An axis's head: where consensus sits on it, and the tickers mounted on it. */
+export function AxisDocHead({ axis, pool }: { axis: AxisInfo | undefined; pool: ReadonlySet<string> }) {
+  if (!axis) return null;
+  const { consensus } = axis;
+  return (
+    <div className="axis-head">
+      <p><span className="tag tag-axis">{consensusText(consensus)}</span>{consensus?.note && <span className="axis-note">{consensus.note}</span>}</p>
+      <p className="axis-mounts">
+        挂载票：
+        {axis.tickers.map((t) => (pool.has(t) ? <a key={t} href={docHash(t)}>{t}</a> : <span key={t}>{t}</span>))}
+      </p>
+    </div>
+  );
+}
+
 /**
  * An extra band's head line and its background, collapsed by default:
  * +V — the credited prices, the Outputs V_opt line and the assumption rows it cites;
  * candidate — its prices and the gate assumption's text (why it is only a candidate).
  */
-function BandBlock({ band, pool, zoneLabel, dp }: {
+function BandBlock({ band, targets, zoneLabel, dp }: {
   band: ExtraBand;
-  pool: ReadonlySet<string>;
+  targets: LinkTargets;
   zoneLabel: (id: string) => string;
   dp: number;
 }) {
@@ -143,8 +177,8 @@ function BandBlock({ band, pool, zoneLabel, dp }: {
     const sources = band.kind === 'option'
       ? [band.anchors.line, ...band.anchors.rows.map((r) => `**${r.id}** ${r.text}`)]
       : [band.anchors.background];
-    return sources.filter((s) => s !== null).map((s) => renderFragment(s, pool));
-  }, [band.anchors, pool]);
+    return sources.filter((s) => s !== null).map((s) => renderFragment(s, targets));
+  }, [band.anchors, targets]);
   return (
     <div className="doc-band">
       <BandHead band={band} zoneLabel={zoneLabel} />

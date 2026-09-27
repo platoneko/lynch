@@ -52,16 +52,23 @@ button { font: inherit; color: inherit; }
 .home-meta { display: flex; justify-content: space-between; align-items: center; padding-top: 8px; color: var(--muted); font-size: 13px; }
 .home-meta select { font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 2px 6px; }
 .home-meta .chips { padding-top: 0; }
+/* The axis chips unfold as a wrapped block: a dozen of them would scroll far off the side. */
+.chips-wrap { flex-wrap: wrap; overflow-x: visible; }
 .cards { padding: 10px 16px; display: flex; flex-direction: column; gap: 10px; }
 .empty { color: var(--muted); text-align: center; font-size: 13px; }
 
-.card { display: block; width: 100%; text-align: left; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; }
+.card { display: block; width: 100%; text-align: left; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; cursor: pointer; }
 .card-line1 { display: flex; align-items: baseline; gap: 8px; }
 .card-ticker { font-weight: 600; }
 .card-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
 .card-price { font-variant-numeric: tabular-nums; }
 .card-session { margin-right: 4px; color: var(--muted); font-size: 11px; }
 .card-classes { color: var(--muted); font-size: 13px; margin-top: 2px; }
+/* Shared axes: each opens its document; the card's own tap opens the ticker. */
+.axis-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 4px; font-size: 12px; }
+.axis-caption { color: var(--muted); }
+.axis-link { padding: 1px 8px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--accent); font-size: 12px; }
+.axis-own { color: var(--muted); }
 .band { margin-top: 8px; }
 .band-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .band-caption { flex: none; color: var(--muted); font-size: 12px; }
@@ -106,6 +113,10 @@ button { font: inherit; color: inherit; }
 .doc-band details[open] > summary::before { content: "▾"; }
 .doc-band-prices { margin: 2px 0 4px; font-size: 13px; font-variant-numeric: tabular-nums; }
 .doc-band .md { font-size: 13px; }
+.axis-head p { margin: 4px 0; font-size: 13px; }
+.tag-axis { border: 1px solid var(--line); margin-right: 6px; }
+.axis-note { color: var(--muted); }
+.axis-mounts a, .axis-mounts span { margin-right: 8px; }
 .sec-head { scroll-margin-top: var(--bar-h); cursor: pointer; margin: 0; padding: 12px 0; border-bottom: 1px solid var(--line); display: flex; gap: 6px; }
 .sec-2 > .sec-head { font-size: 18px; }
 .sec-3 > .sec-head { font-size: 15px; padding-left: 14px; color: var(--text); }

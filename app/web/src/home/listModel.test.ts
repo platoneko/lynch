@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { TickerRow, ZoneId } from '../types';
-import { applyFilter, DEFAULT_FILTER, extraBands, latestAsOf, lynchClasses, quoteTimeText } from './listModel';
+import { applyFilter, consensusText, DEFAULT_FILTER, extraBands, latestAsOf, lynchClasses, quoteTimeText } from './listModel';
 
 const ZONES = ['deep_discount', 'conservative', 'neutral', 'optimistic', 'stretched'];
 
 function row(ticker: string, over: Partial<TickerRow> = {}): TickerRow {
   return {
     ticker, name: `${ticker} name`, market: 'US', lynch_primary: 'stalwart', lynch_secondary: null,
-    currency: 'USD', L: 10, M: 20, H: 40, option: null, candidate: null,
+    currency: 'USD', L: 10, M: 20, H: 40, option: null, candidate: null, axes: [], consensus: null,
     band: { price: 25, session: null, as_of: '2026-09-26T09:03:00+08:00', zone: 'neutral', option_zone: null, candidate_zone: null },
     quote_error: null, error: null, ...over,
   };
@@ -43,6 +43,12 @@ describe('filters', () => {
       row('B.US', { lynch_primary: 'fast_grower', lynch_secondary: 'cyclical' }),
       row('C.US', { lynch_primary: 'stalwart' })];
     expect(tickers(applyFilter(rows, { ...DEFAULT_FILTER, classes: ['cyclical'] }, ZONES))).toEqual(['A.US', 'B.US']);
+  });
+  it('axis filter matches any selected axis; a parse-error row has none', () => {
+    const rows = [row('A.US', { axes: ['al', 'cu'] }), row('B.US', { axes: ['li'] }), row('C.US'),
+      row('D.US', { axes: null })];
+    const f = { ...DEFAULT_FILTER, sort: 'ticker' as const, axes: ['cu', 'li'] };
+    expect(tickers(applyFilter(rows, f, ZONES))).toEqual(['A.US', 'B.US']);
   });
   it('market filter is multi-select and drops rows with an unknown market', () => {
     const rows = [row('A.US'), row('0700.HK', { market: 'HK' }), row('601899.SH', { market: 'A' }),
@@ -120,5 +126,12 @@ describe('extraBands', () => {
   });
   it('is empty without an option or a candidate', () => {
     expect(extraBands(row('A.US'))).toEqual([]);
+  });
+});
+
+describe('consensusText', () => {
+  it('shows the tier or that none is written', () => {
+    expect(consensusText({ tier: 'M–H', note: 'x' })).toBe('共识 M–H');
+    expect(consensusText(null)).toBe('共识未标注');
   });
 });

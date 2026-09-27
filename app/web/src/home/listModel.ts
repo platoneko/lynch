@@ -1,4 +1,4 @@
-import type { Candidate, OptionBand, TickerRow, ZoneId } from '../types';
+import type { Candidate, Consensus, OptionBand, TickerRow, ZoneId } from '../types';
 import { fmt, priceDecimals } from './PriceBar';
 
 /** The zone a row shows, filters and sorts by. */
@@ -32,16 +32,17 @@ export interface HomeFilter {
   zones: string[];
   classes: string[];
   markets: string[];
+  axes: string[];
   sort: SortKey;
 }
 
-export const DEFAULT_FILTER: HomeFilter = { query: '', zones: [], classes: [], markets: [], sort: 'zone' };
+export const DEFAULT_FILTER: HomeFilter = { query: '', zones: [], classes: [], markets: [], axes: [], sort: 'zone' };
 
 export function applyFilter(rows: TickerRow[], f: HomeFilter, zoneOrder: string[]): TickerRow[] {
   const serverOrder = new Map(rows.map((r, i) => [r.ticker, i]));
   const kept = rows.filter(
     (r) => matchesQuery(r, f.query) && matchesZones(r, f.zones) && matchesClasses(r, f.classes)
-      && matchesMarkets(r, f.markets),
+      && matchesMarkets(r, f.markets) && matchesAxes(r, f.axes),
   );
   return kept.sort(comparator(f.sort, zoneOrder, serverOrder));
 }
@@ -66,6 +67,11 @@ function matchesClasses(r: TickerRow, classes: string[]): boolean {
 function matchesMarkets(r: TickerRow, markets: string[]): boolean {
   if (markets.length === 0) return true;
   return r.market != null && markets.includes(r.market);
+}
+
+function matchesAxes(r: TickerRow, axes: string[]): boolean {
+  if (axes.length === 0) return true;
+  return (r.axes ?? []).some((a) => axes.includes(a));
 }
 
 function comparator(sort: SortKey, zoneOrder: string[], serverOrder: Map<string, number>) {
@@ -99,4 +105,9 @@ export function latestAsOf(rows: TickerRow[]): string | null {
 /** The card's Lynch class line in Chinese; an id the server has no label for shows as is. */
 export function lynchClasses(r: TickerRow, label: (id: string) => string): string {
   return [r.lynch_primary, r.lynch_secondary].filter((c) => c != null).map(label).join(' / ');
+}
+
+/** 「共识 L」, or that none is written yet (AGENTS.md「共享情景轴」共识行). */
+export function consensusText(c: Consensus | null): string {
+  return c ? `共识 ${c.tier}` : '共识未标注';
 }

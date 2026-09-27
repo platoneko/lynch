@@ -16,7 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from eval.lib.axes import list_axis_paths  # noqa: E402
+from eval.lib.axes import list_axis_paths, load_axis  # noqa: E402
 from eval.lib.frameworks import FRAMEWORKS_DIR, basket_label, list_framework_paths, load_framework, market_bucket  # noqa: E402
 
 _TITLE = re.compile(r"^#\s+(\S+)\s+[—–-]\s+(.+)$")
@@ -58,37 +58,6 @@ def _parse_title(path: Path) -> tuple[str, str | None]:
         return path.stem, None
     ticker, rest = m.group(1), m.group(2)
     return ticker, _chinese_name(rest)
-
-
-def _parse_axis(path: Path) -> tuple[str, str, str]:
-    """Return (logical_id, title_rest, mounts_blob)."""
-    logical = f"_AXIS.{path.stem}"
-    title_rest = path.stem
-    mounts = ""
-    with path.open(encoding="utf-8") as f:
-        for i, line in enumerate(f):
-            if i == 0:
-                m = _TITLE.match(line.rstrip("\n"))
-                if m:
-                    logical = m.group(1)
-                    title_rest = m.group(2).strip()
-                continue
-            s = line.strip()
-            if not s:
-                if mounts:
-                    break
-                continue
-            if s.startswith(">"):
-                body = s.lstrip("> ").strip()
-                if "挂载票" in body:
-                    # Keep from first 挂载票 onwards; drop leading meta before it.
-                    idx = body.find("挂载票")
-                    mounts = body[idx:].strip()
-                    # Later quote lines may continue mounts (rare); keep first hit.
-                    break
-            elif mounts or i > 8:
-                break
-    return logical, title_rest, mounts
 
 
 def build_index(frameworks_dir: Path | None = None) -> str:
@@ -148,12 +117,12 @@ def build_index(frameworks_dir: Path | None = None) -> str:
         lines.append("")
     else:
         for path in axes:
-            logical, title_rest, mounts = _parse_axis(path)
-            link = f"[`{logical}`](./axes/{path.name})"
-            if mounts:
-                lines.append(f"- {link} — {title_rest} · {mounts}")
+            axis = load_axis(path)
+            link = f"[`{axis.logical_id}`](./axes/{path.name})"
+            if axis.mounts_text:
+                lines.append(f"- {link} — {axis.title} · {axis.mounts_text}")
             else:
-                lines.append(f"- {link} — {title_rest}")
+                lines.append(f"- {link} — {axis.title}")
         lines.append("")
 
     return "\n".join(lines)

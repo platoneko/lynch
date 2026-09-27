@@ -15,3 +15,7 @@ export async function fetchCatalog(refresh: boolean): Promise<Catalog> {
 export async function fetchFramework(ticker: string): Promise<string> {
   return (await get(`/api/frameworks/${encodeURIComponent(ticker)}`)).text();
 }
+
+export async function fetchAxis(name: string): Promise<string> {
+  return (await get(`/api/axes/${encodeURIComponent(name)}`)).text();
+}

@@ -35,6 +35,21 @@ export interface Candidate {
   background: string | null; // that row's text cell, raw markdown
 }
 
+/** Where sell-side consensus sits on a ladder (AGENTS.md「共享情景轴」共识行). */
+export interface Consensus {
+  tier: string; // L | M | H | L–M | M–H | <L | >H
+  note: string; // source and as-of, shown as is
+}
+
+/** A shared scenario axis (the rates axis is left out by the server). */
+export interface AxisInfo {
+  name: string; // file stem, the route and filter id
+  label: string; // short name for chips and cards
+  title: string;
+  consensus: Consensus | null;
+  tickers: string[]; // mounted tickers
+}
+
 /** One pool member; when `error` is set only `ticker` is filled. */
 export interface TickerRow {
   ticker: string;
@@ -48,6 +63,8 @@ export interface TickerRow {
   H: number | null;
   option: OptionBand | null;
   candidate: Candidate | null;
+  axes: string[] | null; // names of the scenario axes it is mounted on
+  consensus: Consensus | null; // its own header line, shown only when it has no axis
   band: Band | null;
   quote_error: string | null; // why `band` is null for this row alone
   error: string | null;
@@ -57,5 +74,6 @@ export interface Catalog {
   zones: Labeled[];
   lynch_classes: Labeled[];
   quote_error: string | null; // the whole quote call failed: every `band` is null
+  axes: AxisInfo[];
   tickers: TickerRow[];
 }

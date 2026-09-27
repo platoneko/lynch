@@ -1,7 +1,7 @@
 import katex from 'katex';
 import MarkdownIt from 'markdown-it';
 import texmath from 'markdown-it-texmath';
-import { docHash } from '../route';
+import { axisHash, docHash } from '../route';
 
 export interface DocSection {
   id: string;
@@ -18,8 +18,13 @@ export interface BuiltDoc {
 }
 
 type Token = ReturnType<MarkdownIt['parse']>[number];
-interface RenderEnv {
+/** What a document may link to in-app: pool tickers and scenario axes (by file stem). */
+export interface LinkTargets {
   pool: ReadonlySet<string>;
+  axes: ReadonlySet<string>;
+}
+
+interface RenderEnv extends LinkTargets {
   linkIsInternal: boolean[]; // pairs each link_close with its link_open
 }
 
@@ -36,9 +41,19 @@ function createMarkdown(): MarkdownIt {
     katexOptions: { throwOnError: false, strict: 'ignore' },
   });
   m.renderer.rules.link_open = (tokens, idx, _opts, env: RenderEnv) => {
-    const ticker = linkedTicker(tokens[idx].attrGet('href') ?? '', env.pool);
-    env.linkIsInternal.push(ticker !== null);
-    return ticker === null ? '<span class="plain-link">' : `<a href="${docHash(ticker)}">`;
+    const href = tokens[idx].attrGet('href') ?? '';
+    const ticker = linkedTicker(href, env.pool);
+    const axis = ticker === null ? linkedAxis(href, env.axes) : null;
+    const target = ticker !== null ? docHash(ticker) : axis !== null ? axisHash(axis) : null;
+    env.linkIsInternal.push(target !== null);
+    return target === null ? '<span class="plain-link">' : `<a href="${target}">`;
+  };
+  // Frameworks cite axes by logical id in code spans (`_AXIS.coal-price`); outside a link, that is one.
+  const codeInline = m.renderer.rules.code_inline!;
+  m.renderer.rules.code_inline = (tokens, idx, opts, env: RenderEnv, self) => {
+    const code = codeInline(tokens, idx, opts, env, self);
+    const axis = env.linkIsInternal.length === 0 ? citedAxis(tokens[idx].content, env.axes) : null;
+    return axis === null ? code : `<a href="${axisHash(axis)}">${code}</a>`;
   };
   m.renderer.rules.link_close = (_tokens, _idx, _opts, env: RenderEnv) =>
     env.linkIsInternal.pop() ? '</a>' : '</span>';
@@ -121,8 +136,20 @@ export function linkedTicker(href: string, pool: ReadonlySet<string>): string | 
   return m && pool.has(m[1]) ? m[1] : null;
 }
 
-export function buildDoc(source: string, pool: ReadonlySet<string>): BuiltDoc {
-  const env: RenderEnv = { pool, linkIsInternal: [] };
+/** `./axes/coal-price.md` → `coal-price`, only for known scenario axes. */
+export function linkedAxis(href: string, axes: ReadonlySet<string>): string | null {
+  const m = /^(?:\.\/)?axes\/([^/#?:]+)\.md(?:#.*)?$/.exec(href);
+  return m && axes.has(m[1]) ? m[1] : null;
+}
+
+/** `_AXIS.coal-price` (also with `.md`) → `coal-price`, only for known scenario axes. */
+export function citedAxis(code: string, axes: ReadonlySet<string>): string | null {
+  const m = /^_AXIS\.([a-z0-9-]+)(?:\.md)?$/.exec(code.trim());
+  return m && axes.has(m[1]) ? m[1] : null;
+}
+
+export function buildDoc(source: string, targets: LinkTargets): BuiltDoc {
+  const env: RenderEnv = { ...targets, linkIsInternal: [] };
   const tokens = md.parse(source, env);
   const render = (from: number, to: number) => md.renderer.render(tokens.slice(from, to), md.options, env);
 
@@ -152,8 +179,8 @@ export function buildDoc(source: string, pool: ReadonlySet<string>): BuiltDoc {
 }
 
 /** A fragment lifted out of a framework (e.g. an Assumptions cell), rendered like the document body. */
-export function renderFragment(source: string, pool: ReadonlySet<string>): string {
-  const env: RenderEnv = { pool, linkIsInternal: [] };
+export function renderFragment(source: string, targets: LinkTargets): string {
+  const env: RenderEnv = { ...targets, linkIsInternal: [] };
   return md.render(source, env);
 }
 

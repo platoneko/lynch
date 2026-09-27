@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { Catalog } from '../types';
 import { applyFilter, latestAsOf, quoteTimeText, type HomeFilter, type SortKey } from './listModel';
 import { TickerCard } from './TickerCard';
@@ -14,11 +15,12 @@ const MARKETS: { id: string; label: string }[] = [
   { id: 'US', label: '美股' },
 ];
 
-export function HomePage({ catalog, filter, onFilter, onOpen, onRefresh, refreshing }: {
+export function HomePage({ catalog, filter, onFilter, onOpen, onOpenAxis, onRefresh, refreshing }: {
   catalog: Catalog;
   filter: HomeFilter;
   onFilter: (f: HomeFilter) => void;
   onOpen: (ticker: string) => void;
+  onOpenAxis: (name: string) => void;
   onRefresh: () => void;
   refreshing: boolean;
 }) {
@@ -27,6 +29,9 @@ export function HomePage({ catalog, filter, onFilter, onOpen, onRefresh, refresh
   const rows = applyFilter(catalog.tickers, filter, zoneOrder);
   const asOf = latestAsOf(catalog.tickers);
   const toggle = (list: string[], id: string) => (list.includes(id) ? list.filter((x) => x !== id) : [...list, id]);
+  const axes = new Map(catalog.axes.map((a) => [a.name, a]));
+  // A dozen axis chips would crowd the header; they stay folded behind one toggle.
+  const [axesOpen, setAxesOpen] = useState(false);
 
   return (
     <div className="home">
@@ -62,6 +67,18 @@ export function HomePage({ catalog, filter, onFilter, onOpen, onRefresh, refresh
             </button>
           ))}
         </div>
+        <div className={`chips ${axesOpen ? 'chips-wrap' : ''}`}>
+          <button className={`chip ${filter.axes.length > 0 ? 'chip-on' : ''}`} onClick={() => setAxesOpen(!axesOpen)}>
+            轴{filter.axes.length > 0 ? ` ${filter.axes.length}` : ''} {axesOpen ? '▴' : '▾'}
+          </button>
+          {axesOpen && catalog.axes.map((a) => (
+            <button key={a.name}
+              className={`chip ${filter.axes.includes(a.name) ? 'chip-on' : ''}`}
+              onClick={() => onFilter({ ...filter, axes: toggle(filter.axes, a.name) })}>
+              {a.label}
+            </button>
+          ))}
+        </div>
         <div className="home-meta">
           <div className="chips">
             {MARKETS.map((m) => (
@@ -81,7 +98,8 @@ export function HomePage({ catalog, filter, onFilter, onOpen, onRefresh, refresh
       {catalog.quote_error && <p className="banner-muted">{catalog.quote_error}</p>}
       <main className="cards">
         {rows.map((r) => (
-          <TickerCard key={r.ticker} row={r} label={(id) => labels.get(id) ?? id} onOpen={onOpen} />
+          <TickerCard key={r.ticker} row={r} label={(id) => labels.get(id) ?? id} axes={axes}
+            onOpen={onOpen} onOpenAxis={onOpenAxis} />
         ))}
         {rows.length === 0 && <p className="empty">没有匹配的标的</p>}
       </main>

@@ -19,7 +19,7 @@ def test_tickers_json(repo, tmp_path, quotes):
     r = client(repo, tmp_path, quotes).get("/api/tickers")
     assert r.status_code == 200
     body = r.json()
-    assert set(body) == {"zones", "lynch_classes", "quote_error", "tickers"}
+    assert set(body) == {"zones", "lynch_classes", "quote_error", "axes", "tickers"}
     assert body["quote_error"] is None
     assert body["tickers"][0]["ticker"] == "AAA.US"
     assert body["tickers"][0]["band"]["price"] == 25.0
@@ -88,3 +88,19 @@ def test_api_works_without_built_web(repo, tmp_path, quotes):
     c = client(repo, tmp_path, quotes, with_dist=False)
     assert c.get("/api/tickers").status_code == 200
     assert c.get("/").status_code == 404
+
+
+def test_axis_markdown(repo, tmp_path, quotes):
+    (repo / "axes").mkdir()
+    (repo / "axes" / "al.md").write_text("# _AXIS.al — 铝情景轴\n", encoding="utf-8")
+    r = client(repo, tmp_path, quotes).get("/api/axes/al")
+    assert r.status_code == 200
+    assert r.text.startswith("# _AXIS.al")
+    assert r.headers["content-type"].startswith("text/markdown")
+
+
+def test_unknown_axis_is_404(repo, tmp_path, quotes):
+    (repo / "axes").mkdir()
+    c = client(repo, tmp_path, quotes)
+    assert c.get("/api/axes/nope").status_code == 404
+    assert c.get("/api/axes/..%2FAAA.US").status_code == 404

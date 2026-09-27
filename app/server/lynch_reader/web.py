@@ -1,4 +1,4 @@
-"""HTTP surface: ticker catalog with zones on live quotes, raw framework markdown, and the built web UI.
+"""HTTP surface: ticker catalog with zones on live quotes, raw framework and axis markdown, and the built web UI.
 
 Read-only by contract (AGENTS.md): nothing here writes frameworks/ or output/.
 """
@@ -15,7 +15,7 @@ from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from lynch_reader.catalog import FRAMEWORKS_DIR, REPO_ROOT, QuoteCache, catalog, framework_path
+from lynch_reader.catalog import FRAMEWORKS_DIR, REPO_ROOT, QuoteCache, axis_path_in, catalog, framework_path
 
 WEB_DIST = REPO_ROOT / "app" / "web" / "dist"
 # The personal tailnet address of this host; other local users must not reach it via 0.0.0.0.
@@ -49,9 +49,16 @@ def create_app(frameworks_dir: Path, web_dist: Path, quotes: QuoteCache) -> Star
             return PlainTextResponse("unknown ticker", status_code=404)
         return Response(path.read_text(encoding="utf-8"), media_type="text/markdown; charset=utf-8")
 
+    def axis(request: Request) -> Response:
+        path = axis_path_in(request.path_params["name"], frameworks_dir)
+        if path is None:
+            return PlainTextResponse("unknown axis", status_code=404)
+        return Response(path.read_text(encoding="utf-8"), media_type="text/markdown; charset=utf-8")
+
     routes = [
         Route("/api/tickers", tickers),
         Route("/api/frameworks/{ticker}", framework),
+        Route("/api/axes/{name}", axis),
     ]
     if web_dist.is_dir():
         routes.append(Mount("/", WebDist(directory=web_dist, html=True)))

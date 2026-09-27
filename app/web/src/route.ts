@@ -1,10 +1,17 @@
-export type Route = { page: 'home' } | { page: 'doc'; ticker: string };
+export type Route = { page: 'home' } | { page: 'doc'; ticker: string } | { page: 'axis'; name: string };
 
 export function parseRoute(hash: string): Route {
-  const m = /^#\/doc\/([^/?#]+)$/.exec(hash);
-  return m ? { page: 'doc', ticker: decodeURIComponent(m[1]) } : { page: 'home' };
+  const doc = /^#\/doc\/([^/?#]+)$/.exec(hash);
+  if (doc) return { page: 'doc', ticker: decodeURIComponent(doc[1]) };
+  const axis = /^#\/axis\/([^/?#]+)$/.exec(hash);
+  if (axis) return { page: 'axis', name: decodeURIComponent(axis[1]) };
+  return { page: 'home' };
 }
 
 export function docHash(ticker: string): string {
   return `#/doc/${encodeURIComponent(ticker)}`;
+}
+
+export function axisHash(name: string): string {
+  return `#/axis/${encodeURIComponent(name)}`;
 }

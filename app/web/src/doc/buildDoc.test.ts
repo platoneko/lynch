@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildDoc, linkedTicker, renderFragment, sectionLabel } from './buildDoc';
+import { buildDoc, citedAxis, linkedAxis, linkedTicker, renderFragment, sectionLabel } from './buildDoc';
 
 const SAMPLE = [
   '# AAA.US — Alpha', '', '> 林奇：`stalwart`', '',
@@ -11,9 +11,11 @@ const SAMPLE = [
   '## 4. Changelog', '', '### 2026-09-20', '', 'entry', '',
 ].join('\n');
 const POOL = new Set(['AAA.US', 'BBB.US']);
+const AXES = new Set(['coal-price']);
+const TARGETS = { pool: POOL, axes: AXES };
 
 describe('buildDoc', () => {
-  const doc = buildDoc(SAMPLE, POOL);
+  const doc = buildDoc(SAMPLE, TARGETS);
 
   it('lists h2 and h3 in document order', () => {
     expect(doc.sections.map((s) => [s.title, s.level, s.parentId])).toEqual([
@@ -40,7 +42,7 @@ describe('buildDoc', () => {
   });
 
   it('reads a bare underscore inside \\text as a literal', () => {
-    const html = buildDoc('## 0. x\n\n\\(\\text{perpetual_pe}(g)\\)\n', POOL).sections[0].bodyHtml;
+    const html = buildDoc('## 0. x\n\n\\(\\text{perpetual_pe}(g)\\)\n', TARGETS).sections[0].bodyHtml;
     expect(html).toContain('class="katex');
     expect(html).not.toContain('katex-error');
   });
@@ -58,7 +60,7 @@ describe('buildDoc', () => {
   it('turns pool links into in-app links and others into plain text', () => {
     expect(doc.sections[3].bodyHtml).toContain('<a href="#/doc/BBB.US">BBB</a>');
     expect(doc.sections[3].bodyHtml).toContain('<span class="plain-link">axis</span>');
-    const isolated = buildDoc(SAMPLE, new Set());
+    const isolated = buildDoc(SAMPLE, { pool: new Set(), axes: new Set() });
     expect(isolated.sections[3].bodyHtml).not.toContain('<a ');
   });
 
@@ -71,7 +73,7 @@ describe('buildDoc', () => {
 
 describe('table layout', () => {
   const long = (s: string) => s.repeat(100);
-  const render = (lines: string[]) => buildDoc(['## 0. x', '', ...lines, ''].join('\n'), POOL).sections[0].bodyHtml;
+  const render = (lines: string[]) => buildDoc(['## 0. x', '', ...lines, ''].join('\n'), TARGETS).sections[0].bodyHtml;
 
   it('leaves a table of short cells as a plain grid', () => {
     const html = render(['| 档 | 值 |', '|---|---:|', '| L | 10 |']);
@@ -114,16 +116,38 @@ describe('linkedTicker', () => {
   });
 });
 
+describe('axis links', () => {
+  it('links cited and linked scenario axes, leaves others plain', () => {
+    const html = renderFragment(
+      '挂 `_AXIS.coal-price` 与 `_AXIS.rates`；[煤](./axes/coal-price.md)；[`_AXIS.coal-price`](./axes/coal-price.md)',
+      TARGETS,
+    );
+    expect(html).toContain('<a href="#/axis/coal-price"><code>_AXIS.coal-price</code></a> 与 <code>_AXIS.rates</code>');
+    expect(html).toContain('<a href="#/axis/coal-price">煤</a>');
+    // A code span inside a link stays a plain code span: no nested anchors.
+    expect(html).toContain('<a href="#/axis/coal-price"><code>_AXIS.coal-price</code></a></p>');
+    expect(html.match(/<a /g)).toHaveLength(3);
+  });
+  it('parses axis references', () => {
+    expect(citedAxis('_AXIS.coal-price', AXES)).toBe('coal-price');
+    expect(citedAxis('_AXIS.coal-price.md', AXES)).toBe('coal-price');
+    expect(citedAxis('_AXIS.rates', AXES)).toBeNull();
+    expect(citedAxis('x _AXIS.coal-price', AXES)).toBeNull();
+    expect(linkedAxis('axes/coal-price.md#a', AXES)).toBe('coal-price');
+    expect(linkedAxis('../axes/coal-price.md', AXES)).toBeNull();
+  });
+});
+
 describe('renderFragment', () => {
   it('renders a table-cell fragment like the document body', () => {
-    const html = renderFragment('**候选带（T）**：\\(g_1\\) see [BBB](./BBB.US.md)', POOL);
+    const html = renderFragment('**候选带（T）**：\\(g_1\\) see [BBB](./BBB.US.md)', TARGETS);
     expect(html).toContain('<strong>候选带（T）</strong>');
     expect(html).toContain('class="katex');
     expect(html).not.toContain('\\(');
     expect(html).toContain('href="#/doc/BBB.US"');
   });
   it('escapes raw HTML in the source', () => {
-    const html = renderFragment('<img src=x onerror=alert(1)>', POOL);
+    const html = renderFragment('<img src=x onerror=alert(1)>', TARGETS);
     expect(html).not.toContain('<img');
     expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
   });

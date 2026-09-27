@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .axes import Consensus, header_consensus
 from .inputs import parse_baskets
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -125,6 +126,8 @@ class FrameworkMeta:
     candidate_gate: str | None = None
     # {r-field: basket} from the Inputs `篮 N` tags (AGENTS.md「篮子声明」).
     baskets: dict[str, int] = field(default_factory=dict)
+    # The header's optional `> 共识：` line: where consensus sits on this ticker's own L/M/H.
+    consensus: Consensus | None = None
 
     @property
     def option_band(self) -> tuple[float, float, float] | None:
@@ -375,6 +378,7 @@ def load_framework(path: Path) -> FrameworkMeta:
         candidate_label=candidate[0] if candidate else None,
         candidate_gate=candidate[2] if candidate else None,
         baskets=baskets,
+        consensus=header_consensus(md),
     )
 
 

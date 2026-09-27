@@ -13,7 +13,7 @@ from eval.lib.frameworks import list_framework_paths
 from eval.lib.zones import zone_of
 from eval.lib.price import SessionQuote
 from lynch_reader.catalog import (
-    FRAMEWORKS_DIR, NO_QUOTE, QUOTE_BACKOFF_S, QUOTE_MAX_AGE_S, QUOTE_REFRESH_MAX_AGE_S, QuoteCache, catalog, framework_path,
+    FRAMEWORKS_DIR, NO_QUOTE, QUOTE_BACKOFF_S, QUOTE_MAX_AGE_S, QUOTE_REFRESH_MAX_AGE_S, QuoteCache, axis_path_in, catalog, framework_path,
 )
 from tests.conftest import NOW, FakeClock, FakeFetch, framework_md
 
@@ -44,7 +44,7 @@ def test_parsed_row_is_zoned_on_the_live_price(repo, quotes):
     assert row == {
         "ticker": "AAA.US", "name": "Alpha Corp", "market": "US",
         "lynch_primary": "fast_grower", "lynch_secondary": "cyclical", "currency": "USD",
-        "L": 10.0, "M": 20.0, "H": 40.0, "option": None, "candidate": None,
+        "L": 10.0, "M": 20.0, "H": 40.0, "option": None, "candidate": None, "axes": [], "consensus": None,
         "band": {"price": 25.0, "session": None, "as_of": AS_OF, "zone": zone_of(25.0, 10, 20, 40),
                  "option_zone": None, "candidate_zone": None},
         "quote_error": None, "error": None,
@@ -416,3 +416,54 @@ def test_us_row_takes_the_newest_price_since_the_regular_close(repo, fetch, cloc
     band = rows_by_ticker(repo, quotes)["AAA.US"]["band"]
     assert (band["price"], band["session"]) == (price, session)
     assert band["zone"] == zone_of(price, 10, 20, 40)
+
+
+def _axis(repo, name, mounts, extra=""):
+    d = repo / "axes"
+    d.mkdir(exist_ok=True)
+    (d / f"{name}.md").write_text(
+        f"# _AXIS.{name} — {name.upper()} 价格情景轴（说明）\n"
+        f"> 轴类型：`shared_scenario_axis` | 更新：2026-09-27 | 挂载票：{mounts}\n{extra}",
+        encoding="utf-8",
+    )
+
+
+def test_axes_and_mounts(repo, quotes):
+    _axis(repo, "al", "AAA.US · CCC.US；候选：BBB.US", "> 共识：L（高盛 2027E；as-of 2026-09-03）\n")
+    _axis(repo, "cu", "AAA.US")
+    (repo / "axes" / "rates.md").write_text(
+        "# _AXIS.rates — 无风险利率轴\n> 轴类型：`rates_axis` | 挂载票：AAA.US\n", encoding="utf-8")
+    body = catalog(repo, quotes)
+    assert [a["name"] for a in body["axes"]] == ["al", "cu"]
+    al = body["axes"][0]
+    assert al["label"] == "AL 价格"
+    assert al["consensus"] == {"tier": "L", "note": "高盛 2027E；as-of 2026-09-03"}
+    assert al["tickers"] == ["AAA.US", "CCC.US"]
+    assert body["axes"][1]["consensus"] is None
+    rows = {r["ticker"]: r for r in body["tickers"]}
+    assert rows["AAA.US"]["axes"] == ["al", "cu"]
+    assert rows["BBB.US"]["axes"] == []
+
+
+def test_bad_axis_is_dropped_alone(repo, quotes, caplog):
+    _axis(repo, "al", "AAA.US", "> 共识：高（x）\n")
+    _axis(repo, "cu", "AAA.US")
+    body = catalog(repo, quotes)
+    assert [a["name"] for a in body["axes"]] == ["cu"]
+    assert "axis parse failed: al.md" in caplog.text
+
+
+def test_ticker_consensus_line(repo, quotes):
+    md = framework_md("BBB.US", "Beta Inc", "`stalwart`").replace(
+        "> 主尺：test ruler", "> 主尺：test ruler\n> 共识：H（卖方 2027；as-of 2026-09-20）")
+    (repo / "BBB.US.md").write_text(md, encoding="utf-8")
+    rows = {r["ticker"]: r for r in catalog(repo, quotes)["tickers"]}
+    assert rows["BBB.US"]["consensus"] == {"tier": "H", "note": "卖方 2027；as-of 2026-09-20"}
+    assert rows["AAA.US"]["consensus"] is None
+
+
+def test_axis_path_only_resolves_axis_files(repo):
+    _axis(repo, "al", "AAA.US")
+    assert axis_path_in("al", repo) == repo / "axes" / "al.md"
+    assert axis_path_in("../AAA.US", repo) is None
+    assert axis_path_in("nope", repo) is None

@@ -20,6 +20,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from eval.lib.axes import AxisMeta, Consensus, list_axis_paths, load_axis  # noqa: E402
 from eval.lib.frameworks import (  # noqa: E402
     FRAMEWORKS_DIR,
     FrameworkMeta,
@@ -32,14 +33,17 @@ from eval.lib.price import Quote, fetch_quotes  # noqa: E402
 from eval.lib.zones import ZONE_CN, ZONE_ORDER, credited_option_band, price_zones  # noqa: E402
 from lynch_reader.market_hours import traded_between, us_regular_close  # noqa: E402
 
-__all__ = ["FRAMEWORKS_DIR", "REPO_ROOT", "Quote", "QuoteCache", "catalog", "framework_path"]
+__all__ = ["FRAMEWORKS_DIR", "REPO_ROOT", "Quote", "QuoteCache", "axis_path_in", "catalog", "framework_path"]
 
 log = logging.getLogger("lynch_reader")
 
 ROW_KEYS = (
     "ticker", "name", "market", "lynch_primary", "lynch_secondary", "currency",
-    "L", "M", "H", "option", "candidate", "band", "quote_error", "error",
+    "L", "M", "H", "option", "candidate", "axes", "consensus", "band", "quote_error", "error",
 )
+# Only scenario axes sit on cards and filters; the rates axis mounts every USD ticker
+# and gives sensitivity readings, never anchors (AGENTS.md「r_f 读数行」).
+SCENARIO_AXIS = "shared_scenario_axis"
 
 # Quotes are reused up to this age: it bounds Longbridge CLI calls. Past it they are
 # still reused while no market in the pool has traded since (market_hours.py).
@@ -136,6 +140,9 @@ def catalog(frameworks_dir: Path, quotes: QuoteCache, refresh: bool = False) -> 
     # Step 1: framework header fields; a bad file costs only its own row.
     parsed = [_ticker_row(p) for p in list_framework_paths(frameworks_dir)]
     priced = [(row, meta) for row, meta in parsed if meta is not None]
+    axes = _scenario_axes(frameworks_dir)
+    for row, meta in priced:
+        row["axes"] = [a.name for a in axes if meta.ticker in a.mounts]
 
     # Step 2: one quote batch for every parsed row. When the whole call fails the list
     # still loads with every band empty; an old snapshot is never shown in its place.
@@ -155,6 +162,7 @@ def catalog(frameworks_dir: Path, quotes: QuoteCache, refresh: bool = False) -> 
         "zones": [{"id": z, "label": ZONE_CN[z]} for z in ZONE_ORDER],
         "lynch_classes": [{"id": k, "label": v} for k, v in LYNCH_CN.items()],
         "quote_error": quote_error,
+        "axes": [_axis_json(a) for a in axes],
         "tickers": [row for row, _ in parsed],
     }
 
@@ -165,6 +173,37 @@ def framework_path(ticker: str, frameworks_dir: Path) -> Path | None:
         if p.stem == ticker:
             return p
     return None
+
+
+def axis_path_in(name: str, frameworks_dir: Path) -> Path | None:
+    """Resolve only existing axis files (the rates axis included); the name is never joined into a path."""
+    for p in list_axis_paths(frameworks_dir / "axes"):
+        if p.stem == name:
+            return p
+    return None
+
+
+def _scenario_axes(frameworks_dir: Path) -> list[AxisMeta]:
+    """Scenario axes by file name; a bad axis file costs only itself."""
+    out: list[AxisMeta] = []
+    for p in list_axis_paths(frameworks_dir / "axes"):
+        try:
+            axis = load_axis(p)
+        except Exception as e:  # noqa: BLE001 — one bad axis must not blank the list
+            log.warning("axis parse failed: %s: %s", p.name, e)
+            continue
+        if axis.kind == SCENARIO_AXIS:
+            out.append(axis)
+    return out
+
+
+def _axis_json(a: AxisMeta) -> dict[str, Any]:
+    return {"name": a.name, "label": a.label, "title": a.title,
+            "consensus": _consensus_json(a.consensus), "tickers": list(a.mounts)}
+
+
+def _consensus_json(c: Consensus | None) -> dict[str, str] | None:
+    return None if c is None else {"tier": c.tier, "note": c.note}
 
 
 def _ticker_row(path: Path) -> tuple[dict[str, Any], FrameworkMeta | None]:
@@ -189,6 +228,8 @@ def _ticker_row(path: Path) -> tuple[dict[str, Any], FrameworkMeta | None]:
         H=meta.H,
         option=_option(meta, assumptions),
         candidate=_candidate(meta, assumptions),
+        axes=[],
+        consensus=_consensus_json(meta.consensus),
     )
     return row, meta
 

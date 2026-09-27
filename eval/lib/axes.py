@@ -8,6 +8,7 @@ alone turns the other side's eval red (valuation-rules.md「共享情景轴」).
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 FRAMEWORKS_DIR = Path(__file__).resolve().parents[2] / "frameworks"
@@ -27,6 +28,99 @@ def list_axis_paths(axes_dir: Path | None = None) -> list[Path]:
     if not d.is_dir():
         return []
     return sorted(p for p in d.glob("*.md") if not p.name.startswith("_"))
+
+
+# Where sell-side consensus sits on a ladder (AGENTS.md「共享情景轴」共识行): a tier, the gap
+# between two neighbours, or off either end. Written with an en dash; an ASCII hyphen is accepted.
+CONSENSUS_TIERS = ("<L", "L", "L–M", "M", "M–H", "H", ">H")
+_CONSENSUS_LINE = re.compile(r"^>\s*共识[：:]\s*(\S+?)\s*(?:[（(](.*)[）)])?\s*$")
+_AXIS_TITLE = re.compile(r"^#\s+(\S+)\s+[—–-]\s+(.+)$")
+_AXIS_KIND = re.compile(r"轴类型：\s*`([^`]+)`")
+_TICKER = re.compile(r"(?<![0-9A-Za-z])([A-Z]{1,5}\.US|[0-9]{4}\.HK|[0-9]{6}\.(?:SH|SZ))(?![0-9A-Za-z])")
+
+
+@dataclass(frozen=True)
+class Consensus:
+    tier: str  # one of CONSENSUS_TIERS
+    note: str  # the source and as-of in the brackets, shown as is
+
+
+@dataclass(frozen=True)
+class AxisMeta:
+    name: str  # file stem, e.g. `fed-path-aluminium`
+    logical_id: str  # `_AXIS.<name>`
+    title: str  # the title after the dash
+    label: str  # short name for chips and cards
+    kind: str  # `shared_scenario_axis` | `rates_axis`
+    mounts: tuple[str, ...]
+    mounts_text: str  # the 挂载票 segment as written, for _INDEX.md
+    consensus: Consensus | None
+
+
+def parse_consensus(line: str) -> Consensus | None:
+    """A header `> 共识：<tier>（note）` line; None when the line is not one. A bad tier raises."""
+    m = _CONSENSUS_LINE.match(line.strip())
+    if m is None:
+        return None
+    tier = m.group(1).replace("-", "–")
+    if tier not in CONSENSUS_TIERS:
+        raise ValueError(f"共识 tier {m.group(1)!r} not in {CONSENSUS_TIERS}")
+    return Consensus(tier, (m.group(2) or "").strip())
+
+
+def header_block(md: str) -> list[str]:
+    """The `>` quote lines right under the title: a document's header, shared by axes and frameworks."""
+    lines = md.splitlines()
+    start = next((i for i, s in enumerate(lines) if s.startswith("# ")), None)
+    if start is None:
+        return []
+    out: list[str] = []
+    for s in lines[start + 1:]:
+        if s.startswith(">"):
+            out.append(s)
+        elif s.strip() or out:
+            break
+    return out
+
+
+def header_consensus(md: str) -> Consensus | None:
+    for line in header_block(md):
+        c = parse_consensus(line)
+        if c is not None:
+            return c
+    return None
+
+
+def load_axis(path: Path) -> AxisMeta:
+    md = path.read_text(encoding="utf-8")
+    first = md.splitlines()[0] if md else ""
+    tm = _AXIS_TITLE.match(first)
+    logical_id, title = (tm.group(1), tm.group(2).strip()) if tm else (f"_AXIS.{path.stem}", path.stem)
+    header = header_block(md)
+    kind_m = next((m for m in map(_AXIS_KIND.search, header) if m), None)
+    mounts_text = next((s[s.find("挂载票"):].strip() for s in header if "挂载票" in s), "")
+    return AxisMeta(
+        name=path.stem,
+        logical_id=logical_id,
+        title=title,
+        label=_short_label(title),
+        kind=kind_m.group(1) if kind_m else "",
+        mounts=_mounted_tickers(mounts_text),
+        mounts_text=mounts_text,
+        consensus=header_consensus(md),
+    )
+
+
+def _mounted_tickers(mounts_text: str) -> tuple[str, ...]:
+    # Candidates (`_AXIS.coal-price`「候选：…」) are not mounted yet.
+    mounted = mounts_text.split("候选", 1)[0]
+    return tuple(dict.fromkeys(_TICKER.findall(mounted)))
+
+
+def _short_label(title: str) -> str:
+    """「电解铝价差情景轴（利率路径 × 铝供应潮）」→「电解铝价差」."""
+    s = re.split(r"[（(]", title, maxsplit=1)[0]
+    return s.replace("情景轴", "").strip() or title
 
 
 AXIS_COWOS = axis_path("cowos-capacity")

@@ -1,16 +1,22 @@
-import type { TickerRow, ZoneId } from '../types';
+import type { AxisInfo, TickerRow, ZoneId } from '../types';
+import { AxisLine } from './AxisLine';
 import { EXTRA_CAPTION, extraBands, lynchClasses, rowZone, type ExtraBand } from './listModel';
 import { barScale, fmt, PriceBar, priceDecimals, zoneRange, type Anchors } from './PriceBar';
 
 const SESSION_CN = { pre: '盘前', post: '盘后', overnight: '夜盘' } as const;
 
-export function TickerCard({ row, label, onOpen }: {
+export function TickerCard({ row, label, axes, onOpen, onOpenAxis }: {
   row: TickerRow;
   label: (id: string) => string; // zone and Lynch class ids → Chinese labels
+  axes: ReadonlyMap<string, AxisInfo>;
   onOpen: (ticker: string) => void;
+  onOpenAxis: (name: string) => void;
 }) {
+  const open = () => onOpen(row.ticker);
+  // A div, not a button: the axis links inside it are buttons, which a button may not contain.
   return (
-    <button className="card" onClick={() => onOpen(row.ticker)}>
+    <div className="card" role="button" tabIndex={0} onClick={open}
+      onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); open(); } }}>
       <div className="card-line1">
         <span className="card-ticker">{row.ticker}</span>
         <span className="card-name">{row.name ?? ''}</span>
@@ -26,10 +32,11 @@ export function TickerCard({ row, label, onOpen }: {
       ) : (
         <>
           <div className="card-classes">{lynchClasses(row, label)}</div>
+          <AxisLine row={row} axes={axes} onOpenAxis={onOpenAxis} />
           <CardZone row={row} label={label} />
         </>
       )}
-    </button>
+    </div>
   );
 }
 
