@@ -212,6 +212,18 @@ def test_context_window_comes_from_the_conversation_model(tmp_path):
     assert asyncio.run(main()) == 1000000
 
 
+
+def test_a_new_conversation_starts_with_the_window_last_seen_for_its_model(tmp_path):
+    async def main():
+        svc, _ = make_service(tmp_path)
+        first = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium")
+        await until(lambda: state_of(svc, first.id) == "idle")
+        same = await svc.create("ticker", "BBB.US", "two", "claude-opus-5-5", "medium")
+        other = await svc.create("ticker", "CCC.US", "three", "claude-haiku-4-5", "low")
+        await svc.shutdown()
+        return same.context_window, other.context_window
+    assert asyncio.run(main()) == (200000, None)
+
 def test_deltas_stream_then_clear_on_the_full_text(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)

@@ -6,7 +6,7 @@ import {
   toolSummary, turnDocLinks, usageText, type ChatView,
 } from './chatModel';
 import { cancelEdit, composer, draftText, sent, startEdit, typed, type Composer } from './composer';
-import { clearDraft, loadDraft, saveDraft } from './drafts';
+import { clearDraft, loadDraft, loadShowTools, saveDraft, saveShowTools } from './drafts';
 import type { ChatItem, ChatOptions } from './types';
 
 const INPUT_MAX_PX = 160;
@@ -32,6 +32,7 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
   const [lost, setLost] = useState(false); // the stream dropped and a reconnect is pending
   const [gone, setGone] = useState(false); // archived or cleaned up: nothing more can be sent
   const [menu, setMenu] = useState(false);
+  const [showTools, setShowTools] = useState(loadShowTools);
   const [compactOpen, setCompactOpen] = useState(false);
   const [compactHint, setCompactHint] = useState('');
   const [model, setModel] = useState('');
@@ -168,7 +169,7 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
             <div className="chat-meta">
               {ticker && <button className="chat-ticker" onClick={() => onOpenDoc(ticker)}>{ticker}</button>}
               {conv && <span>{modelLabel(conv.model)} · {conv.effort}</span>}
-              {view && <span className={contextWarn(view.context) ? 'ctx-warn' : ''}>上下文 {contextText(view.context)}</span>}
+              {view && <span className={contextWarn(view.context) ? 'ctx-warn' : ''}>ctx {contextText(view.context)}</span>}
               {view?.usage && <span>{usageText(view.usage)}</span>}
             </div>
           </div>
@@ -176,6 +177,9 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
         </div>
         {menu && (
           <div className="chat-menu">
+            <button onClick={() => { setMenu(false); setShowTools(!showTools); saveShowTools(!showTools); }}>
+              {showTools ? '隐藏调用过程' : '显示调用过程'}
+            </button>
             <button disabled={busy} onClick={() => { setMenu(false); setCompactOpen(true); }}>压缩上下文</button>
           </div>
         )}
@@ -195,7 +199,7 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
               </div>
             )}
             {it.kind === 'text' && <div className="msg msg-agent md" dangerouslySetInnerHTML={{ __html: html.get(it.key)?.html ?? '' }} />}
-            {it.kind === 'tool' && (
+            {it.kind === 'tool' && showTools && (
               <details className={`tool ${it.denied ? 'tool-denied' : ''}`}>
                 <summary>{toolSummary(it)}</summary>
                 <pre>{toolDetail(it)}</pre>

@@ -193,7 +193,7 @@ button { font: inherit; color: inherit; }
 .chat-meta { display: flex; flex-wrap: wrap; gap: 0 10px; color: var(--muted); font-size: 11px; }
 .chat-ticker { padding: 0; border: 0; background: none; color: var(--accent); font-size: 11px; }
 .ctx-warn { color: var(--zone-stretched); }
-.chat-menu { display: flex; justify-content: flex-end; padding: 4px 16px 8px; }
+.chat-menu { display: flex; justify-content: flex-end; gap: 8px; padding: 4px 16px 8px; }
 .chat-menu button { padding: 6px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--text); }
 .msg { margin: 10px 0; }
 .msg-user { display: flex; flex-direction: column; align-items: flex-end; }

@@ -190,7 +190,7 @@ export function formatTokens(n: number): string {
 
 export function contextText(c: ContextUsage): string {
   const used = c.tokens === null ? '—' : formatTokens(c.tokens);
-  return c.window ? `${used} / ${formatTokens(c.window)}` : used;
+  return `${used}/${c.window ? formatTokens(c.window) : '—'}`;
 }
 
 export function contextWarn(c: ContextUsage): boolean {

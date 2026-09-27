@@ -131,8 +131,9 @@ describe('formatting', () => {
     expect(formatTokens(950)).toBe('950');
     expect(formatTokens(41_450)).toBe('41k');
     expect(formatTokens(1_000_000)).toBe('1M');
-    expect(contextText({ tokens: 41_450, window: 1_000_000 })).toBe('41k / 1M');
-    expect(contextText({ tokens: null, window: 1_000_000 })).toBe('— / 1M');
+    expect(contextText({ tokens: 41_450, window: 1_000_000 })).toBe('41k/1M');
+    expect(contextText({ tokens: null, window: 1_000_000 })).toBe('—/1M');
+    expect(contextText({ tokens: 41_450, window: null })).toBe('41k/—');
     expect(contextWarn({ tokens: 710_000, window: 1_000_000 })).toBe(true);
     expect(contextWarn({ tokens: null, window: 1_000_000 })).toBe(false);
   });

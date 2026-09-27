@@ -121,8 +121,12 @@ class ChatService:
         if not text.strip():
             raise Invalid("empty message")
         now = self._wall()
+        # The window arrives with the first turn's result; until then, the last one seen for this model.
+        seen = [c for c in self._index.all() if c.model == model and c.context_window]
+        window = max(seen, key=lambda c: c.updated_at).context_window if seen else None
         conv = Conversation(id=str(uuid.uuid4()), kind=kind, ticker=ticker if kind == "ticker" else None,
-                            title=make_title(text), model=model, effort=effort, created_at=now, updated_at=now)
+                            title=make_title(text), model=model, effort=effort, created_at=now, updated_at=now,
+                            context_window=window)
         self._index.put(conv)
         self._live[conv.id] = Live()  # visible in the list before its transcript exists
         await self.send(conv.id, text)

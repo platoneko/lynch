@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clearDraft, loadDraft, saveDraft, type DraftStore } from './drafts';
+import { clearDraft, loadDraft, loadShowTools, saveDraft, saveShowTools, type DraftStore } from './drafts';
 
 function memory(): DraftStore & { map: Map<string, string> } {
   const map = new Map<string, string>();
@@ -26,5 +26,14 @@ describe('drafts', () => {
     expect(loadDraft('c1', broken)).toBe('');
     expect(() => saveDraft('c1', 'x', broken)).not.toThrow();
     expect(loadDraft('c1', null)).toBe('');
+  });
+  it('remembers whether tool calls are shown, hidden by default', () => {
+    const s = memory();
+    expect(loadShowTools(s)).toBe(false);
+    saveShowTools(true, s);
+    expect(loadShowTools(s)).toBe(true);
+    saveShowTools(false, s);
+    expect(loadShowTools(s)).toBe(false);
+    expect(loadShowTools(null)).toBe(false);
   });
 });
