@@ -29,6 +29,9 @@ def test_create_list_send_and_errors(repo, tmp_path, quotes):
         assert c.post(f"/api/chats/{conv_id}/interrupt", json={}).status_code == 204
         assert c.post(f"/api/chats/{conv_id}/edit", json={"message_uuid": "x", "text": "y"}).status_code in (400, 409)
         assert c.get("/api/chats/nope/events").status_code == 404
+        assert c.post(f"/api/chats/{conv_id}/title", json={"title": "AAA 估值"}).status_code == 204
+        assert c.get("/api/chats").json()["chats"][0]["title"] == "AAA 估值"
+        assert c.post(f"/api/chats/{conv_id}/title", json={"title": ""}).status_code == 400
         assert c.post("/api/chats/archive", json={"ticker": "AAA.US"}).json() == {"archived": 1}
         assert c.get("/api/chats").json()["chats"] == []
 

@@ -198,6 +198,14 @@ class ChatService:
             archived += 1
         return archived
 
+    def rename(self, conv_id: str, title: object) -> None:
+        """The first message makes the title; the user may replace it. Leaves updated_at alone: not activity."""
+        self._conv(conv_id)
+        if not isinstance(title, str) or not title.strip():
+            raise Invalid("empty title")
+        conv = self._index.update(conv_id, title=make_title(title))
+        self._broadcast(conv_id, "conv", self._summary(conv))
+
     async def reap_idle(self) -> None:
         now = self._now()
         for conv_id, live in list(self._live.items()):

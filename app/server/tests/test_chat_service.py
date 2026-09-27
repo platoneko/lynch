@@ -224,6 +224,28 @@ def test_a_new_conversation_starts_with_the_window_last_seen_for_its_model(tmp_p
         return same.context_window, other.context_window
     assert asyncio.run(main()) == (200000, None)
 
+
+def test_rename_sets_the_title_and_tells_an_open_page(tmp_path):
+    async def main():
+        svc, _ = make_service(tmp_path)
+        conv = await svc.create("ticker", "AAA.US", "a long first question", "claude-opus-5-5", "medium")
+        await until(lambda: state_of(svc, conv.id) == "idle")
+        q = svc.subscribe(conv.id)
+        svc.rename(conv.id, "  AAA   估值  ")
+        event = await next_event(q, "conv")
+        with pytest.raises(Invalid):
+            svc.rename(conv.id, "  ")
+        with pytest.raises(Invalid):
+            svc.rename(conv.id, ["x"])
+        await svc.archive(conv.id)
+        with pytest.raises(NotFound):
+            svc.rename(conv.id, "late")
+        await svc.shutdown()
+        return event, svc._index.get(conv.id)
+    event, stored = asyncio.run(main())
+    assert event["title"] == "AAA 估值" and event["state"] == "idle"
+    assert stored.title == "AAA 估值"
+
 def test_deltas_stream_then_clear_on_the_full_text(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)

@@ -124,6 +124,10 @@ def chat_routes(service: ChatService, frameworks_dir: Path) -> list[Route]:
         await service.archive(request.path_params["id"])
         return Response(status_code=204)
 
+    async def rename(request: Request) -> Response:
+        service.rename(request.path_params["id"], (await _body(request)).get("title"))
+        return Response(status_code=204)
+
     return [
         Route("/api/chats", _guarded(list_chats), methods=["GET"]),
         Route("/api/chats", _guarded(create), methods=["POST"]),
@@ -134,6 +138,7 @@ def chat_routes(service: ChatService, frameworks_dir: Path) -> list[Route]:
         Route("/api/chats/{id}/interrupt", _guarded(interrupt), methods=["POST"]),
         Route("/api/chats/{id}/edit", _guarded(edit), methods=["POST"]),
         Route("/api/chats/{id}/archive", _guarded(archive), methods=["POST"]),
+        Route("/api/chats/{id}/title", _guarded(rename), methods=["POST"]),
     ]
 
 

@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { renderFragment, type LinkTargets } from '../doc/buildDoc';
-import { createChat, editMessage, interruptChat, openChatEvents, sendMessage } from './api';
+import { createChat, editMessage, interruptChat, openChatEvents, renameChat, sendMessage } from './api';
 import {
   applyEvent, compactText, contextText, contextWarn, editableUuids, fromSnapshot, isBusy, stateText, toolDetail,
   toolSummary, turnDocLinks, usageText, type ChatView,
@@ -35,6 +35,7 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
   const [showTools, setShowTools] = useState(loadShowTools);
   const [compactOpen, setCompactOpen] = useState(false);
   const [compactHint, setCompactHint] = useState('');
+  const [renaming, setRenaming] = useState<string | null>(null); // the title being typed, while the sheet is open
   const [model, setModel] = useState('');
   const [effort, setEffort] = useState('');
   const [stream, setStream] = useState(0); // bumping it reopens the event stream (after an edit)
@@ -154,6 +155,17 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
     }
   };
 
+  const rename = async () => {
+    const title = renaming?.trim();
+    setRenaming(null);
+    if (id === null || !title) return;
+    try {
+      await renameChat(id, title); // the new title comes back as a `conv` event
+    } catch (e) {
+      fail(e);
+    }
+  };
+
   const conv = view?.conv;
   const modelLabel = (m: string) => options?.models.find((x) => x.id === m)?.label ?? m;
   const title = conv?.title ?? (id !== null ? '对话' : newTicker ? `讨论 ${newTicker}` : '新票调研');
@@ -182,6 +194,7 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
               <button onClick={() => { setMenu(false); setShowTools(!showTools); saveShowTools(!showTools); }}>
                 {showTools ? '隐藏调用过程' : '显示调用过程'}
               </button>
+              <button onClick={() => { setMenu(false); setRenaming(conv?.title ?? ''); }}>重命名</button>
               <button disabled={busy} onClick={() => { setMenu(false); setCompactOpen(true); }}>压缩上下文</button>
             </div>
           </>
@@ -246,6 +259,20 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
           {busy && id !== null && !gone && <button className="stop-btn" onClick={() => interruptChat(id).catch(fail)} aria-label="停止">■</button>}
         </div>
       </footer>
+
+      {renaming !== null && (
+        <div className="sheet-backdrop" onClick={() => setRenaming(null)}>
+          <div className="sheet" onClick={(e) => e.stopPropagation()}>
+            <p>重命名对话</p>
+            <input className="home-search" autoFocus value={renaming} onChange={(e) => setRenaming(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') rename(); }} />
+            <div className="sheet-actions">
+              <button className="text-btn" onClick={() => setRenaming(null)}>取消</button>
+              <button className="text-btn" disabled={!renaming.trim()} onClick={rename}>保存</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {compactOpen && (
         <div className="sheet-backdrop" onClick={() => setCompactOpen(false)}>

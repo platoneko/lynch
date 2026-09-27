@@ -34,6 +34,10 @@ export async function archiveChat(id: string): Promise<void> {
   await post(`${base(id)}/archive`);
 }
 
+export async function renameChat(id: string, title: string): Promise<void> {
+  await post(`${base(id)}/title`, { title });
+}
+
 export async function archiveTicker(ticker: string): Promise<{ archived: number }> {
   return (await post('/api/chats/archive', { ticker })).json();
 }

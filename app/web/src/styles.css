@@ -224,5 +224,6 @@ button { font: inherit; color: inherit; }
 .stop-btn { background: var(--zone-stretched); }
 .sheet-backdrop { position: fixed; inset: 0; z-index: 10; display: flex; align-items: flex-end; background: rgba(0, 0, 0, 0.35); }
 .sheet { width: 100%; max-height: 70vh; overflow: auto; padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); border-radius: 16px 16px 0 0; background: var(--bg); }
+.sheet .home-search { width: 100%; }
 .sheet-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 .sheet-actions .text-btn { height: 36px; }
