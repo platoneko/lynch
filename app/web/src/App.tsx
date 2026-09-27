@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { fetchAxis, fetchCatalog, fetchFramework } from './api';
+import { archiveChat, archiveTicker, fetchChats } from './chat/api';
+import { ChatsPage } from './chat/ChatsPage';
+import type { ChatList } from './chat/types';
 import { AxisDocHead, DocPage, TickerDocHead } from './doc/DocPage';
 import { HomePage } from './home/HomePage';
 import { DEFAULT_FILTER, type HomeFilter } from './home/listModel';
-import { axisHash, docHash, parseRoute, type Route } from './route';
+import { axisHash, chatHash, chatsHash, docHash, newChatHash, parseRoute, type Route } from './route';
 import type { Catalog } from './types';
 
 export function zoneLabels(catalog: Catalog): Map<string, string> {
@@ -17,6 +20,21 @@ export function App() {
   const [loading, setLoading] = useState(false);
   // Filter lives here, not in HomePage, so the query survives a trip into a doc.
   const [filter, setFilter] = useState<HomeFilter>(DEFAULT_FILTER);
+  const [chatList, setChatList] = useState<ChatList | null>(null);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const loadChats = useCallback(() => {
+    fetchChats().then((l) => { setChatList(l); setChatError(null); },
+      (e: unknown) => setChatError(String(e instanceof Error ? e.message : e)));
+  }, []);
+  // The home badge and the lists follow agents running on the server; nothing pushes list changes, so poll.
+  useEffect(() => {
+    if (route.page === 'chat' || route.page === 'chat-new') return;
+    loadChats();
+    const timer = window.setInterval(loadChats, 10_000);
+    return () => window.clearInterval(timer);
+  }, [route.page, loadChats]);
+  const names = useMemo(() => new Map((catalog?.tickers ?? []).flatMap((t) => (t.name ? [[t.ticker, t.name] as const] : []))), [catalog]);
+  const archive = (p: Promise<unknown>) => p.then(loadChats, (e: unknown) => setChatError(String(e instanceof Error ? e.message : e)));
   const homeScroll = useRef(0);
   const openedFromHome = useRef(false);
 
@@ -73,6 +91,16 @@ export function App() {
       </div>
     );
   }
+  if (route.page === 'chats') {
+    return (
+      <ChatsPage list={chatList} error={chatError} names={names} onBack={goBack}
+        onOpen={(id) => { window.location.hash = chatHash(id); }}
+        onNewResearch={() => { window.location.hash = newChatHash(null); }}
+        onOpenDoc={(t) => { window.location.hash = docHash(t); }}
+        onArchive={(id) => archive(archiveChat(id))}
+        onArchiveTicker={(t) => archive(archiveTicker(t))} />
+    );
+  }
   if (route.page === 'doc') {
     const labels = zoneLabels(catalog);
     const { ticker } = route;
@@ -92,7 +120,8 @@ export function App() {
     <>
       {error && <div className="banner-error" onClick={reload}>刷新失败：{error}（点此重试）</div>}
       <HomePage catalog={catalog} filter={filter} onFilter={setFilter} onOpen={openDoc} onOpenAxis={openAxis}
-        onRefresh={reload} refreshing={loading} />
+        onRefresh={reload} refreshing={loading}
+        chatCount={chatList?.running_count ?? 0} onOpenChats={() => openFromHome(chatsHash())} />
     </>
   );
 }

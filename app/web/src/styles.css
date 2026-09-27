@@ -166,3 +166,20 @@ button { font: inherit; color: inherit; }
 .md pre { overflow-x: auto; background: var(--card); padding: 8px; border-radius: 8px; }
 .md a { color: var(--accent); }
 .md .katex-display { overflow-x: auto; overflow-y: hidden; }
+/* ---- chats */
+.text-btn { flex: none; padding: 0 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--text); font-size: 14px; white-space: nowrap; }
+.chat-entry { position: relative; }
+.badge { position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent); color: #fff; font-size: 11px; line-height: 18px; text-align: center; }
+.run-dot { color: var(--accent); margin-right: 4px; font-size: 10px; vertical-align: middle; }
+/* .bar is position: fixed for the doc page; here the body carries no bar-height padding, so the bar stays in flow. */
+.chats .bar-top { position: sticky; }
+.chats-body { padding: 8px 16px 32px; }
+.chats-caption { margin: 12px 0 4px; color: var(--muted); font-size: 13px; font-weight: 500; }
+.chat-group { border-bottom: 1px solid var(--line); }
+.chat-group-head, .chat-row { display: flex; align-items: center; gap: 6px; }
+.chat-group-toggle, .chat-row-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 10px 0; border: 0; background: none; color: var(--text); font-size: 15px; text-align: left; }
+.chat-row-main { padding-left: 14px; font-size: 14px; }
+.chat-row-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-row-time { flex: none; color: var(--muted); font-size: 12px; }
+.x-btn { flex: none; width: 32px; height: 32px; border: 0; background: none; color: var(--muted); font-size: 18px; }
+.chat-doc-link { display: block; margin: 2px 0 4px 14px; padding: 0; border: 0; background: none; color: var(--accent); font-size: 13px; }

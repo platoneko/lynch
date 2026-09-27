@@ -15,7 +15,7 @@ const MARKETS: { id: string; label: string }[] = [
   { id: 'US', label: '美股' },
 ];
 
-export function HomePage({ catalog, filter, onFilter, onOpen, onOpenAxis, onRefresh, refreshing }: {
+export function HomePage({ catalog, filter, onFilter, onOpen, onOpenAxis, onRefresh, refreshing, chatCount, onOpenChats }: {
   catalog: Catalog;
   filter: HomeFilter;
   onFilter: (f: HomeFilter) => void;
@@ -23,6 +23,8 @@ export function HomePage({ catalog, filter, onFilter, onOpen, onOpenAxis, onRefr
   onOpenAxis: (name: string) => void;
   onRefresh: () => void;
   refreshing: boolean;
+  chatCount: number;
+  onOpenChats: () => void;
 }) {
   const zoneOrder = catalog.zones.map((z) => z.id);
   const labels = new Map([...catalog.zones, ...catalog.lynch_classes].map((x) => [x.id, x.label]));
@@ -47,6 +49,9 @@ export function HomePage({ catalog, filter, onFilter, onOpen, onOpenAxis, onRefr
           <span className="quote-time">{quoteTimeText(asOf)}</span>
           <button className="icon-btn" onClick={onRefresh} disabled={refreshing} aria-label="刷新">
             {refreshing ? '…' : '⟳'}
+          </button>
+          <button className="text-btn chat-entry" onClick={onOpenChats}>
+            对话{chatCount > 0 && <span className="badge">{chatCount}</span>}
           </button>
         </div>
         <div className="chips">
