@@ -1,0 +1,217 @@
+from __future__ import annotations
+
+import asyncio
+import json
+
+import pytest
+
+from lynch_reader.chat.service import Conflict, Invalid, NotFound
+from tests.chat_helpers import launches, make_service, next_event, state_of, until
+
+
+def texts(snapshot):
+    return [(i["kind"], i.get("text")) for i in snapshot["items"]]
+
+
+def test_create_launches_with_session_id_and_replies(tmp_path):
+    async def main():
+        svc, log = make_service(tmp_path)
+        conv = await svc.create("ticker", "AAA.US", "hello", "claude-opus-5-5", "medium")
+        await until(lambda: state_of(svc, conv.id) == "idle")
+        snap = svc.snapshot(conv.id)
+        await svc.shutdown()
+        return conv, snap, launches(log)
+    conv, snap, runs = asyncio.run(main())
+    assert texts(snap) == [("user", "hello"), ("text", "echo: hello")]
+    argv = runs[0]["argv"]
+    assert argv[argv.index("--session-id") + 1] == conv.id
+    assert "ANTHROPIC_API_KEY" not in runs[0]["env"]
+    assert snap["context"] == {"tokens": 1000, "window": 200000}
+    assert conv.title == "hello" and conv.ticker == "AAA.US"
+
+
+def test_second_message_reuses_the_process(tmp_path):
+    async def main():
+        svc, log = make_service(tmp_path)
+        conv = await svc.create("research", None, "one", "claude-opus-5-5", "medium")
+        await until(lambda: state_of(svc, conv.id) == "idle")
+        await svc.send(conv.id, "two")
+        await until(lambda: len(svc.snapshot(conv.id)["items"]) == 4)
+        await svc.shutdown()
+        return launches(log)
+    assert len(asyncio.run(main())) == 1
+
+
+def test_dormant_conversation_resumes_after_restart(tmp_path):
+    async def main():
+        svc, log = make_service(tmp_path)
+        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium")
+        await until(lambda: state_of(svc, conv.id) == "idle")
+        await svc.shutdown()
+        svc2, _ = make_service(tmp_path)  # same index and projects dir: a server restart
+        assert state_of(svc2, conv.id) == "dormant"
+        await svc2.send(conv.id, "two")
+        await until(lambda: state_of(svc2, conv.id) == "idle")
+        snap = svc2.snapshot(conv.id)
+        await svc2.shutdown()
+        return conv, snap, launches(log)
+    conv, snap, runs = asyncio.run(main())
+    argv = runs[1]["argv"]
+    assert argv[argv.index("--resume") + 1] == conv.id and "--session-id" not in argv
+    assert texts(snap)[-2:] == [("user", "two"), ("text", "echo: two")]
+
+
+def test_interjection_while_running(tmp_path):
+    async def main():
+        svc, _ = make_service(tmp_path)
+        conv = await svc.create("ticker", "AAA.US", "slow", "claude-opus-5-5", "medium")
+        await until(lambda: any(i["kind"] == "tool" for i in svc.snapshot(conv.id)["items"]))
+        assert state_of(svc, conv.id) == "running"
+        await svc.send(conv.id, "more")
+        await until(lambda: state_of(svc, conv.id) == "idle")
+        snap = svc.snapshot(conv.id)
+        await svc.shutdown()
+        return snap
+    assert texts(asyncio.run(main()))[-2:] == [("user", "more"), ("text", "both handled")]
+
+
+def test_interrupt_leaves_a_stopped_notice(tmp_path):
+    async def main():
+        svc, _ = make_service(tmp_path)
+        conv = await svc.create("ticker", "AAA.US", "slow", "claude-opus-5-5", "medium")
+        await until(lambda: any(i["kind"] == "tool" for i in svc.snapshot(conv.id)["items"]))
+        await svc.interrupt(conv.id)
+        await until(lambda: state_of(svc, conv.id) == "idle")
+        snap = svc.snapshot(conv.id)
+        await svc.shutdown()
+        return snap
+    assert texts(asyncio.run(main()))[-1] == ("notice", "已停止")
+
+
+def test_crash_broadcasts_a_notice_and_goes_dormant(tmp_path):
+    async def main():
+        svc, _ = make_service(tmp_path)
+        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium")
+        await until(lambda: state_of(svc, conv.id) == "idle")
+        q = svc.subscribe(conv.id)
+        await svc.send(conv.id, "crash")
+        notice = await next_event(q, "item", lambda d: d["kind"] == "notice")
+        await until(lambda: state_of(svc, conv.id) == "dormant")
+        await svc.shutdown()
+        return notice
+    assert "boom" in asyncio.run(main())["text"]
+
+
+def test_start_failure_leaves_a_notice_and_dormant(tmp_path):
+    # The process may die before or after our write lands in its pipe; either way the chat must end
+    # dormant, never stuck "running", and the user must learn why (a 409 reason or a notice with stderr).
+    async def main():
+        svc, _ = make_service(tmp_path)
+        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium")
+        await until(lambda: state_of(svc, conv.id) == "idle")
+        await svc.shutdown()
+        q = svc.subscribe(conv.id)
+        svc._env["FAKE_CLAUDE_FAIL_START"] = "1"
+        refused = None
+        try:
+            await svc.send(conv.id, "two")
+        except Conflict as e:
+            refused = str(e)
+        await until(lambda: state_of(svc, conv.id) == "dormant")
+        await asyncio.sleep(0.2)  # let a late exit report arrive
+        notices = []
+        while not q.empty():
+            event, data = q.get_nowait()
+            if event == "item" and data["kind"] == "notice":
+                notices.append(data["text"])
+        return refused, notices, state_of(svc, conv.id)
+    refused, notices, state = asyncio.run(main())
+    assert state == "dormant"
+    assert any("cannot resume session" in n for n in notices)
+    assert refused is None or "Claude" in refused
+
+
+def test_deltas_stream_then_clear_on_the_full_text(tmp_path):
+    async def main():
+        svc, _ = make_service(tmp_path)
+        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium")
+        await until(lambda: state_of(svc, conv.id) == "idle")
+        q = svc.subscribe(conv.id)
+        await svc.send(conv.id, "hello")
+        delta = await next_event(q, "delta")
+        await next_event(q, "item", lambda d: d["kind"] == "text")
+        await until(lambda: state_of(svc, conv.id) == "idle")
+        partial = svc.snapshot(conv.id)["partial"]
+        await svc.shutdown()
+        return delta, partial
+    delta, partial = asyncio.run(main())
+    assert delta == {"text": "ech"} and partial == ""
+
+
+def test_snapshot_mid_turn_shows_running_and_partial(tmp_path):
+    async def main():
+        svc, _ = make_service(tmp_path)
+        conv = await svc.create("ticker", "AAA.US", "slow", "claude-opus-5-5", "medium")
+        await until(lambda: any(i["kind"] == "tool" for i in svc.snapshot(conv.id)["items"]))
+        svc._live[conv.id].partial = "half a sen"  # as if a delta had arrived
+        snap = svc.snapshot(conv.id)
+        await svc.shutdown()
+        return snap
+    snap = asyncio.run(main())
+    assert snap["conv"]["state"] == "running" and snap["partial"] == "half a sen"
+    assert texts(snap)[0] == ("user", "slow")
+
+
+def test_unfinished_transcript_gets_a_notice_when_dormant(tmp_path):
+    async def main():
+        svc, _ = make_service(tmp_path)
+        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium")
+        await until(lambda: state_of(svc, conv.id) == "idle")
+        await svc.shutdown()
+        path = tmp_path / "projects" / f"{conv.id}.jsonl"
+        last = json.loads(path.read_text().splitlines()[-1])["uuid"]
+        with path.open("a") as f:  # a turn cut off by a server restart
+            f.write(json.dumps({"type": "user", "uuid": "u-late", "parentUuid": last,
+                                "message": {"role": "user", "content": "late"}}) + "\n")
+        svc2, _ = make_service(tmp_path)
+        return svc2.snapshot(conv.id)
+    snap = asyncio.run(main())
+    assert texts(snap)[-2:] == [("user", "late"), ("notice", "上次回答被中断")]
+
+
+def test_list_counts_running_and_hides_missing_transcripts(tmp_path):
+    async def main():
+        svc, _ = make_service(tmp_path)
+        busy = await svc.create("ticker", "AAA.US", "slow", "claude-opus-5-5", "medium")
+        # Wait for the tool call, not just "running": only then has the fake written the transcript.
+        await until(lambda: any(i["kind"] == "tool" for i in svc.snapshot(busy.id)["items"]))
+        listing = svc.list()
+        await svc.shutdown()
+        return busy, listing
+    busy, listing = asyncio.run(main())
+    assert listing["running_count"] == 1 and [c["id"] for c in listing["chats"]] == [busy.id]
+    (tmp_path / "projects" / f"{busy.id}.jsonl").unlink()  # still indexed, but Claude Code cleaned the transcript
+    svc2, _ = make_service(tmp_path)
+    assert svc2.list()["chats"] == []
+    with pytest.raises(NotFound):
+        svc2.snapshot(busy.id)
+
+
+@pytest.mark.parametrize("kind,ticker,text,model,effort", [
+    ("other", None, "x", "claude-opus-5-5", "medium"),
+    ("ticker", None, "x", "claude-opus-5-5", "medium"),
+    ("research", None, "  ", "claude-opus-5-5", "medium"),
+    ("research", None, "x", "gpt-5", "medium"),
+    ("research", None, "x", "claude-opus-5-5", "turbo"),
+])
+def test_create_validates(tmp_path, kind, ticker, text, model, effort):
+    svc, _ = make_service(tmp_path)
+    with pytest.raises(Invalid):
+        asyncio.run(svc.create(kind, ticker, text, model, effort))
+
+
+def test_options_lists_models_and_defaults(tmp_path):
+    svc, _ = make_service(tmp_path)
+    opts = svc.options()
+    assert opts["default_model"] == "claude-opus-5-5" and opts["default_effort"] == "medium"
+    assert {"id": "claude-haiku-4-5", "label": "Haiku 4.5"} in opts["models"]
