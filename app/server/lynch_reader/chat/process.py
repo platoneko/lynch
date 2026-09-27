@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import signal
 from collections import deque
@@ -12,6 +13,9 @@ from pathlib import Path
 LINE_LIMIT = 64 * 1024 * 1024  # a tool result arrives as one line and can be large
 STDERR_TAIL = 20
 KILL_GRACE_S = 5.0
+EXIT_POLL_S = 0.1
+
+log = logging.getLogger(__name__)
 
 
 class ChatProcess:
@@ -51,15 +55,14 @@ class ChatProcess:
         """Ends the whole process group; the exit is then reported as expected."""
         if self._proc is None:
             return
-        self._closing = True
         if self.alive:
+            self._closing = True
             self._signal(signal.SIGTERM)
-            try:
-                await asyncio.wait_for(self._proc.wait(), KILL_GRACE_S)
-            except TimeoutError:
-                self._signal(signal.SIGKILL)
-                await self._proc.wait()
-        if self._watcher is not None:
+        # The watcher sweeps what survives the leader; SIGKILL covers a leader that ignores SIGTERM.
+        try:
+            await asyncio.wait_for(asyncio.shield(self._watcher), KILL_GRACE_S)
+        except TimeoutError:
+            self._signal(signal.SIGKILL)
             await self._watcher
 
     def _signal(self, sig: int) -> None:
@@ -74,9 +77,32 @@ class ChatProcess:
         await stdin.drain()
 
     async def _watch(self) -> None:
-        await asyncio.gather(self._read_stdout(), self._read_stderr())
+        drained = asyncio.gather(self._read_stdout(), self._read_stderr())
+        # Group members that outlive the leader (MCP servers, tool children) hold its pipes open,
+        # so neither EOF nor wait() would come: watch the leader's exit code instead.
+        while self.alive:
+            await asyncio.sleep(EXIT_POLL_S)
+        await self._sweep_group()
+        await drained
         await self._proc.wait()
         self._on_exit(self, self._closing, "\n".join(self._stderr))
+
+    async def _sweep_group(self) -> None:
+        self._signal(signal.SIGTERM)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + KILL_GRACE_S
+        while self._group_alive():
+            if loop.time() >= deadline:
+                self._signal(signal.SIGKILL)
+                return
+            await asyncio.sleep(EXIT_POLL_S)
+
+    def _group_alive(self) -> bool:
+        try:
+            os.killpg(self._proc.pid, 0)
+        except ProcessLookupError:
+            return False
+        return True
 
     async def _read_stdout(self) -> None:
         async for raw in self._proc.stdout:
@@ -84,7 +110,11 @@ class ChatProcess:
                 msg = json.loads(raw)
             except json.JSONDecodeError:
                 continue  # --verbose may print a non-JSON diagnostic line
-            self._on_message(msg)
+            try:
+                self._on_message(msg)
+            except Exception:
+                # A handler bug must not stop the draining: a full pipe would stall claude, and on_exit would never fire.
+                log.exception("on_message failed")
 
     async def _read_stderr(self) -> None:
         async for raw in self._proc.stderr:

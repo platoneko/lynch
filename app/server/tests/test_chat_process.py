@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
+import sys
 
 import pytest
 
@@ -85,6 +87,54 @@ def test_one_megabyte_line_is_read(tmp_path):
     results = [b for m in got if m["type"] == "user" and isinstance(m["message"]["content"], list)
                for b in m["message"]["content"]]
     assert len(results[0]["content"]) == 1_000_000
+
+
+# A leader that leaves a child behind holding its stdout/stderr, the way an MCP server would.
+LEADER_WITH_CHILD = ("import json, subprocess, sys; p = subprocess.Popen(['sleep', '30']); "
+                     "print(json.dumps({'type': 'child', 'pid': p.pid}), flush=True); "
+                     "sys.stderr.write('boom\\n'); sys.exit(3)")
+
+
+def pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def test_leader_exit_sweeps_the_group(tmp_path):
+    async def main():
+        got, exits = [], []
+        proc = ChatProcess([sys.executable, "-c", LEADER_WITH_CHILD], dict(os.environ), tmp_path,
+                           on_message=got.append, on_exit=lambda p, expected, err: exits.append((expected, err)))
+        await proc.start()
+        await until(lambda: bool(exits), timeout=2.0)
+        await until(lambda: not pid_alive(got[0]["pid"]), timeout=2.0)
+        return exits
+    assert asyncio.run(main()) == [(False, "boom")]
+
+
+def test_callback_error_does_not_stop_the_stream(tmp_path, caplog):
+    async def main():
+        got, exits = [], []
+
+        def on_message(msg):
+            got.append(msg)
+            if len(got) == 1:
+                raise RuntimeError("handler bug")
+
+        proc = ChatProcess([*FAKE_CMD, "-p", "--session-id", "s1"],
+                           {**os.environ, "FAKE_CLAUDE_PROJECTS": str(tmp_path)}, tmp_path,
+                           on_message=on_message, on_exit=lambda p, expected, err: exits.append(expected))
+        await proc.start()
+        await proc.send_user("hello")
+        await until(lambda: "result" in types(got))
+        await proc.close()
+        return exits
+    with caplog.at_level(logging.ERROR):
+        assert asyncio.run(main()) == [True]
+    assert "handler bug" in caplog.text
 
 
 def test_missing_binary_raises(tmp_path):
