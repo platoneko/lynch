@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { fetchAxis, fetchCatalog, fetchFramework } from './api';
-import { archiveChat, archiveTicker, fetchChats } from './chat/api';
+import { archiveChat, archiveTicker, fetchChatOptions, fetchChats } from './chat/api';
+import { ChatPage } from './chat/ChatPage';
 import { ChatsPage } from './chat/ChatsPage';
-import type { ChatList } from './chat/types';
+import type { ChatList, ChatOptions } from './chat/types';
 import { AxisDocHead, DocPage, TickerDocHead } from './doc/DocPage';
 import { HomePage } from './home/HomePage';
 import { DEFAULT_FILTER, type HomeFilter } from './home/listModel';
@@ -33,6 +34,12 @@ export function App() {
     const timer = window.setInterval(loadChats, 10_000);
     return () => window.clearInterval(timer);
   }, [route.page, loadChats]);
+  const [chatOptions, setChatOptions] = useState<ChatOptions | null>(null);
+  useEffect(() => {
+    if (route.page === 'chat' || route.page === 'chat-new') {
+      if (!chatOptions) fetchChatOptions().then(setChatOptions, () => {});
+    }
+  }, [route.page, chatOptions]);
   const names = useMemo(() => new Map((catalog?.tickers ?? []).flatMap((t) => (t.name ? [[t.ticker, t.name] as const] : []))), [catalog]);
   const archive = (p: Promise<unknown>) => p.then(loadChats, (e: unknown) => setChatError(String(e instanceof Error ? e.message : e)));
   const homeScroll = useRef(0);
@@ -89,6 +96,17 @@ export function App() {
           <p>加载中…</p>
         )}
       </div>
+    );
+  }
+  if (route.page === 'chat' || route.page === 'chat-new') {
+    const id = route.page === 'chat' ? route.id : null;
+    return (
+      <ChatPage key={id ?? `new:${route.page === 'chat-new' ? route.ticker : ''}`} id={id}
+        newTicker={route.page === 'chat-new' ? route.ticker : null} options={chatOptions} targets={targets}
+        onBack={() => (window.history.length > 1 ? window.history.back() : (window.location.hash = chatsHash()))}
+        onOpenDoc={(t) => { window.location.hash = docHash(t); }}
+        // replace: back from the new conversation must not land on its blank page again
+        onCreated={(newId) => window.location.replace(chatHash(newId))} />
     );
   }
   if (route.page === 'chats') {
