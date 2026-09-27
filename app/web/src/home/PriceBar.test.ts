@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { barGeometry, barScale, labelShift } from './PriceBar';
+import { barGeometry, barScale, labelShift, zoneRange } from './PriceBar';
 
 const BASE = { L: 10, M: 20, H: 40 };
 const OWN = { lo: 10, hi: 40 };
@@ -75,5 +75,17 @@ describe('labelShift', () => {
   it('eases between the end and the centred shift near each end', () => {
     expect(labelShift(5)).toBe(-25);
     expect(labelShift(95)).toBe(-75);
+  });
+});
+
+describe('zoneRange', () => {
+  it('bounds the in-frame zones by the anchors and cut points', () => {
+    expect(zoneRange('conservative', BASE)).toBe('10.00–15.00');
+    expect(zoneRange('neutral', BASE)).toBe('15.00–30.00');
+    expect(zoneRange('optimistic', BASE)).toBe('30.00–40.00');
+  });
+  it('leaves the outer zones open-ended', () => {
+    expect(zoneRange('deep_discount', BASE)).toBe('< 10.00');
+    expect(zoneRange('stretched', BASE)).toBe('> 40.00');
   });
 });

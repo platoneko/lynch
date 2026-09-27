@@ -22,13 +22,28 @@ export function barScale(bands: Anchors[]): Scale {
   return { lo: Math.min(...bands.map((b) => b.L)), hi: Math.max(...bands.map((b) => b.H)) };
 }
 
+/** The zone cut points (AGENTS.md「价带约定」): conservative [L, A), neutral [A, B), optimistic [B, H]. */
+function cutPoints(a: Anchors) {
+  return { A: (a.L + a.M) / 2, B: (a.M + a.H) / 2 };
+}
+
+/** The price range of `zone` on this band, e.g. 「12.50–15.00」, 「< 10.00」. */
+export function zoneRange(zone: ZoneId, a: Anchors): string {
+  const { A, B } = cutPoints(a);
+  switch (zone) {
+    case 'deep_discount': return `< ${fmt(a.L)}`;
+    case 'conservative': return `${fmt(a.L)}–${fmt(A)}`;
+    case 'neutral': return `${fmt(A)}–${fmt(B)}`;
+    case 'optimistic': return `${fmt(B)}–${fmt(a.H)}`;
+    case 'stretched': return `> ${fmt(a.H)}`;
+  }
+}
+
 /** Percent positions on `scale` of the anchors, the zone cut points A/B and the price. */
 export function barGeometry(price: number, a: Anchors, scale: Scale) {
   const span = scale.hi - scale.lo;
   const pct = (v: number) => (span > 0 ? ((v - scale.lo) / span) * 100 : 50);
-  // The zone cut points (AGENTS.md「价带约定」): conservative [L, A), neutral [A, B), optimistic [B, H].
-  const A = (a.L + a.M) / 2;
-  const B = (a.M + a.H) / 2;
+  const { A, B } = cutPoints(a);
   const [L, M, H] = [pct(a.L), pct(a.M), pct(a.H)];
   return {
     L, A: pct(A), M, B: pct(B), H,

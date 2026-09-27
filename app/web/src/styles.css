@@ -63,12 +63,13 @@ button { font: inherit; color: inherit; }
 .card-session { margin-right: 4px; color: var(--muted); font-size: 11px; }
 .card-classes { color: var(--muted); font-size: 13px; margin-top: 2px; }
 .band { margin-top: 8px; }
-.band-inline { display: flex; align-items: flex-start; gap: 10px; }
 .band-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.band-inline > .band-head { flex: none; padding-top: 2px; }
 .band-caption { flex: none; color: var(--muted); font-size: 12px; }
 .band-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
 .card-error { color: var(--zone-stretched); font-size: 13px; margin-top: 4px; word-break: break-all; }
+/* The zone's price range follows its tag; an extra band's own label comes after it. */
+.zone-range { flex: none; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.zone-range + .band-label::before { content: "· "; }
 .tag { flex: none; display: inline-block; padding: 1px 8px; border-radius: 6px; font-size: 12px; }
 .tag-muted { border: 1px solid var(--line); color: var(--muted); margin-top: 8px; }
 .band-head .tag-muted { margin-top: 0; }
