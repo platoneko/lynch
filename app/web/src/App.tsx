@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { fetchAxis, fetchCatalog, fetchFramework } from './api';
 import { archiveChat, archiveTicker, fetchChatOptions, fetchChats } from './chat/api';
 import { ChatPage } from './chat/ChatPage';
+import { ChatSheetButton } from './chat/ChatSheet';
 import { ChatsPage } from './chat/ChatsPage';
 import type { ChatList, ChatOptions } from './chat/types';
 import { AxisDocHead, DocPage, TickerDocHead } from './doc/DocPage';
@@ -127,7 +128,12 @@ export function App() {
       <TickerDocHead ticker={ticker} row={catalog.tickers.find((t) => t.ticker === ticker)} targets={targets}
         axes={axes} zoneLabel={(id) => labels.get(id) ?? id} onOpenAxis={(name) => { window.location.hash = axisHash(name); }} />
     );
-    return <DocPage key={`doc:${ticker}`} load={() => fetchFramework(ticker)} targets={targets} head={head} onBack={goBack} />;
+    return (
+      <DocPage key={`doc:${ticker}`} load={() => fetchFramework(ticker)} targets={targets} head={head} onBack={goBack}
+        barExtra={<ChatSheetButton ticker={ticker} chats={chatList?.chats ?? []}
+          onOpen={(id) => { window.location.hash = chatHash(id); }}
+          onNew={() => { window.location.hash = newChatHash(ticker); }} />} />
+    );
   }
   if (route.page === 'axis') {
     const { name } = route;

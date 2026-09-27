@@ -9,11 +9,12 @@ import { buildDoc, renderFragment, sectionLabel, type BuiltDoc, type LinkTargets
 import { currentIndex, isVisible, neighbors, openIdsFor } from './nav';
 
 /** A folding, jumpable markdown document: a ticker's framework or a shared axis. */
-export function DocPage({ load: fetchSource, targets, head, onBack }: {
+export function DocPage({ load: fetchSource, targets, head, onBack, barExtra }: {
   load: () => Promise<string>; // the page is keyed on its document, so this runs once per mount
   targets: LinkTargets;
   head: ReactNode; // shown above the document's own title block
   onBack: () => void;
+  barExtra?: ReactNode; // right end of the top bar
 }) {
   const [source, setSource] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -92,6 +93,7 @@ export function DocPage({ load: fetchSource, targets, head, onBack }: {
           <button className="bar-jump" disabled={up === null} onClick={() => up !== null && jump(up)}>
             ↑ {up !== null ? label(up) : '已到开头'}
           </button>
+          {barExtra}
         </div>
       </header>
 
