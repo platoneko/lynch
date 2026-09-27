@@ -113,16 +113,28 @@ def check_k_declared(r_journey: float, r_terminal: float, ks, where: str) -> lis
 G_CAP_MACRO = 0.06
 MIN_R_MINUS_G = 0.04
 
+# valuation-rules.md「巨型硬件上限」(2026-09-27): 6% is ~4% long-run nominal
+# growth plus a post-horizon runway.  A hardware leg of a company whose
+# numerator-year revenue is already >= MEGA_HW_REVENUE_USD (~0.5% of US nominal
+# GDP) and that has not proven pricing power gets no runway in the base case:
+# its perpetual g stops at the USD r_f anchor.  Revenue, not market cap, so the
+# classification never moves with the price.
+G_CAP_MEGA_HW = 0.04
+MEGA_HW_REVENUE_USD = 1.5e11
 
-def g_cap(r: float) -> float:
-    return min(G_CAP_MACRO, r - MIN_R_MINUS_G)
+
+def g_cap(r: float, mega_hw: bool = False) -> float:
+    ceiling = G_CAP_MEGA_HW if mega_hw else G_CAP_MACRO
+    return min(ceiling, r - MIN_R_MINUS_G)
 
 
-def check_g_cap(g: float, r: float, where: str) -> list[str]:
+def check_g_cap(g: float, r: float, where: str, mega_hw: bool = False) -> list[str]:
     """A perpetual g must sit at or below g_cap(r); the excess belongs in g1."""
-    cap = g_cap(r)
+    cap = g_cap(r, mega_hw)
     if g > cap + 1e-9:
-        return [f"{where}: g2={g:.4f} > cap {cap:.3f} at r={r} (valuation-rules.md「永续增长口径」) — move the excess into a named g1"]
+        rule = "「巨型硬件上限」— the excess belongs in the candidate band" if mega_hw \
+            else "「永续增长口径」— move the excess into a named g1"
+        return [f"{where}: g2={g:.4f} > cap {cap:.3f} at r={r} (valuation-rules.md{rule})"]
     return []
 
 
