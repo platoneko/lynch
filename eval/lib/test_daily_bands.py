@@ -77,6 +77,17 @@ class PoolLinesTests(unittest.TestCase):
             ],
         )
 
+    def test_a_share_fund_keeps_its_0_001_tick(self) -> None:
+        meta = _meta(ticker="159307.SZ", name="红利低波100ETF", L=0.966, M=1.054, H=1.171)
+        r = _row(meta, price=1.001, zone="conservative")
+        self.assertEqual(
+            daily_bands.format_pool_lines(r),
+            [
+                "🟢 159307.SZ 红利低波100ETF 1.001 CNY",
+                "「保守」 [0.966, 1.01) · L/M/H = 0.966/1.054/1.171",
+            ],
+        )
+
     def test_zone_bounds_open_ends(self) -> None:
         self.assertEqual(
             daily_bands.format_zone_bounds("deep_discount", 13.51, 19.63, 23.24),

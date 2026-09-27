@@ -28,14 +28,14 @@ function cutPoints(a: Anchors) {
 }
 
 /** The price range of `zone` on this band, e.g. 「12.50–15.00」, 「< 10.00」. */
-export function zoneRange(zone: ZoneId, a: Anchors): string {
+export function zoneRange(zone: ZoneId, a: Anchors, dp?: number): string {
   const { A, B } = cutPoints(a);
   switch (zone) {
-    case 'deep_discount': return `< ${fmt(a.L)}`;
-    case 'conservative': return `${fmt(a.L)}–${fmt(A)}`;
-    case 'neutral': return `${fmt(A)}–${fmt(B)}`;
-    case 'optimistic': return `${fmt(B)}–${fmt(a.H)}`;
-    case 'stretched': return `> ${fmt(a.H)}`;
+    case 'deep_discount': return `< ${fmt(a.L, dp)}`;
+    case 'conservative': return `${fmt(a.L, dp)}–${fmt(A, dp)}`;
+    case 'neutral': return `${fmt(A, dp)}–${fmt(B, dp)}`;
+    case 'optimistic': return `${fmt(B, dp)}–${fmt(a.H, dp)}`;
+    case 'stretched': return `> ${fmt(a.H, dp)}`;
   }
 }
 
@@ -54,11 +54,12 @@ export function barGeometry(price: number, a: Anchors, scale: Scale) {
 }
 
 /** One band on a shared scale; the dot is the price, coloured by the zone it falls in for this band. */
-export function PriceBar({ price, anchors, scale, zone }: {
+export function PriceBar({ price, anchors, scale, zone, dp }: {
   price: number;
   anchors: Anchors;
   scale: Scale;
   zone: ZoneId | null;
+  dp?: number;
 }) {
   const g = barGeometry(price, anchors, scale);
   const segments = [
@@ -84,7 +85,7 @@ export function PriceBar({ price, anchors, scale, zone }: {
       </div>
       <div className="pricebar-nums">
         {labels.map(([value, at], i) => (
-          <span key={i} style={{ left: `${at}%`, transform: `translateX(${labelShift(at)}%)` }}>{fmt(value)}</span>
+          <span key={i} style={{ left: `${at}%`, transform: `translateX(${labelShift(at)}%)` }}>{fmt(value, dp)}</span>
         ))}
       </div>
     </div>
@@ -102,6 +103,14 @@ export function labelShift(at: number): number {
   return -50;
 }
 
-export function fmt(n: number): string {
-  return n >= 1000 ? n.toFixed(0) : n >= 100 ? n.toFixed(1) : n.toFixed(2);
+// A-share exchange-traded funds (SH 5xxxxx, SZ 15xxxx–18xxxx) tick at 0.001, stocks at 0.01.
+const A_SHARE_FUND = /^(5\d{5}\.SH|1[5-8]\d{4}\.SZ)$/;
+
+/** Decimals below 100 for `ticker`'s prices: its quote tick, so a 0.001 move shows. */
+export function priceDecimals(ticker: string): number {
+  return A_SHARE_FUND.test(ticker) ? 3 : 2;
+}
+
+export function fmt(n: number, dp = 2): string {
+  return n >= 1000 ? n.toFixed(0) : n >= 100 ? n.toFixed(1) : n.toFixed(dp);
 }

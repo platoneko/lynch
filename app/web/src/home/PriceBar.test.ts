@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { barGeometry, barScale, labelShift, zoneRange } from './PriceBar';
+import { barGeometry, barScale, fmt, labelShift, priceDecimals, zoneRange } from './PriceBar';
 
 const BASE = { L: 10, M: 20, H: 40 };
 const OWN = { lo: 10, hi: 40 };
@@ -87,5 +87,17 @@ describe('zoneRange', () => {
   it('leaves the outer zones open-ended', () => {
     expect(zoneRange('deep_discount', BASE)).toBe('< 10.00');
     expect(zoneRange('stretched', BASE)).toBe('> 40.00');
+  });
+  it('shows A-share fund prices at their 0.001 tick', () => {
+    const etf = { L: 0.966, M: 1.054, H: 1.171 };
+    expect(zoneRange('conservative', etf, priceDecimals('159307.SZ'))).toBe('0.966–1.010');
+  });
+});
+
+describe('priceDecimals', () => {
+  it('gives A-share exchange-traded funds three decimals, everything else two', () => {
+    for (const t of ['159307.SZ', '159263.SZ', '513530.SH', '520900.SH']) expect(priceDecimals(t)).toBe(3);
+    for (const t of ['600036.SH', '000725.SZ', '300750.SZ', '0700.HK', 'INTC.US']) expect(priceDecimals(t)).toBe(2);
+    expect(fmt(1.001, priceDecimals('159307.SZ'))).toBe('1.001');
   });
 });

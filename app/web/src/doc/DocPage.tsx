@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { fetchFramework } from '../api';
 import { extraBands, rowZone, type ExtraBand } from '../home/listModel';
-import { fmt } from '../home/PriceBar';
+import { fmt, priceDecimals } from '../home/PriceBar';
 import { BandHead } from '../home/TickerCard';
 import type { TickerRow } from '../types';
 import { buildDoc, renderFragment, sectionLabel, type BuiltDoc } from './buildDoc';
@@ -98,7 +98,7 @@ export function DocPage({ ticker, row, pool, zoneLabel, onBack }: {
         <div className="doc-head">
           {zone && <span className={`tag zone-bg-${zone}`}>{zoneLabel(zone)}</span>}
           {row && extraBands(row).map((b) => (
-            <BandBlock key={b.kind} band={b} pool={pool} zoneLabel={zoneLabel} />
+            <BandBlock key={b.kind} band={b} pool={pool} zoneLabel={zoneLabel} dp={priceDecimals(ticker)} />
           ))}
           <div className="md" dangerouslySetInnerHTML={{ __html: doc.headerHtml }} />
         </div>
@@ -131,10 +131,11 @@ export function DocPage({ ticker, row, pool, zoneLabel, onBack }: {
  * +V — the credited prices, the Outputs V_opt line and the assumption rows it cites;
  * candidate — its prices and the gate assumption's text (why it is only a candidate).
  */
-function BandBlock({ band, pool, zoneLabel }: {
+function BandBlock({ band, pool, zoneLabel, dp }: {
   band: ExtraBand;
   pool: ReadonlySet<string>;
   zoneLabel: (id: string) => string;
+  dp: number;
 }) {
   const { L, M, H } = band.anchors;
   // Keyed on the catalog's own band object, which stays the same across scroll re-renders.
@@ -151,8 +152,8 @@ function BandBlock({ band, pool, zoneLabel }: {
         <summary>{band.kind === 'option' ? '期权背景' : '候选背景'}</summary>
         <p className="doc-band-prices">
           {band.kind === 'option'
-            ? `+V 修正带 L ${fmt(L)} · M ${fmt(M)} · H ${fmt(H)}`
-            : `L′ ${fmt(L)} · M′ ${fmt(M)} · H′ ${fmt(H)}`}
+            ? `+V 修正带 L ${fmt(L, dp)} · M ${fmt(M, dp)} · H ${fmt(H, dp)}`
+            : `L′ ${fmt(L, dp)} · M′ ${fmt(M, dp)} · H′ ${fmt(H, dp)}`}
         </p>
         {html.map((h, i) => <div key={i} className="md" dangerouslySetInnerHTML={{ __html: h }} />)}
       </details>

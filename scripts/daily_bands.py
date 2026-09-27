@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import re
 import sys
 from dataclasses import dataclass
 from datetime import datetime
@@ -68,38 +69,47 @@ def _as_of_iso() -> str:
     return datetime.now(TZ).isoformat(timespec="seconds")
 
 
-def _fmt_num(price: float) -> str:
-    """Same precision as Feishu price display (≥100 → 1dp, else 2dp)."""
+# A-share exchange-traded funds (SH 5xxxxx, SZ 15xxxx–18xxxx) tick at 0.001, stocks at 0.01.
+_A_SHARE_FUND = re.compile(r"^(5\d{5}\.SH|1[5-8]\d{4}\.SZ)$")
+
+
+def price_decimals(ticker: str) -> int:
+    """Decimals below 100 for `ticker`'s prices: its quote tick, so a 0.001 move shows."""
+    return 3 if _A_SHARE_FUND.match(ticker) else 2
+
+
+def _fmt_num(price: float, dp: int = 2) -> str:
+    """Same precision as Feishu price display (≥100 → 1dp, else `dp`)."""
     if price >= 100:
         return f"{price:.1f}"
-    return f"{price:.2f}"
+    return f"{price:.{dp}f}"
 
 
-def _fmt_price(price: float, currency: str) -> str:
-    return f"{_fmt_num(price)} {currency}"
+def _fmt_price(price: float, currency: str, dp: int = 2) -> str:
+    return f"{_fmt_num(price, dp)} {currency}"
 
 
-def _fmt_anchor(x: float) -> str:
-    """Two decimals, trailing zeros stripped (`27.2`, `246.44`, `113`)."""
-    s = f"{x:.2f}"
+def _fmt_anchor(x: float, dp: int = 2) -> str:
+    """`dp` decimals, trailing zeros stripped (`27.2`, `246.44`, `113`)."""
+    s = f"{x:.{dp}f}"
     return s.rstrip("0").rstrip(".") if "." in s else s
 
 
-def format_lmh(L: float, M: float, H: float) -> str:
-    return f"L/M/H = {_fmt_anchor(L)}/{_fmt_anchor(M)}/{_fmt_anchor(H)}"
+def format_lmh(L: float, M: float, H: float, dp: int = 2) -> str:
+    return f"L/M/H = {_fmt_anchor(L, dp)}/{_fmt_anchor(M, dp)}/{_fmt_anchor(H, dp)}"
 
 
-def format_zone_bounds(zone: str, L: float, M: float, H: float) -> str:
+def format_zone_bounds(zone: str, L: float, M: float, H: float, dp: int = 2) -> str:
     """Current-zone lo/hi in AGENTS bracket notation (`[A, B)` / `P < L`)."""
     shape, lo, hi = zone_bound_edges(zone, L, M, H)
     if shape == "open_below":
         assert hi is not None
-        return f"P < {_fmt_anchor(hi)}"
+        return f"P < {_fmt_anchor(hi, dp)}"
     if shape == "open_above":
         assert lo is not None
-        return f"P > {_fmt_anchor(lo)}"
+        return f"P > {_fmt_anchor(lo, dp)}"
     assert lo is not None and hi is not None
-    lo_s, hi_s = _fmt_anchor(lo), _fmt_anchor(hi)
+    lo_s, hi_s = _fmt_anchor(lo, dp), _fmt_anchor(hi, dp)
     if shape == "half_open":
         return f"[{lo_s}, {hi_s})"
     if shape == "closed":
@@ -135,11 +145,12 @@ def format_pool_lines(r: Row) -> list[str]:
     if not r.meta.ticker.endswith(".US"):
         title = f"{r.meta.ticker} {_short_name(r.meta)}"
     emoji = zone_emoji(r.zone)
-    header = f"{emoji} {title} {_fmt_price(r.price, r.meta.currency)}"
-    bounds = format_zone_bounds(r.zone, r.meta.L, r.meta.M, r.meta.H)
+    dp = price_decimals(r.meta.ticker)
+    header = f"{emoji} {title} {_fmt_price(r.price, r.meta.currency, dp)}"
+    bounds = format_zone_bounds(r.zone, r.meta.L, r.meta.M, r.meta.H, dp)
     lines = [
         header,
-        f"「{zone_label(r.zone)}」 {bounds} · {format_lmh(r.meta.L, r.meta.M, r.meta.H)}",
+        f"「{zone_label(r.zone)}」 {bounds} · {format_lmh(r.meta.L, r.meta.M, r.meta.H, dp)}",
     ]
     band = r.meta.option_band
     v_opt = r.meta.v_opt
@@ -150,16 +161,16 @@ def format_pool_lines(r: Row) -> list[str]:
         and r.option_zone
     ):
         L2, M2, H2 = band
-        ob = format_zone_bounds(r.option_zone, L2, M2, H2)
+        ob = format_zone_bounds(r.option_zone, L2, M2, H2, dp)
         lines.append(
-            f"「{zone_label(r.option_zone)}」 +V({_fmt_anchor(v_opt)}) {ob} · {format_lmh(L2, M2, H2)}"
+            f"「{zone_label(r.option_zone)}」 +V({_fmt_anchor(v_opt, dp)}) {ob} · {format_lmh(L2, M2, H2, dp)}"
         )
     if r.meta.candidate is not None and r.candidate_zone:
         L3, M3, H3 = r.meta.candidate
-        cb = format_zone_bounds(r.candidate_zone, L3, M3, H3)
+        cb = format_zone_bounds(r.candidate_zone, L3, M3, H3, dp)
         lines.append(
             f"「{zone_label(r.candidate_zone)}」 候选({r.meta.candidate_label}) "
-            f"{cb} · {format_lmh(L3, M3, H3)}"
+            f"{cb} · {format_lmh(L3, M3, H3, dp)}"
         )
     lines.extend(format_rf_lines(r))
     return lines
@@ -175,13 +186,14 @@ def format_rf_lines(r: Row) -> list[str]:
         return []
     if r.rf["stale"]:
         return [f"利率读数过期（利率轴或锚点已变，重跑 frameworks/eval/{r.meta.ticker}.py）"]
+    dp = price_decimals(r.meta.ticker)
     out = []
     for label, band in (
         (f"利率·共识({r.rf['delta_cons'] * 1e4:+.0f}bp)", r.rf["consensus"]),
         (f"利率·压力±{r.rf['rf_cap'] * 1e4:.0f}bp", r.rf["pressure"]),
     ):
         z = zone_of(r.price, *band)
-        out.append(f"「{zone_label(z)}」 {label} {format_zone_bounds(z, *band)} · {format_lmh(*band)}")
+        out.append(f"「{zone_label(z)}」 {label} {format_zone_bounds(z, *band, dp)} · {format_lmh(*band, dp)}")
     return out
 
 

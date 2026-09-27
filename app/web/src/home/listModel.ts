@@ -1,5 +1,5 @@
 import type { Candidate, OptionBand, TickerRow, ZoneId } from '../types';
-import { fmt } from './PriceBar';
+import { fmt, priceDecimals } from './PriceBar';
 
 /** The zone a row shows, filters and sorts by. */
 export function rowZone(r: TickerRow): ZoneId | null {
@@ -17,7 +17,7 @@ export const EXTRA_CAPTION: Record<ExtraBand['kind'], string> = { option: '+V', 
 export function extraBands(r: TickerRow): ExtraBand[] {
   const out: ExtraBand[] = [];
   if (r.option) {
-    out.push({ kind: 'option', label: `+V ${fmt(r.option.v_opt)}`, anchors: r.option, zone: r.band?.option_zone ?? null });
+    out.push({ kind: 'option', label: `+V ${fmt(r.option.v_opt, priceDecimals(r.ticker))}`, anchors: r.option, zone: r.band?.option_zone ?? null });
   }
   if (r.candidate) {
     out.push({ kind: 'candidate', label: r.candidate.label, anchors: r.candidate, zone: r.band?.candidate_zone ?? null });
