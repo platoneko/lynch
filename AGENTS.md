@@ -41,6 +41,7 @@ python3 -m unittest discover -s eval/lib -t . -p 'test_*.py'
 - app 对话是用户在场、逐轮确认的研究对话，**不属于**框架契约所禁止的「弱流水线」；落盘仍须用户明确说「可以落盘」，并走 `sediment-framework`。
 - 对话历史就是 Claude Code 的会话记录（`~/.claude/projects/<slug>/<id>.jsonl`，30 天清理）；`output/chat/index.json` 只是列表索引。
 - 服务端无鉴权，只绑 tailnet 地址——前提是 tailnet 里只有用户自己的设备。
+- 工具白名单是护栏，不是沙箱：agent 能写并运行 `frameworks/eval/` 里的脚本，等于能在本机执行任意代码，所以只能由用户本人驱动对话。
 - longbridge MCP 用 OAuth：授权过期时在终端交互式 `claude` 里 `/mcp` 重新授权，app 对话随即可用。
 
 ## 密钥与本地
