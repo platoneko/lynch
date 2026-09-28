@@ -220,6 +220,7 @@ button { font: inherit; color: inherit; }
 .diff-hunk, .diff-meta { color: var(--muted); }
 .approval-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 8px; }
 .approval-actions .text-btn { height: 36px; }
+.approval-actions .text-btn:disabled { opacity: 0.4; }
 .approval-allow { border-color: var(--accent); background: var(--accent); color: #fff; }
 .compact-line, .notice { margin: 12px 0; color: var(--muted); font-size: 12px; text-align: center; }
 .compact-line { border-top: 1px dashed var(--line); padding-top: 6px; }
