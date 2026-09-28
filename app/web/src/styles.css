@@ -5,6 +5,7 @@
   --muted: #6b6b70;
   --line: #e2e2e0;
   --accent: #2f6fdf;
+  --bubble: rgba(0, 0, 0, 0.055);
   --bar-h: 68px;
   --zone-deep_discount: #1f8a4c;
   --zone-conservative: #4caf6e;
@@ -22,6 +23,7 @@
     --muted: #9a9aa2;
     --line: #2c2c31;
     --accent: #6d9cff;
+    --bubble: rgba(255, 255, 255, 0.075);
     --seg-alpha: 0.45;
   }
 }
@@ -199,7 +201,8 @@ button { font: inherit; color: inherit; }
 .chat-menu button:disabled { color: var(--muted); }
 .msg { margin: 10px 0; }
 .msg-user { display: flex; flex-direction: column; align-items: flex-end; }
-.msg-text { max-width: 85%; padding: 8px 12px; border-radius: 14px; background: var(--accent); color: #fff; white-space: pre-wrap; word-break: break-word; }
+/* Codex-style: the user's turn is a quiet grey block in body type, not an accent-coloured bubble */
+.msg-text { max-width: 85%; padding: 10px 16px; border-radius: 18px; background: var(--bubble); color: var(--text); font-size: 16px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
 .msg-queued .msg-text { opacity: 0.55; }
 .msg-queued span { color: var(--muted); font-size: 11px; }
 .edit-btn { margin-top: 2px; padding: 0 6px; border: 0; background: none; color: var(--muted); }
