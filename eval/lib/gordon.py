@@ -2,7 +2,7 @@
 
 The repo prices a business as `PE = 1/(r - g)` with `r` set by the leg's basket
 (skill sediment-framework, references/valuation-rules.md「§r 篮子」), so a
-no-growth business is worth `1/r` (10x in the 龙头制造 basket).  That form silently assumes
+no-growth business is worth `1/r` (10x in the 常规经营 basket).  That form silently assumes
 a 100% payout — growth arriving free of reinvestment, i.e. an infinite return
 on incremental capital.  It overstates the multiple for any `g > 0`, and
 inverting it therefore understates the growth a market price is paying for.
@@ -41,9 +41,9 @@ BASKET_R: dict[int, tuple[str, float]] = {
     1: ("固定合约年金", 0.065),
     2: ("管制公用事业", 0.075),
     3: ("按量专利许可", 0.085),
-    4: ("龙头制造", 0.100),
+    4: ("常规经营", 0.100),
     5: ("大行 / 优质股份行", 0.110),
-    6: ("周期商品 / 氟化工 / 小盘", 0.130),
+    6: ("周期商品 / 氟化工", 0.130),
     7: ("单押 / 国别重 / 故事股", 0.150),
 }
 BASKET_VALUES: tuple[float, ...] = tuple(r for _, r in BASKET_R.values())

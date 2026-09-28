@@ -18,7 +18,7 @@ class BasketTests(unittest.TestCase):
     def test_seven_baskets(self) -> None:
         self.assertEqual([basket_r(b) for b in range(1, 8)],
                          [0.065, 0.075, 0.085, 0.10, 0.11, 0.13, 0.15])
-        self.assertEqual(BASKET_R[4][0], "龙头制造")
+        self.assertEqual(BASKET_R[4][0], "常规经营")
 
     def test_r_in_table_passes(self) -> None:
         self.assertEqual(check_r(0.10, "r_perp"), [])

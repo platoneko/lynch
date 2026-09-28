@@ -79,7 +79,7 @@ class ParseTests(unittest.TestCase):
     def test_parse_baskets_reads_leg_baskets(self) -> None:
         md = (
             "### Inputs\n\n| 字段名 | 含义 | 取值 / 来源 | as-of |\n|---|---|---|---|\n"
-            "| r_sw | 0.10 | 篮 4 龙头制造：软件年金 | 2026-09-20 |\n"
+            "| r_sw | 0.10 | 篮 4 常规经营：软件年金 | 2026-09-20 |\n"
             "| r_oci | 0.15 | 篮 7 单押：融资未落定 | 2026-09-20 |\n"
             "| r_disc | 0.10 | 年漂移折现，不归篮 | 2026-09-20 |\n"
             "| g2 | 0.06 | 篮 4 下截顶 | 2026-09-20 |\n\n### Formula\n"
@@ -89,7 +89,7 @@ class ParseTests(unittest.TestCase):
     def test_parse_baskets_ignores_non_r_rows_that_mention_a_basket(self) -> None:
         md = (
             "### Inputs\n\n| 字段名 | 含义 | 取值 / 来源 | as-of |\n|---|---|---|---|\n"
-            "| r | 0.10 | 篮 4 龙头制造 | 2026-09-20 |\n"
+            "| r | 0.10 | 篮 4 常规经营 | 2026-09-20 |\n"
             "| roe_m | 0.18 | 篮 4 同业中位；不是 r 行 | 2026-09-20 |\n"
             "| rf_ccy_mid | 0.03 | 篮 5 对照用无风险利率 | 2026-09-20 |\n\n### Formula\n"
         )
