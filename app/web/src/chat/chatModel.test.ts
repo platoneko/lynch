@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyEvent, compactText, contextText, contextWarn, editableUuids, formatTokens, fromSnapshot, inputJumps,
-  toChatEvent, toolDetail, toolSummary, turnDocLinks,
+  toChatEvent, toolDetail, toolSummary, turnDocLinks, type Queued,
 } from './chatModel';
 import type { ChatItem, ChatSummary, Snapshot, ToolItem } from './types';
 
@@ -13,6 +13,7 @@ const user = (uuid: string, text = uuid): ChatItem => ({ kind: 'user', key: uuid
 const reply = (key: string, text = key): ChatItem => ({ kind: 'text', key, text });
 const tool = (id: string, name: string, input: Record<string, unknown>, output: string | null = 'ok'): ToolItem =>
   ({ kind: 'tool', key: id, id, name, input, output, is_error: false, denied: false });
+const pending = (localId: string, text: string, status: Queued['status'] = 'waiting'): Queued => ({ localId, text, status });
 const snap = (items: ChatItem[]): Snapshot =>
   ({ conv, items, partial: '', usage: null, context: { tokens: 41_000, window: 1_000_000 } });
 
@@ -35,19 +36,40 @@ describe('applyEvent', () => {
     expect(v.items[0]).toMatchObject({ output: 'body', is_error: true, denied: true });
   });
   it('turns a queued echo into the real message', () => {
-    const v = { ...fromSnapshot(snap([])), queued: [{ localId: 'l1', text: 'more' }, { localId: 'l2', text: 'x' }] };
-    expect(applyEvent(v, { type: 'item', item: user('u9', 'more') }).queued).toEqual([{ localId: 'l2', text: 'x' }]);
+    const v = { ...fromSnapshot(snap([])), queued: [pending('l1', 'more'), pending('l2', 'x')] };
+    expect(applyEvent(v, { type: 'item', item: user('u9', 'more') }).queued).toEqual([pending('l2', 'x')]);
   });
   it('does not let a folded duplicate settle a queued echo', () => {
-    const v = { ...fromSnapshot(snap([user('u1', 'more')])), queued: [{ localId: 'l1', text: 'more' }] };
-    expect(applyEvent(v, { type: 'item', item: user('u1', 'more') }).queued).toEqual([{ localId: 'l1', text: 'more' }]);
+    const v = { ...fromSnapshot(snap([user('u1', 'more')])), queued: [pending('l1', 'more')] };
+    expect(applyEvent(v, { type: 'item', item: user('u1', 'more') }).queued).toEqual([pending('l1', 'more')]);
   });
   it('settles the same text queued twice one arrival at a time', () => {
-    let v = { ...fromSnapshot(snap([])), queued: [{ localId: 'l1', text: 'go' }, { localId: 'l2', text: 'go' }] };
+    let v = { ...fromSnapshot(snap([])), queued: [pending('l1', 'go'), pending('l2', 'go')] };
     v = applyEvent(v, { type: 'item', item: user('u1', 'go') });
-    expect(v.queued).toEqual([{ localId: 'l2', text: 'go' }]);
+    expect(v.queued).toEqual([pending('l2', 'go')]);
     v = applyEvent(v, { type: 'item', item: user('u2', 'go') });
     expect(v.queued).toEqual([]);
+  });
+  it('settles an unanswered message whose echo comes late', () => {
+    const v = { ...fromSnapshot(snap([])), queued: [pending('l1', 'go', 'unanswered')] };
+    expect(applyEvent(v, { type: 'item', item: user('u1', 'go') }).queued).toEqual([]);
+  });
+  it('marks a message unanswered when its turn ends without its echo', () => {
+    const v = { ...fromSnapshot(snap([])), conv: { ...conv, state: 'running' as const }, queued: [pending('l1', 'hi')] };
+    expect(applyEvent(v, { type: 'state', state: 'idle' }).queued).toEqual([pending('l1', 'hi', 'unanswered')]);
+    expect(applyEvent(v, { type: 'state', state: 'dormant' }).queued).toEqual([pending('l1', 'hi', 'unanswered')]);
+  });
+  it('drops an unechoed slash command when its turn ends: claude never replays one', () => {
+    const v = { ...fromSnapshot(snap([])), conv: { ...conv, state: 'running' as const }, queued: [pending('l1', '/compact')] };
+    expect(applyEvent(v, { type: 'state', state: 'idle' }).queued).toEqual([]);
+  });
+  it('moves a message sent behind a turn up to waiting when that turn ends', () => {
+    const v = { ...fromSnapshot(snap([])), conv: { ...conv, state: 'running' as const }, queued: [pending('l1', 'next', 'behind')] };
+    expect(applyEvent(v, { type: 'state', state: 'idle' }).queued).toEqual([pending('l1', 'next')]);
+  });
+  it('leaves a waiting message alone while a dormant chat wakes up', () => {
+    const v = { ...fromSnapshot(snap([])), conv: { ...conv, state: 'dormant' as const }, queued: [pending('l1', 'hi')] };
+    expect(applyEvent(v, { type: 'state', state: 'idle' }).queued).toEqual([pending('l1', 'hi')]);
   });
   it('drops the partial when the turn ends', () => {
     const v = applyEvent({ ...fromSnapshot(snap([])), partial: 'half' }, { type: 'state', state: 'idle' });
@@ -62,10 +84,14 @@ describe('applyEvent', () => {
 });
 
 describe('fromSnapshot', () => {
-  const queued = [{ localId: 'l1', text: 'A' }, { localId: 'l2', text: 'B' }];
+  const queued = [pending('l1', 'A'), pending('l2', 'B')];
   it('settles an echo consumed while the stream was down', () => {
     const prev = { ...fromSnapshot(snap([user('u1')])), queued };
-    expect(fromSnapshot(snap([user('u1'), user('u2', 'A')]), prev).queued).toEqual([{ localId: 'l2', text: 'B' }]);
+    expect(fromSnapshot(snap([user('u1'), user('u2', 'A')]), prev).queued).toEqual([pending('l2', 'B')]);
+  });
+  it('marks a message unanswered when its turn ended while the stream was down', () => {
+    const prev = { ...fromSnapshot(snap([user('u1')])), conv: { ...conv, state: 'running' as const }, queued };
+    expect(fromSnapshot(snap([user('u1'), user('u2', 'A')]), prev).queued).toEqual([pending('l2', 'B', 'unanswered')]);
   });
   it('leaves echoes alone for messages the view already had', () => {
     const prev = { ...fromSnapshot(snap([user('u1', 'A')])), queued };
@@ -73,6 +99,11 @@ describe('fromSnapshot', () => {
   });
   it('starts with nothing queued', () => {
     expect(fromSnapshot(snap([user('u1', 'A')])).queued).toEqual([]);
+  });
+  it('starts a new chat with its first message pending until the transcript has it', () => {
+    const first = [pending('l1', 'A')];
+    expect(fromSnapshot(snap([]), null, first).queued).toEqual(first);
+    expect(fromSnapshot(snap([user('u1', 'A')]), null, first).queued).toEqual([]);
   });
 });
 

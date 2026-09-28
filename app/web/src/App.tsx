@@ -36,6 +36,8 @@ export function App() {
     return () => window.clearInterval(timer);
   }, [route.page, loadChats]);
   const [chatOptions, setChatOptions] = useState<ChatOptions | null>(null);
+  // A new conversation's first message, handed from its blank page to its own page.
+  const [firstMessage, setFirstMessage] = useState<{ id: string; text: string } | null>(null);
   useEffect(() => {
     if (route.page === 'chat' || route.page === 'chat-new') {
       if (!chatOptions) fetchChatOptions().then(setChatOptions, () => {});
@@ -103,11 +105,16 @@ export function App() {
     const id = route.page === 'chat' ? route.id : null;
     return (
       <ChatPage key={id ?? `new:${route.page === 'chat-new' ? route.ticker : ''}`} id={id}
-        newTicker={route.page === 'chat-new' ? route.ticker : null} options={chatOptions} targets={targets}
+        newTicker={route.page === 'chat-new' ? route.ticker : null}
+        firstMessage={firstMessage !== null && firstMessage.id === id ? firstMessage.text : null}
+        options={chatOptions} targets={targets}
         onBack={() => (window.history.length > 1 ? window.history.back() : (window.location.hash = chatsHash()))}
         onOpenDoc={(t) => { window.location.hash = docHash(t); }}
-        // replace: back from the new conversation must not land on its blank page again
-        onCreated={(newId) => window.location.replace(chatHash(newId))} />
+        onCreated={(newId, text) => {
+          setFirstMessage({ id: newId, text });
+          // replace: back from the new conversation must not land on its blank page again
+          window.location.replace(chatHash(newId));
+        }} />
     );
   }
   if (route.page === 'chats') {

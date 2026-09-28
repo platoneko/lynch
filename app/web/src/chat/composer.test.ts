@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cancelEdit, composer, draftText, sent, startEdit, typed } from './composer';
+import { cancelEdit, composer, draftText, putBack, sent, startEdit, typed } from './composer';
 
 describe('composer', () => {
   it('typing outside an edit is the draft', () => {
@@ -38,5 +38,10 @@ describe('composer', () => {
 
   it('text typed while the send was in flight survives it', () => {
     expect(sent(composer('next thought'), 'hello')).toEqual(composer('next thought'));
+  });
+
+  it('an unanswered message comes back to the input, after anything typed since', () => {
+    expect(putBack(composer(''), 'lost')).toEqual(composer('lost'));
+    expect(putBack(composer('new thought\n'), 'lost')).toEqual(composer('new thought\n\nlost'));
   });
 });

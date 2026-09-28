@@ -3,14 +3,15 @@ import { renderFragment, type LinkTargets } from '../doc/buildDoc';
 import { createChat, editMessage, interruptChat, openChatEvents, renameChat, sendMessage } from './api';
 import {
   applyEvent, compactText, contextText, contextWarn, editableUuids, fromSnapshot, inputJumps, isBusy, stateText,
-  toolDetail, toolSummary, turnDocLinks, usageText, type ChatView, type InputJumps,
+  toolDetail, toolSummary, turnDocLinks, usageText, type ChatView, type InputJumps, type Queued,
 } from './chatModel';
-import { cancelEdit, composer, draftText, sent, startEdit, typed, type Composer } from './composer';
+import { cancelEdit, composer, draftText, putBack, sent, startEdit, typed, type Composer } from './composer';
 import { clearDraft, loadDraft, loadShowTools, saveDraft, saveShowTools } from './drafts';
 import type { ChatItem, ChatOptions } from './types';
 
 const INPUT_MAX_PX = 160;
 const PARK_PX = 8; // gap left between the header and a bubble an input jump lands on
+const QUEUED_LABEL: Record<Queued['status'], string> = { behind: '排队中', waiting: '等待回应', unanswered: '未处理' };
 
 /** The user bubbles, the top of the band the sticky header and composer leave visible, and where the jumps lead. */
 function inputLayout(header: HTMLElement | null, body: HTMLElement | null, footer: HTMLElement | null) {
@@ -23,20 +24,25 @@ function inputLayout(header: HTMLElement | null, body: HTMLElement | null, foote
 
 type RenderedText = Map<string, { text: string; html: string }>; // item key → its source and HTML
 
-/** One conversation; with `id === null`, the blank page before its first message. */
-export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, onCreated }: {
+/**
+ * One conversation; with `id === null`, the blank page before its first message.
+ * `firstMessage`: the text the blank page just created this conversation with, pending until claude replays it.
+ */
+export function ChatPage({ id, newTicker, firstMessage, options, targets, onBack, onOpenDoc, onCreated }: {
   id: string | null;
   newTicker: string | null;
+  firstMessage: string | null;
   options: ChatOptions | null;
   targets: LinkTargets;
   onBack: () => void;
   onOpenDoc: (ticker: string) => void;
-  onCreated: (id: string) => void;
+  onCreated: (id: string, text: string) => void;
 }) {
   const draftKey = id ?? `new/${newTicker ?? ''}`;
   const [view, setView] = useState<ChatView | null>(null);
   const [input, setInput] = useState<Composer>(() => composer(loadDraft(draftKey)));
   const [sending, setSending] = useState(false);
+  const [creating, setCreating] = useState<string | null>(null); // the blank page's first message, while it is sent
   const inFlight = useRef(false); // state lags a render behind; a quick double tap must not send twice
   const [error, setError] = useState<string | null>(null);
   const [lost, setLost] = useState(false); // the stream dropped and a reconnect is pending
@@ -74,7 +80,8 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
     return openChatEvents(id, {
       snapshot: (s) => {
         setLost(false);
-        setView((v) => fromSnapshot(s, v));
+        const first: Queued[] = firstMessage === null ? [] : [{ localId: 'first', text: firstMessage, status: 'waiting' }];
+        setView((v) => fromSnapshot(s, v, first));
       },
       event: (e) => setView((v) => (v ? applyEvent(v, e) : v)),
       reset: () => setStream((n) => n + 1),
@@ -86,7 +93,7 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
       },
       lost: () => setLost(true),
     });
-  }, [id, stream]);
+  }, [id, stream, firstMessage]);
 
   useEffect(() => {
     const onScroll = () => {
@@ -124,6 +131,7 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
   const editable = useMemo(() => editableUuids(items), [items]);
   const links = useMemo(() => turnDocLinks(items), [items]);
   const busy = view ? isBusy(view.conv.state) : false;
+  const pending: Queued[] = creating !== null ? [{ localId: 'first', text: creating, status: 'waiting' }] : view?.queued ?? [];
 
   const { text, editing } = input;
   const fail = (e: unknown) => setError(String(e instanceof Error ? e.message : e));
@@ -136,16 +144,18 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
     setError(null);
     try {
       if (id === null) {
+        setCreating(body);
         const created = await createChat({ kind: newTicker ? 'ticker' : 'research', ticker: newTicker, text: body, model, effort });
         clearDraft(draftKey);
-        onCreated(created.id);
+        onCreated(created.id, body);
         return;
       }
       if (editing !== null) {
         await editMessage(id, editing, body);
       } else {
         const localId = `${Date.now()}-${Math.random()}`;
-        if (busy) setView((v) => v && { ...v, queued: [...v.queued, { localId, text: body }] });
+        const status = busy ? 'behind' : 'waiting';
+        setView((v) => v && { ...v, queued: [...v.queued, { localId, text: body, status }] });
         try {
           await sendMessage(id, body);
         } catch (e) {
@@ -155,6 +165,7 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
       }
       setInput((c) => sent(c, body));
     } catch (e) {
+      setCreating(null); // kept on success: the bubble stays up until the new conversation's page takes over
       fail(e);
     } finally {
       inFlight.current = false;
@@ -165,6 +176,11 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
     const { bubbles, bandTop, jumps: j } = layout();
     const target = which === 'last' ? bubbles.at(-1) : j.prev === null ? undefined : bubbles[j.prev];
     if (target) window.scrollTo(0, window.scrollY + target.getBoundingClientRect().top - bandTop - PARK_PX);
+  };
+  const putBackUnanswered = (q: Queued) => {
+    setView((v) => v && { ...v, queued: v.queued.filter((x) => x.localId !== q.localId) });
+    setInput((c) => putBack(c, q.text));
+    inputEl.current?.focus();
   };
   const edit = (it: Extract<ChatItem, { kind: 'user' }>) => {
     setInput((c) => startEdit(c, it.uuid, it.text));
@@ -256,8 +272,14 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
           </Fragment>
         ))}
         {view?.partial && <div className="msg msg-agent msg-partial">{view.partial}▌</div>}
-        {view?.queued.map((q) => (
-          <div key={q.localId} className="msg msg-user msg-queued"><div className="msg-text">{q.text}</div><span>排队中</span></div>
+        {pending.map((q) => (
+          <div key={q.localId} className="msg msg-user msg-queued">
+            <div className="msg-text">{q.text}</div>
+            <span>{QUEUED_LABEL[q.status]}</span>
+            {q.status === 'unanswered' && (
+              <button className="text-btn" disabled={editing !== null} onClick={() => putBackUnanswered(q)}>放回输入框</button>
+            )}
+          </div>
         ))}
       </main>
 
