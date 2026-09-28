@@ -66,12 +66,22 @@ export interface ToolResult {
   denied: boolean;
 }
 
+/** A skill edit claude waits on the phone to allow (chat/approvals.py `Approval.public`). */
+export interface Approval {
+  request_id: string;
+  tool_use_id: string;
+  tool: string;
+  path: string; // relative to the lynch repo
+  diff: string; // unified diff, or a one-line note when there is none
+}
+
 export interface Snapshot {
   conv: ChatSummary;
   items: ChatItem[];
   partial: string;
   usage: Usage | null;
   context: ContextUsage;
+  approvals: Approval[];
 }
 
 export type ChatEvent =
@@ -81,4 +91,6 @@ export type ChatEvent =
   | { type: 'state'; state: ChatState }
   | { type: 'usage'; usage: Usage }
   | { type: 'context'; context: ContextUsage }
-  | { type: 'conv'; conv: ChatSummary };
+  | { type: 'conv'; conv: ChatSummary }
+  | { type: 'approval'; approval: Approval }
+  | { type: 'approval_done'; request_id: string };

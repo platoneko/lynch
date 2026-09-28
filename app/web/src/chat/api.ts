@@ -38,11 +38,15 @@ export async function renameChat(id: string, title: string): Promise<void> {
   await post(`${base(id)}/title`, { title });
 }
 
+export async function answerApproval(id: string, requestId: string, allow: boolean): Promise<void> {
+  await post(`${base(id)}/approvals/${encodeURIComponent(requestId)}`, { allow });
+}
+
 export async function archiveTicker(ticker: string): Promise<{ archived: number }> {
   return (await post('/api/chats/archive', { ticker })).json();
 }
 
-const EVENTS = ['delta', 'item', 'tool_result', 'state', 'usage', 'context', 'conv'];
+const EVENTS = ['delta', 'item', 'tool_result', 'state', 'usage', 'context', 'conv', 'approval', 'approval_done'];
 
 /** Delay before reopening a stream after `attempt` failed reopens: 1 s, 2 s, 4 s … capped at 30 s. */
 export function backoffMs(attempt: number): number {

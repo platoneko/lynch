@@ -1,5 +1,5 @@
 import type {
-  ChatEvent, ChatItem, ChatState, ChatSummary, ContextUsage, Snapshot, ToolItem, ToolResult, Usage,
+  Approval, ChatEvent, ChatItem, ChatState, ChatSummary, ContextUsage, Snapshot, ToolItem, ToolResult, Usage,
 } from './types';
 
 /** A message sent while the agent runs, shown until the server replays it. */
@@ -15,6 +15,7 @@ export interface ChatView {
   usage: Usage | null;
   context: ContextUsage;
   queued: Queued[];
+  approvals: Approval[]; // skill edits waiting for 允许 / 拒绝
 }
 
 export function isBusy(state: ChatState): boolean {
@@ -31,7 +32,9 @@ export function fromSnapshot(s: Snapshot, prev: ChatView | null = null): ChatVie
   for (const it of s.items) {
     if (it.kind === 'user' && !known.has(it.key)) queued = dropEcho(queued, it.text);
   }
-  return { conv: s.conv, items: s.items, partial: s.partial, usage: s.usage, context: s.context, queued };
+  return {
+    conv: s.conv, items: s.items, partial: s.partial, usage: s.usage, context: s.context, queued, approvals: s.approvals,
+  };
 }
 
 /** Removes the first queued message with this text: one arrival settles one echo. */
@@ -51,6 +54,8 @@ export function toChatEvent(type: string, data: unknown): ChatEvent | null {
     case 'usage': return { type, usage: data as Usage };
     case 'context': return { type, context: data as ContextUsage };
     case 'conv': return { type, conv: data as ChatSummary };
+    case 'approval': return { type, approval: data as Approval };
+    case 'approval_done': return { type, request_id: String(d.request_id) };
     default: return null;
   }
 }
@@ -82,7 +87,22 @@ export function applyEvent(v: ChatView, e: ChatEvent): ChatView {
       return { ...v, context: e.context };
     case 'conv':
       return { ...v, conv: { ...e.conv, state: v.conv.state } };
+    case 'approval':
+      // A reconnect's snapshot and the live event may both carry it.
+      return v.approvals.some((a) => a.request_id === e.approval.request_id)
+        ? v : { ...v, approvals: [...v.approvals, e.approval] };
+    case 'approval_done':
+      return { ...v, approvals: v.approvals.filter((a) => a.request_id !== e.request_id) };
   }
+}
+
+/** CSS class of one unified-diff line in an approval card. */
+export function diffLineClass(line: string): string {
+  if (line.startsWith('+++') || line.startsWith('---')) return 'diff-meta';
+  if (line.startsWith('@@')) return 'diff-hunk';
+  if (line.startsWith('+')) return 'diff-add';
+  if (line.startsWith('-')) return 'diff-del';
+  return '';
 }
 
 /**

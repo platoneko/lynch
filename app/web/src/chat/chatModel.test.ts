@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
-  applyEvent, compactText, contextText, contextWarn, editableUuids, formatTokens, fromSnapshot, inputJumps,
-  toChatEvent, toolDetail, toolSummary, turnDocLinks,
+  applyEvent, compactText, contextText, contextWarn, diffLineClass, editableUuids, formatTokens, fromSnapshot,
+  inputJumps, toChatEvent, toolDetail, toolSummary, turnDocLinks,
 } from './chatModel';
-import type { ChatItem, ChatSummary, Snapshot, ToolItem } from './types';
+import type { Approval, ChatItem, ChatSummary, Snapshot, ToolItem } from './types';
 
 const conv: ChatSummary = {
   id: 'c1', kind: 'ticker', ticker: 'NVDA.US', title: 't', model: 'claude-opus-5-5', effort: 'medium',
@@ -14,7 +14,7 @@ const reply = (key: string, text = key): ChatItem => ({ kind: 'text', key, text 
 const tool = (id: string, name: string, input: Record<string, unknown>, output: string | null = 'ok'): ToolItem =>
   ({ kind: 'tool', key: id, id, name, input, output, is_error: false, denied: false });
 const snap = (items: ChatItem[]): Snapshot =>
-  ({ conv, items, partial: '', usage: null, context: { tokens: 41_000, window: 1_000_000 } });
+  ({ conv, items, partial: '', usage: null, context: { tokens: 41_000, window: 1_000_000 }, approvals: [] });
 
 describe('applyEvent', () => {
   it('folds a duplicate item by key instead of appending it', () => {
@@ -160,5 +160,34 @@ describe('inputJumps', () => {
   it('offers nothing while the last input is on screen and none is above', () => {
     expect(inputJumps([300], 100, 700)).toEqual({ prev: null, last: null });
     expect(inputJumps([], 100, 700)).toEqual({ prev: null, last: null });
+  });
+});
+
+const approval = (request_id: string): Approval =>
+  ({ request_id, tool_use_id: `t-${request_id}`, tool: 'Edit', path: 'frameworks/.claude/skills/sediment-framework/r.md', diff: '-a\n+b' });
+
+describe('approvals', () => {
+  it('come with the snapshot so a reconnect shows them again', () => {
+    expect(fromSnapshot({ ...snap([]), approvals: [approval('r1')] }).approvals.map((a) => a.request_id)).toEqual(['r1']);
+  });
+  it('are added once and removed when answered', () => {
+    let v = fromSnapshot(snap([]));
+    v = applyEvent(v, { type: 'approval', approval: approval('r1') });
+    v = applyEvent(v, { type: 'approval', approval: approval('r1') });
+    v = applyEvent(v, { type: 'approval', approval: approval('r2') });
+    expect(v.approvals.map((a) => a.request_id)).toEqual(['r1', 'r2']);
+    v = applyEvent(v, { type: 'approval_done', request_id: 'r1' });
+    expect(v.approvals.map((a) => a.request_id)).toEqual(['r2']);
+  });
+  it('parse from SSE frames', () => {
+    expect(toChatEvent('approval', approval('r1'))).toEqual({ type: 'approval', approval: approval('r1') });
+    expect(toChatEvent('approval_done', { request_id: 'r1' })).toEqual({ type: 'approval_done', request_id: 'r1' });
+  });
+});
+
+describe('diffLineClass', () => {
+  it('colours added, removed and hunk lines but not the file headers', () => {
+    expect(['+++ b/x', '--- a/x', '@@ -1 +1 @@', '+new', '-old', ' same', '（内容没有变化）'].map(diffLineClass))
+      .toEqual(['diff-meta', 'diff-meta', 'diff-hunk', 'diff-add', 'diff-del', '', '']);
   });
 });
