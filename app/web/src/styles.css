@@ -212,6 +212,15 @@ button { font: inherit; color: inherit; }
 .tool summary { cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool pre { max-height: 240px; overflow: auto; padding: 8px; border-radius: 8px; background: var(--card); font-size: 12px; white-space: pre-wrap; word-break: break-word; }
 .tool-denied summary { color: var(--zone-stretched); font-weight: 600; }
+.approval { margin: 8px 0; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 12px; background: var(--card); }
+.approval-title { margin-bottom: 6px; font-size: 13px; font-weight: 600; word-break: break-all; }
+.approval-diff { margin: 0; max-height: 50vh; overflow: auto; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+.diff-add { color: var(--zone-deep_discount); }
+.diff-del { color: var(--zone-stretched); }
+.diff-hunk, .diff-meta { color: var(--muted); }
+.approval-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 8px; }
+.approval-actions .text-btn { height: 36px; }
+.approval-allow { border-color: var(--accent); background: var(--accent); color: #fff; }
 .compact-line, .notice { margin: 12px 0; color: var(--muted); font-size: 12px; text-align: center; }
 .compact-line { border-top: 1px dashed var(--line); padding-top: 6px; }
 .chat-input { position: sticky; bottom: 0; padding: 6px 16px calc(8px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--bg); }

@@ -1,8 +1,8 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { renderFragment, type LinkTargets } from '../doc/buildDoc';
-import { createChat, editMessage, interruptChat, openChatEvents, renameChat, sendMessage } from './api';
+import { answerApproval, createChat, editMessage, interruptChat, openChatEvents, renameChat, sendMessage } from './api';
 import {
-  applyEvent, compactText, contextText, contextWarn, editableUuids, fromSnapshot, inputJumps, isBusy, stateText,
+  applyEvent, compactText, contextText, contextWarn, diffLineClass, editableUuids, fromSnapshot, inputJumps, isBusy, stateText,
   toolDetail, toolSummary, turnDocLinks, usageText, type ChatView, type InputJumps,
 } from './chatModel';
 import { cancelEdit, composer, draftText, sent, startEdit, typed, type Composer } from './composer';
@@ -49,6 +49,7 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
   const [model, setModel] = useState('');
   const [effort, setEffort] = useState('');
   const [stream, setStream] = useState(0); // bumping it reopens the event stream (after an edit)
+  const [answering, setAnswering] = useState<ReadonlySet<string>>(new Set()); // approvals whose answer is in flight
   const inputEl = useRef<HTMLTextAreaElement>(null);
   const rendered = useRef<{ targets: LinkTargets; html: RenderedText }>({ targets, html: new Map() });
   const stick = useRef(true); // follow new output only while the reader is at the bottom
@@ -127,6 +128,20 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
 
   const { text, editing } = input;
   const fail = (e: unknown) => setError(String(e instanceof Error ? e.message : e));
+  const answer = async (requestId: string, allow: boolean) => {
+    if (id === null) return;
+    setAnswering((s) => new Set(s).add(requestId));
+    try {
+      await answerApproval(id, requestId, allow); // the card leaves on `approval_done`
+    } catch (e) {
+      fail(e);
+      setAnswering((s) => {
+        const next = new Set(s);
+        next.delete(requestId);
+        return next;
+      });
+    }
+  };
 
   const submit = async () => {
     const body = text.trim();
@@ -256,6 +271,18 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
           </Fragment>
         ))}
         {view?.partial && <div className="msg msg-agent msg-partial">{view.partial}▌</div>}
+        {view?.approvals.map((a) => (
+          <div key={a.request_id} className="approval">
+            <div className="approval-title">修改 skill：{a.path.replace('frameworks/.claude/skills/', '')}</div>
+            <pre className="approval-diff">
+              {a.diff.split('\n').map((line, n) => <div key={n} className={diffLineClass(line)}>{line || ' '}</div>)}
+            </pre>
+            <div className="approval-actions">
+              <button className="text-btn" disabled={answering.has(a.request_id) || gone} onClick={() => answer(a.request_id, false)}>拒绝</button>
+              <button className="text-btn approval-allow" disabled={answering.has(a.request_id) || gone} onClick={() => answer(a.request_id, true)}>允许</button>
+            </div>
+          </div>
+        ))}
         {view?.queued.map((q) => (
           <div key={q.localId} className="msg msg-user msg-queued"><div className="msg-text">{q.text}</div><span>排队中</span></div>
         ))}
