@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  applyEvent, compactText, contextText, contextWarn, editableUuids, formatTokens, fromSnapshot, toChatEvent,
-  toolDetail, toolSummary, turnDocLinks,
+  applyEvent, compactText, contextText, contextWarn, editableUuids, formatTokens, fromSnapshot, inputJumps,
+  toChatEvent, toolDetail, toolSummary, turnDocLinks,
 } from './chatModel';
 import type { ChatItem, ChatSummary, Snapshot, ToolItem } from './types';
 
@@ -140,5 +140,25 @@ describe('formatting', () => {
   it('describes a compaction', () => {
     expect(compactText({ kind: 'compact', key: 'b', trigger: 'auto', pre_tokens: 41_454, post_tokens: 2879 }))
       .toBe('已压缩（自动）：41k → 3k');
+  });
+});
+
+describe('inputJumps', () => {
+  // The visible band runs from the header's bottom (100) to the composer's top (700).
+  it('leads to the nearest input above the band and to an off-screen last input', () => {
+    expect(inputJumps([-900, -300, 50, 1200], 100, 700)).toEqual({ prev: 2, last: 'below' });
+  });
+
+  it('skips the input a jump just parked at the band top, so repeated taps walk upward', () => {
+    expect(inputJumps([-300, 108, 900], 100, 700)).toEqual({ prev: 0, last: 'below' });
+  });
+
+  it('points up to the last input once the reader has followed the reply past it', () => {
+    expect(inputJumps([-900, -300], 100, 700)).toEqual({ prev: 1, last: 'above' });
+  });
+
+  it('offers nothing while the last input is on screen and none is above', () => {
+    expect(inputJumps([300], 100, 700)).toEqual({ prev: null, last: null });
+    expect(inputJumps([], 100, 700)).toEqual({ prev: null, last: null });
   });
 });

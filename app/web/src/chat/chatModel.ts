@@ -182,6 +182,23 @@ export function turnDocLinks(items: ChatItem[]): Map<number, string[]> {
   return out;
 }
 
+export type InputJumps = { prev: number | null; last: 'above' | 'below' | null };
+
+/**
+ * Where the input-jump buttons lead, given each user bubble's top in viewport px (in page order)
+ * and the band [bandTop, bandBottom) the header and composer leave visible.
+ * `prev` is the nearest bubble starting above the band; `last` says which way the last bubble lies, if off screen.
+ */
+export function inputJumps(tops: number[], bandTop: number, bandBottom: number): InputJumps {
+  let prev: number | null = null;
+  tops.forEach((top, i) => {
+    if (top < bandTop) prev = i;
+  });
+  const lastTop = tops.at(-1);
+  const last = lastTop === undefined ? null : lastTop < bandTop ? 'above' : lastTop >= bandBottom ? 'below' : null;
+  return { prev, last };
+}
+
 export function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${+(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1000) return `${Math.round(n / 1000)}k`;

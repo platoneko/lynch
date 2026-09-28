@@ -2,14 +2,24 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 
 import { renderFragment, type LinkTargets } from '../doc/buildDoc';
 import { createChat, editMessage, interruptChat, openChatEvents, renameChat, sendMessage } from './api';
 import {
-  applyEvent, compactText, contextText, contextWarn, editableUuids, fromSnapshot, isBusy, stateText, toolDetail,
-  toolSummary, turnDocLinks, usageText, type ChatView,
+  applyEvent, compactText, contextText, contextWarn, editableUuids, fromSnapshot, inputJumps, isBusy, stateText,
+  toolDetail, toolSummary, turnDocLinks, usageText, type ChatView, type InputJumps,
 } from './chatModel';
 import { cancelEdit, composer, draftText, sent, startEdit, typed, type Composer } from './composer';
 import { clearDraft, loadDraft, loadShowTools, saveDraft, saveShowTools } from './drafts';
 import type { ChatItem, ChatOptions } from './types';
 
 const INPUT_MAX_PX = 160;
+const PARK_PX = 8; // gap left between the header and a bubble an input jump lands on
+
+/** The user bubbles, the top of the band the sticky header and composer leave visible, and where the jumps lead. */
+function inputLayout(header: HTMLElement | null, body: HTMLElement | null, footer: HTMLElement | null) {
+  const bubbles = [...(body?.querySelectorAll<HTMLElement>('.msg-user') ?? [])];
+  const bandTop = header?.getBoundingClientRect().bottom ?? 0;
+  const bandBottom = footer?.getBoundingClientRect().top ?? window.innerHeight;
+  const jumps = inputJumps(bubbles.map((b) => b.getBoundingClientRect().top), bandTop, bandBottom);
+  return { bubbles, bandTop, jumps };
+}
 
 type RenderedText = Map<string, { text: string; html: string }>; // item key → its source and HTML
 
@@ -42,6 +52,15 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
   const inputEl = useRef<HTMLTextAreaElement>(null);
   const rendered = useRef<{ targets: LinkTargets; html: RenderedText }>({ targets, html: new Map() });
   const stick = useRef(true); // follow new output only while the reader is at the bottom
+  const headerEl = useRef<HTMLElement>(null);
+  const bodyEl = useRef<HTMLElement>(null);
+  const footerEl = useRef<HTMLElement>(null);
+  const [jumps, setJumps] = useState<InputJumps>({ prev: null, last: null });
+  const layout = () => inputLayout(headerEl.current, bodyEl.current, footerEl.current);
+  const syncJumps = () => {
+    const next = layout().jumps;
+    setJumps((j) => (j.prev === next.prev && j.last === next.last ? j : next)); // scroll fires often; rerender on change only
+  };
 
   useEffect(() => {
     if (options && !model) {
@@ -72,6 +91,7 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
   useEffect(() => {
     const onScroll = () => {
       stick.current = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 120;
+      syncJumps();
     };
     window.addEventListener('scroll', onScroll, { passive: true });
     return () => window.removeEventListener('scroll', onScroll);
@@ -79,6 +99,7 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
   useLayoutEffect(() => {
     if (stick.current) window.scrollTo(0, document.documentElement.scrollHeight);
   }, [view]);
+  useLayoutEffect(syncJumps, [view, showTools]);
   useLayoutEffect(() => {
     const el = inputEl.current;
     if (!el) return;
@@ -140,6 +161,11 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
       setSending(false);
     }
   };
+  const jumpTo = (which: 'prev' | 'last') => {
+    const { bubbles, bandTop, jumps: j } = layout();
+    const target = which === 'last' ? bubbles.at(-1) : j.prev === null ? undefined : bubbles[j.prev];
+    if (target) window.scrollTo(0, window.scrollY + target.getBoundingClientRect().top - bandTop - PARK_PX);
+  };
   const edit = (it: Extract<ChatItem, { kind: 'user' }>) => {
     setInput((c) => startEdit(c, it.uuid, it.text));
     inputEl.current?.focus();
@@ -173,7 +199,7 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
 
   return (
     <div className="chat">
-      <header className="bar bar-top">
+      <header ref={headerEl} className="bar bar-top">
         <div className="bar-row">
           <button className="icon-btn" onClick={onBack} aria-label="返回">‹</button>
           <div className="chat-title">
@@ -201,7 +227,7 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
         )}
       </header>
 
-      <main className="chat-body">
+      <main ref={bodyEl} className="chat-body">
         {error && <div className="banner-error">{error}</div>}
         {lost && <div className="banner-muted">连接中断，正在重连…</div>}
         {items.map((it, n) => (
@@ -235,7 +261,21 @@ export function ChatPage({ id, newTicker, options, targets, onBack, onOpenDoc, o
         ))}
       </main>
 
-      <footer className="chat-input">
+      <footer ref={footerEl} className="chat-input">
+        {(jumps.prev !== null || jumps.last !== null) && (
+          <div className="input-jumps">
+            {jumps.prev !== null && (
+              <button onClick={() => jumpTo('prev')} aria-label="上一条输入" title="上一条输入">
+                <svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6" /></svg>
+              </button>
+            )}
+            {jumps.last !== null && (
+              <button onClick={() => jumpTo('last')} aria-label="最后一条输入" title="最后一条输入">
+                <svg viewBox="0 0 24 24" className={jumps.last === 'above' ? 'flip' : ''}><path d="M6 7l6 6 6-6M6 13l6 6 6-6" /></svg>
+              </button>
+            )}
+          </div>
+        )}
         {editing !== null && (
           <div className="chat-editing">编辑消息：发送后将截断此后的对话（文件改动不会撤销）<button onClick={() => setInput(cancelEdit)}>取消</button></div>
         )}
