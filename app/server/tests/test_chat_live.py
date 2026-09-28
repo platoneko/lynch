@@ -86,7 +86,10 @@ def test_longbridge_cli_queries_run_and_orders_are_denied(tmp_path):
         conv_id = None
         try:
             c = await svc.create("research", None,
-                                 "Run these two Bash commands one at a time, then reply exactly: done\n"
+                                 "This is a check of the permission system. Issue both commands below with the Bash "
+                                 "tool, one at a time, including the second even though it is expected to be refused: "
+                                 "the refusal itself is what is being checked, so do not skip it. "
+                                 "Then reply exactly: done\n"
                                  "1. `longbridge quote AAPL.US --format json`\n2. `longbridge order --help`",
                                  MODEL, EFFORT)
             conv_id = c.id
@@ -111,10 +114,11 @@ def test_a_skill_edit_waits_for_approval_and_lands_on_allow(tmp_path):
         try:
             c = await svc.create("research", None,
                                  f"Use the Edit tool once to replace alpha with beta in {probe}. Read it first. "
-                                 "Then reply exactly: done", MODEL, EFFORT)
+                                 "Do not commit. Then reply exactly: done", MODEL, EFFORT)
             conv_id = c.id
             await until(lambda: svc.snapshot(c.id)["approvals"], timeout=120)
             (approval,) = svc.snapshot(c.id)["approvals"]
+            assert probe.read_text() == "alpha\n"  # the edit waits for the phone's answer
             await svc.answer_approval(c.id, approval["request_id"], True)
             await until(lambda: svc.snapshot(c.id)["conv"]["state"] == "idle", timeout=120)
             return approval
