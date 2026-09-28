@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from lynch_reader.chat.config import (
-    ALLOWED_TOOLS, LONGBRIDGE_QUERY_COMMANDS, LaunchConfig, launch_argv, launch_env, system_prompt,
+    ALLOWED_TOOLS, DENIED_TOOLS, LaunchConfig, launch_argv, launch_env, system_prompt,
 )
 from tests.chat_helpers import conv
 
@@ -57,20 +57,28 @@ def test_whitelist_is_the_last_variadic_flag():
     assert tuple(argv[argv.index("--allowedTools") + 1:]) == ALLOWED_TOOLS
 
 
-def test_whitelist_matches_the_verified_rules():
-    # spec §9 第 2 条: plain `git …` rules would never match (git must run as `git -C frameworks …`)
-    assert len(ALLOWED_TOOLS) == 18 + len(LONGBRIDGE_QUERY_COMMANDS)
-    assert "Bash(git -C frameworks commit *)" in ALLOWED_TOOLS
-    assert not [t for t in ALLOWED_TOOLS if t.startswith("Bash(git ") and "-C frameworks" not in t]
-    assert "Write(frameworks/**)" in ALLOWED_TOOLS and "Write" not in ALLOWED_TOOLS
+def test_denylist_precedes_the_whitelist():
+    argv = launch_argv(CFG, conv(), resume=False)
+    assert tuple(argv[argv.index("--disallowedTools") + 1:argv.index("--allowedTools")]) == DENIED_TOOLS
+
+
+def test_bash_is_open_but_files_are_written_only_under_frameworks():
+    # user, 2026-09-28: research runs like a normal session; Write / Edit stay scoped so skill edits hit the phone
+    assert "Bash(*)" in ALLOWED_TOOLS
+    assert "Write(frameworks/**)" in ALLOWED_TOOLS and "Write" not in ALLOWED_TOOLS and "Edit" not in ALLOWED_TOOLS
+    assert "Bash(sudo *)" in DENIED_TOOLS
+    for c in ("push", "reset", "checkout", "stash"):
+        assert f"Bash(git *{c}*)" in DENIED_TOOLS, c
+    assert not [t for t in DENIED_TOOLS if "commit" in t or "add" in t]
 
 
 def test_longbridge_is_the_cli_with_query_commands_only():
     # user, 2026-09-28: the CLI's own login instead of MCP OAuth; no orders, account data, login or self-update
     assert not [t for t in ALLOWED_TOOLS if t.startswith("mcp__longbridge")]
-    assert "Bash(longbridge quote*)" in ALLOWED_TOOLS and "Bash(longbridge financial-report*)" in ALLOWED_TOOLS
     for c in ("order", "auth", "update", "positions", "assets", "watchlist", "alert", "dca", "topic", "sharelist"):
-        assert not [t for t in ALLOWED_TOOLS if t.startswith(f"Bash(longbridge {c}")], c
+        assert f"Bash(longbridge {c}*)" in DENIED_TOOLS, c
+    for c in ("quote", "financial-report", "kline", "help"):
+        assert not [t for t in DENIED_TOOLS if t.startswith(f"Bash(longbridge {c}")], c
 
 
 def test_env_drops_api_billing_and_claudeai_connectors():
@@ -104,3 +112,9 @@ def test_permission_prompts_come_to_the_app():
 def test_prompt_explains_skill_approvals():
     p = system_prompt(conv(kind="research", ticker=None))
     assert "frameworks/.claude/skills/sediment-framework/" in p and "diff on the phone" in p
+
+
+def test_prompt_frees_scratch_but_not_framework_content():
+    p = system_prompt(conv(kind="research", ticker=None))
+    assert "frameworks/_local/tmp/" in p and "Never stage or commit frameworks/_local/" in p
+    assert "「可以落盘」" in p

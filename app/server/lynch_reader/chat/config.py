@@ -24,29 +24,35 @@ IDLE_TIMEOUT_S = 3600.0  # the prompt cache lives 1 h, so a lazy resume within i
 MAX_PROCESSES = 8
 
 # Market data comes from the longbridge CLI on its own login (the one eval/lib and the daily report use), not
-# the longbridge MCP, which needs a separate OAuth (user, 2026-09-28). Query subcommands only: the CLI can also
-# place orders, read the account, edit watchlists/alerts/DCA plans, post community topics, log out and self-update,
-# and nobody has confirmed its login is a paper account.
-LONGBRIDGE_QUERY_COMMANDS: tuple[str, ...] = (
-    "quote", "depth", "brokers", "trades", "intraday", "kline", "static", "calc-index", "capital", "market-temp",
-    "trading", "security-list", "participants", "option", "warrant", "financial-report", "financial-statement",
-    "business-segments", "industry-rank", "industry-peers", "industry-valuation", "institution-rating", "dividend",
-    "forecast-eps", "consensus", "etf-docs", "macrodata", "finance-calendar", "valuation", "valuation-rank", "news",
-    "filing", "exchange-rate", "shareholder", "company", "executive", "operating", "corp-action", "invest-relation",
-    "constituent", "market-status", "broker-holding", "ah-premium", "trade-stats", "anomaly", "top-movers",
-    "screener", "rank", "compare", "fund-holder", "insider-trades", "investors", "short-positions", "short-trades",
-    "quant", "help",
+# the longbridge MCP, which needs a separate OAuth (user, 2026-09-28). Everything but queries is denied: the CLI
+# can also place orders, read the account, edit watchlists/alerts/DCA plans, post community topics, log out and
+# self-update, and nobody has confirmed its login is a paper account. A subcommand added by a later CLI version
+# is allowed until it is listed here.
+LONGBRIDGE_BLOCKED_COMMANDS: tuple[str, ...] = (
+    "auth", "init", "check", "update", "tui", "completion", "subscriptions", "topic", "watchlist", "statement",
+    "order", "assets", "cash-flow", "portfolio", "positions", "fund-positions", "margin-ratio", "max-qty", "alert",
+    "profit-analysis", "dca", "sharelist", "bank-cards", "withdrawals", "deposits", "ipo",
+)
+# Git that moves or discards work the user may have in progress in frameworks/, or pushes it out. The middle
+# `*` also catches `git -C <dir> …`.
+GIT_BLOCKED_COMMANDS: tuple[str, ...] = (
+    "push", "reset", "clean", "checkout", "restore", "switch", "stash", "rebase",
 )
 
-# spec §9 第 2 条. `cd frameworks && git …` is refused by a built-in rule, hence `git -C frameworks`.
+# Research runs like a normal Claude Code session (user, 2026-09-28: 「就像在 neige 上调研一样」): any Bash, so
+# scratch math can be run inline or from frameworks/_local/tmp/. Deny rules win over Bash(*) and are checked on
+# every part of a pipe or `&&` chain (verified 2026-09-28), but `bash -c '…'` or a script gets past them: a
+# guardrail, not a sandbox. Write / Edit stay inside frameworks/ so skill edits still reach the phone.
 ALLOWED_TOOLS: tuple[str, ...] = (
     "Read", "Glob", "Grep", "Skill", "WebSearch", "WebFetch",
     "Write(frameworks/**)", "Edit(frameworks/**)",
     "mcp__wisburg__*",
-    "Bash(cd frameworks)", "Bash(just check)", "Bash(python3 eval/*)",
-    "Bash(git -C frameworks status*)", "Bash(git -C frameworks diff*)", "Bash(git -C frameworks log*)",
-    "Bash(git -C frameworks add *)", "Bash(git -C frameworks commit *)", "Bash(git -C frameworks revert *)",
-    *(f"Bash(longbridge {c}*)" for c in LONGBRIDGE_QUERY_COMMANDS),
+    "Bash(*)",
+)
+DENIED_TOOLS: tuple[str, ...] = (
+    "Bash(sudo *)",
+    *(f"Bash(git *{c}*)" for c in GIT_BLOCKED_COMMANDS),
+    *(f"Bash(longbridge {c}*)" for c in LONGBRIDGE_BLOCKED_COMMANDS),
 )
 
 # Any of these would move billing from the Max subscription to the API.
@@ -61,13 +67,17 @@ You are working inside the lynch phone app; the user replies turn by turn from a
 (anchors L/M/H, the five zones, no current price in framework files): read it before explaining a framework's \
 anchors or zones. AGENTS.md at the repo root is the code repo's contract.
 - Before changing any framework, read frameworks/AGENTS.md and follow the sediment-framework skill. \
-Do not create or modify anything under frameworks/ until the user explicitly says it may be written (e.g. 「可以落盘」).
+Do not create or modify framework content (frameworks/*.md and the axes/ and eval/ directories) until the user \
+explicitly says it may be written (e.g. 「可以落盘」).
+- Scratch work needs no go-ahead: put throwaway scripts and notes under frameworks/_local/tmp/ and run them, or run \
+Python inline with Bash. Never stage or commit frameworks/_local/.
 - Edits to the sediment-framework skill (frameworks/.claude/skills/sediment-framework/) need the user's explicit \
 go-ahead like a framework; after that, each Edit or Write shows the user its diff on the phone and waits for their \
-answer. Any other call outside the whitelist is refused.
+answer. Other calls outside the whitelist are refused.
 - For market data use the longbridge CLI with Bash, e.g. `longbridge quote AAPL.US --format json`; \
 `longbridge help` lists the commands. Only query commands are allowed (no orders, account data or login).
-- Write files only with the Write and Edit tools. Run git only as `git -C frameworks …`; `cd frameworks && git …` is refused.
+- Write files only with the Write and Edit tools, and only under frameworks/. Run git on frameworks/ \
+(`git -C frameworks …`); push, reset, checkout, restore, switch, stash, rebase and clean are refused.
 - After landing a change, run `cd frameworks && just check`. When it passes, stage only the files this conversation changed and commit.
 - The user may edit an earlier message, which truncates this conversation. File changes made in the truncated turns \
 are not undone, so check the files and `git -C frameworks status` before acting on them.
@@ -110,6 +120,7 @@ def launch_argv(cfg: LaunchConfig, conv: Conversation, *, resume: bool, resume_a
         # phone, the rest are refused. Without it claude refuses every write under .claude/ outright.
         "--permission-prompt-tool", "stdio",
         "--append-system-prompt", system_prompt(conv),
+        "--disallowedTools", *DENIED_TOOLS,  # variadic: ends at the next flag
         "--allowedTools", *ALLOWED_TOOLS,  # variadic: must stay last
     ]
 
