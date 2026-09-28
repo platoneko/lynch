@@ -30,6 +30,8 @@ def test_other_tools_and_paths_are_not(tmp_path):
     assert approvable_path("Edit", {"file_path": str(tmp_path / "frameworks/.claude/skills/other/SKILL.md")},
                            tmp_path) is None
     assert approvable_path("Edit", {}, tmp_path) is None
+    assert approvable_path("Edit", {"file_path": str(tmp_path / "frameworks/.claude/skills/sediment-framework-evil/x.md")},
+                           tmp_path) is None
 
 
 def test_the_repo_root_skills_symlink_is_approvable(tmp_path):
@@ -51,6 +53,26 @@ def test_symlink_out_of_the_skill_is_not_approvable(tmp_path):
     (tmp_path / "outside.md").write_text("x")
     (f.parent / "link.md").symlink_to(tmp_path / "outside.md")
     assert approvable_path("Edit", {"file_path": str(f.parent / "link.md")}, tmp_path) is None
+
+
+def test_symlink_loop_inside_the_skill_is_not_approvable(tmp_path):
+    f = skill(tmp_path)
+    (f.parent / "a.md").symlink_to(f.parent / "b.md")
+    (f.parent / "b.md").symlink_to(f.parent / "a.md")
+    assert approvable_path("Edit", {"file_path": str(f.parent / "a.md")}, tmp_path) is None
+
+
+def test_frameworks_symlinked_from_outside_the_repo_is_approvable(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    f = skill(tmp_path / "real-fw")  # real-fw/frameworks/.claude/skills/...
+    (repo / "frameworks").symlink_to(tmp_path / "real-fw/frameworks")
+    via = repo / APPROVABLE_SKILL / "references/r.md"
+    assert approvable_path("Edit", {"file_path": str(via)}, repo) == f.resolve()
+    request = {"tool_name": "Edit", "tool_use_id": "toolu_1",
+               "input": {"file_path": str(via), "old_string": "alpha", "new_string": "beta"}}
+    a = new_approval("req1", request, f.resolve(), repo)
+    assert a.path == "frameworks/.claude/skills/sediment-framework/references/r.md"
 
 
 def test_edit_diff_replaces_the_first_match_with_context(tmp_path):

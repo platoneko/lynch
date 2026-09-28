@@ -45,7 +45,10 @@ def approvable_path(tool: str, tool_input: dict, repo_root: Path) -> Path | None
         path = repo_root / path
     # Resolving first: `.claude/skills` at the repo root is a symlink into frameworks/, and `..` or a symlink
     # inside the skill must not smuggle a write out of it.
-    resolved = path.resolve()
+    try:
+        resolved = path.resolve()
+    except (OSError, RuntimeError):  # a symlink loop is never approvable
+        return None
     return resolved if resolved.is_relative_to((repo_root / APPROVABLE_SKILL).resolve()) else None
 
 
@@ -65,7 +68,8 @@ def edit_diff(tool: str, tool_input: dict, path: Path, display: str) -> str:
 
 
 def new_approval(request_id: str, request: dict, path: Path, repo_root: Path) -> Approval:
-    display = path.relative_to(repo_root.resolve()).as_posix()
+    # Relative to the resolved skill root, not the repo root: `frameworks/` may be a symlink out of the repo.
+    display = (APPROVABLE_SKILL / path.relative_to((repo_root / APPROVABLE_SKILL).resolve())).as_posix()
     tool, tool_input = request["tool_name"], request.get("input") or {}
     return Approval(request_id=request_id, tool_use_id=str(request.get("tool_use_id", "")), tool=tool,
                     path=display, diff=edit_diff(tool, tool_input, path, display), tool_input=tool_input)
