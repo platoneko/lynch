@@ -15,7 +15,7 @@ const tool = (id: string, name: string, input: Record<string, unknown>, output: 
   ({ kind: 'tool', key: id, id, name, input, output, is_error: false, denied: false });
 const pending = (localId: string, text: string, status: Queued['status'] = 'waiting'): Queued => ({ localId, text, status });
 const snap = (items: ChatItem[]): Snapshot =>
-  ({ conv, items, partial: '', usage: null, context: { tokens: 41_000, window: 1_000_000 } });
+  ({ conv, items, partial: '', retry: null, usage: null, context: { tokens: 41_000, window: 1_000_000 } });
 
 describe('applyEvent', () => {
   it('folds a duplicate item by key instead of appending it', () => {
@@ -71,6 +71,13 @@ describe('applyEvent', () => {
     const v = { ...fromSnapshot(snap([])), conv: { ...conv, state: 'dormant' as const }, queued: [pending('l1', 'hi')] };
     expect(applyEvent(v, { type: 'state', state: 'idle' }).queued).toEqual([pending('l1', 'hi')]);
   });
+  it('shows an API retry until the server clears it', () => {
+    let v = applyEvent(fromSnapshot(snap([])), { type: 'retry', text: '接口 181 秒没有响应' });
+    expect(v.retry).toBe('接口 181 秒没有响应');
+    v = applyEvent(v, { type: 'retry', text: null });
+    expect(v.retry).toBeNull();
+    expect(fromSnapshot({ ...snap([]), retry: 'r' }).retry).toBe('r');
+  });
   it('drops the partial when the turn ends', () => {
     const v = applyEvent({ ...fromSnapshot(snap([])), partial: 'half' }, { type: 'state', state: 'idle' });
     expect(v.partial).toBe('');
@@ -112,6 +119,8 @@ describe('toChatEvent', () => {
     expect(toChatEvent('delta', { text: 'a' })).toEqual({ type: 'delta', text: 'a' });
     expect(toChatEvent('state', { state: 'running' })).toEqual({ type: 'state', state: 'running' });
     expect(toChatEvent('context', { tokens: 1, window: 2 })).toEqual({ type: 'context', context: { tokens: 1, window: 2 } });
+    expect(toChatEvent('retry', { text: '接口出错' })).toEqual({ type: 'retry', text: '接口出错' });
+    expect(toChatEvent('retry', { text: null })).toEqual({ type: 'retry', text: null });
     expect(toChatEvent('nope', {})).toBeNull();
   });
 });

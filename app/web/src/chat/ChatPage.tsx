@@ -311,7 +311,7 @@ export function ChatPage({ id, newTicker, firstMessage, options, targets, onBack
             </select>
           </div>
         )}
-        {view && <div className="chat-status">{stateText(view.conv.state)}</div>}
+        {view && <div className="chat-status">{stateText(view.conv.state)}{view.retry && ` · ${view.retry}`}</div>}
         <div className="chat-input-row">
           <textarea ref={inputEl} rows={1} value={text} disabled={gone} onChange={(e) => setInput((c) => typed(c, e.target.value))}
             placeholder={id === null ? (newTicker ? `围绕 ${newTicker} 说点什么` : '想调研哪只票？') : '输入消息'} />

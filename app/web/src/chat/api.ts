@@ -42,7 +42,10 @@ export async function archiveTicker(ticker: string): Promise<{ archived: number 
   return (await post('/api/chats/archive', { ticker })).json();
 }
 
-const EVENTS = ['delta', 'item', 'tool_result', 'state', 'usage', 'context', 'conv'];
+const EVENTS = ['delta', 'item', 'tool_result', 'state', 'retry', 'usage', 'context', 'conv'];
+
+/** Silence after which a stream counts as dead: three missed heartbeats (server chat/routes.py HEARTBEAT_S). */
+export const STALE_MS = 45_000;
 
 /** Delay before reopening a stream after `attempt` failed reopens: 1 s, 2 s, 4 s … capped at 30 s. */
 export function backoffMs(attempt: number): number {
@@ -53,8 +56,9 @@ export function backoffMs(attempt: number): number {
  * Follows one conversation. Every (re)connect starts with a snapshot that replaces the view.
  * The browser retries a dropped network by itself; a non-200 answer (404 once the chat is archived or its
  * transcript cleaned, the phone proxy's 502 while the server restarts) closes the EventSource for good,
- * so that case is handled here: report `lost`, then `gone` if the chat left the list, else reopen after a
- * backoff. Returns a closer that also cancels a pending reopen.
+ * and a connection that died silently (a frozen phone app, a changed tailnet path) never errors at all:
+ * no frame for STALE_MS counts as the latter. Both are handled here: report `lost`, then `gone` if the chat
+ * left the list, else reopen after a backoff. Returns a closer that also cancels a pending reopen.
  */
 export function openChatEvents(id: string, on: {
   snapshot: (s: Snapshot) => void;
@@ -65,24 +69,34 @@ export function openChatEvents(id: string, on: {
 }): () => void {
   let es: EventSource | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let watchdog: ReturnType<typeof setTimeout> | undefined;
   let attempt = 0;
   let stopped = false;
 
   function stop(): void {
     stopped = true;
     clearTimeout(timer);
+    clearTimeout(watchdog);
     es?.close();
   }
 
   function connect(): void {
     const source = new EventSource(`${base(id)}/events`);
     es = source;
+    const heard = () => {
+      clearTimeout(watchdog);
+      watchdog = setTimeout(() => void recover(source), STALE_MS);
+    };
+    heard();
+    source.addEventListener('ping', heard);
     source.addEventListener('snapshot', (m) => {
+      heard();
       attempt = 0;
       on.snapshot(JSON.parse((m as MessageEvent).data));
     });
     for (const type of EVENTS) {
       source.addEventListener(type, (m) => {
+        heard();
         const e = toChatEvent(type, JSON.parse((m as MessageEvent).data));
         if (e) on.event(e);
       });
@@ -99,6 +113,7 @@ export function openChatEvents(id: string, on: {
   }
 
   async function recover(source: EventSource): Promise<void> {
+    clearTimeout(watchdog);
     source.close();
     on.lost();
     let listed = true; // the server being down is "try again later", not "gone"

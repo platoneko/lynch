@@ -70,6 +70,7 @@ export interface Snapshot {
   conv: ChatSummary;
   items: ChatItem[];
   partial: string;
+  retry: string | null; // the API request claude is retrying, until the model answers or the turn ends
   usage: Usage | null;
   context: ContextUsage;
 }
@@ -79,6 +80,7 @@ export type ChatEvent =
   | { type: 'item'; item: ChatItem }
   | { type: 'tool_result'; result: ToolResult }
   | { type: 'state'; state: ChatState }
+  | { type: 'retry'; text: string | null }
   | { type: 'usage'; usage: Usage }
   | { type: 'context'; context: ContextUsage }
   | { type: 'conv'; conv: ChatSummary };

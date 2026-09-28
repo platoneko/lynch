@@ -18,6 +18,7 @@ export interface ChatView {
   conv: ChatSummary;
   items: ChatItem[];
   partial: string; // streamed text of the reply being written
+  retry: string | null;
   usage: Usage | null;
   context: ContextUsage;
   queued: Queued[];
@@ -39,7 +40,7 @@ export function fromSnapshot(s: Snapshot, prev: ChatView | null = null, sent: Qu
     if (it.kind === 'user' && !known.has(it.key)) queued = dropEcho(queued, it.text);
   }
   if (prev && isBusy(prev.conv.state) && !isBusy(s.conv.state)) queued = turnEnded(queued);
-  return { conv: s.conv, items: s.items, partial: s.partial, usage: s.usage, context: s.context, queued };
+  return { conv: s.conv, items: s.items, partial: s.partial, retry: s.retry, usage: s.usage, context: s.context, queued };
 }
 
 /** Removes the first queued message with this text: one arrival settles one echo. */
@@ -69,6 +70,7 @@ export function toChatEvent(type: string, data: unknown): ChatEvent | null {
     case 'item': return { type, item: data as ChatItem };
     case 'tool_result': return { type, result: data as ToolResult };
     case 'state': return { type, state: d.state as ChatState };
+    case 'retry': return { type, text: d.text === null ? null : String(d.text) };
     case 'usage': return { type, usage: data as Usage };
     case 'context': return { type, context: data as ContextUsage };
     case 'conv': return { type, conv: data as ChatSummary };
@@ -100,6 +102,8 @@ export function applyEvent(v: ChatView, e: ChatEvent): ChatView {
       const queued = isBusy(v.conv.state) && !isBusy(e.state) ? turnEnded(v.queued) : v.queued;
       return { ...v, conv: { ...v.conv, state: e.state }, partial: isBusy(e.state) ? v.partial : '', queued };
     }
+    case 'retry':
+      return { ...v, retry: e.text };
     case 'usage':
       return { ...v, usage: e.usage };
     case 'context':

@@ -18,7 +18,9 @@ from lynch_reader.chat.service import ChatService, Conflict, Invalid, NotFound
 
 log = logging.getLogger(__name__)
 
-HEARTBEAT_S = 15.0  # keeps the phone proxy and WebView from dropping a quiet stream
+# Keeps the phone proxy and WebView from dropping a quiet stream, and lets the page tell quiet from dead
+# (web chat/api.ts STALE_MS allows three missed beats).
+HEARTBEAT_S = 15.0
 REAP_INTERVAL_S = 60.0
 
 
@@ -39,7 +41,7 @@ async def event_stream(service: ChatService, conv_id: str,
             try:
                 event, data = await asyncio.wait_for(q.get(), HEARTBEAT_S)
             except TimeoutError:
-                yield ": ping\n\n"
+                yield sse("ping", {})  # an event, not an SSE comment: comments never reach the page
                 continue
             yield sse(event, data)
     finally:
