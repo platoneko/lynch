@@ -26,7 +26,7 @@ _NOT_FRAMEWORKS = {"AGENTS", "README"}
 
 def message_items(entry: dict) -> list[dict]:
     """Items for one user/assistant message; tool results come back as `tool_result` patches."""
-    if entry.get("isSidechain") or entry.get("isMeta") or entry.get("isCompactSummary"):
+    if any(entry.get(flag) for flag in ("isSidechain", "isMeta", "isSynthetic", "isCompactSummary")):
         return []
     content = entry["message"]["content"]
     if entry["type"] == "assistant":

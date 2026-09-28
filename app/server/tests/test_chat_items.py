@@ -62,6 +62,9 @@ def test_internal_entries_are_hidden():
     assert message_items(user("u", "This session is being continued from a previous conversation that ran out")) == []
     assert message_items(user("u", "summary", isCompactSummary=True)) == []
     assert message_items(user("u", "meta", isMeta=True)) == []
+    # The live stream marks a skill's injected body isSynthetic; the transcript marks the same entry isMeta.
+    assert message_items(user("u", [{"type": "text", "text": "Base directory for this skill: /x"}],
+                              isSynthetic=True)) == []
     assert message_items(user("u", "side", isSidechain=True)) == []
 
 
