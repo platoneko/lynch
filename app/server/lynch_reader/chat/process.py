@@ -58,6 +58,11 @@ class ChatProcess:
                            "request": {"subtype": "generate_session_title", "description": description,
                                        "persist": True}})
 
+    async def respond(self, request_id: str, response: dict) -> None:
+        """Answers claude's own control_request (a permission prompt) with this request id."""
+        await self._write({"type": "control_response",
+                           "response": {"subtype": "success", "request_id": request_id, "response": response}})
+
     async def close(self) -> None:
         """Ends the whole process group; the exit is then reported as expected."""
         if self._proc is None:

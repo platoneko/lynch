@@ -14,6 +14,8 @@ from datetime import datetime
 from pathlib import Path
 
 from lynch_reader.chat import transcript
+from lynch_reader.chat.approvals import (AUTO_DENY_MESSAGE, USER_DENY_MESSAGE, Approval, approvable_path,
+                                         new_approval)
 from lynch_reader.chat.config import (CHAT_EFFORTS, CHAT_MODELS, DEFAULT_EFFORT, DEFAULT_MODEL, IDLE_TIMEOUT_S,
                                       MAX_PROCESSES, LaunchConfig, launch_argv, launch_env)
 from lynch_reader.chat.index import ChatIndex, Conversation, make_title
@@ -55,6 +57,9 @@ class Live:
     # (resume uuid, transcript entry count) of an edit whose new process has not written yet;
     # until it does, the file's newest message is still the edited-away branch.
     pending_cut: tuple[str, int] | None = None
+    # Skill edits claude is waiting on the phone to allow or deny, by control request id, in arrival order.
+    # They belong to `proc`: whatever ends it (exit, stop, edit, archive) drops them.
+    approvals: dict[str, Approval] = field(default_factory=dict)
     # Held by public commands that spawn or stop this chat's own process (send, edit, archive),
     # so two of them never race on `proc`. `_spawn` / `_stop` / `_make_room` never take it:
     # `_make_room` stops other chats' idle processes without their lock, so no lock-order deadlock.
@@ -106,7 +111,8 @@ class ChatService:
             items.append({"kind": "notice", "key": "interrupted", "text": "上次回答被中断"})
         tokens = live.context_tokens if live.context_tokens is not None else hist.context_tokens
         return {"conv": self._summary(conv), "items": items, "partial": live.partial, "usage": self.usage,
-                "context": {"tokens": tokens, "window": conv.context_window}}
+                "context": {"tokens": tokens, "window": conv.context_window},
+                "approvals": [a.public() for a in live.approvals.values()]}
 
     # ---- commands
 
@@ -213,6 +219,24 @@ class ChatService:
         conv = self._index.update(conv_id, title=make_title(title))
         self._broadcast(conv_id, "conv", self._summary(conv))
 
+    async def answer_approval(self, conv_id: str, request_id: str, allow: object) -> None:
+        """The phone's answer to one pending skill edit."""
+        self._conv(conv_id)
+        if not isinstance(allow, bool):
+            raise Invalid("allow must be true or false")
+        live = self._live.get(conv_id)
+        # Popped before the write, so a double tap cannot answer claude twice.
+        approval = live.approvals.pop(request_id, None) if live else None
+        if approval is None or live.proc is None:
+            raise Conflict("这处改动已不在等待审批")
+        self._broadcast(conv_id, "approval_done", {"request_id": request_id})
+        response = ({"behavior": "allow", "updatedInput": approval.tool_input} if allow
+                    else {"behavior": "deny", "message": USER_DENY_MESSAGE})
+        try:
+            await live.proc.respond(request_id, response)
+        except (BrokenPipeError, ConnectionResetError) as e:
+            raise Conflict("Claude 进程已退出，原因见对话里的提示") from e
+
     async def reap_idle(self) -> None:
         now = self._now()
         for conv_id, live in list(self._live.items()):
@@ -275,6 +299,7 @@ class ChatService:
         if live is None:
             return
         proc, live.proc = live.proc, None  # detach first: its exit is then ignored as stale
+        self._clear_approvals(conv_id, live)
         if proc is not None:
             await proc.close()
         # While we waited, an archive may have dropped this chat, or a send attached a new process.
@@ -296,6 +321,7 @@ class ChatService:
             return  # replaced by an edit or already stopped
         was_busy = live.state in BUSY
         live.proc = None
+        self._clear_approvals(conv_id, live)
         live.partial = ""
         live.pending_cut = None  # an edit whose process died unwritten is lost: the next resume sees the old tip
         self._set_state(conv_id, "dormant")
@@ -320,6 +346,10 @@ class ChatService:
             self._on_rate_limit(conv_id, msg.get("rate_limit_info") or {})
         elif kind == "result":
             self._on_result(conv_id, live, msg)
+        elif kind == "control_request":
+            self._on_control_request(conv_id, live, msg)
+        elif kind == "control_cancel_request":  # claude withdrew a prompt, e.g. on interrupt
+            self._drop_approval(conv_id, live, msg.get("request_id"))
         elif kind == "control_response":
             self._on_control_response(conv_id, live, msg.get("response") or {})
 
@@ -368,6 +398,7 @@ class ChatService:
                            **({"context_window": window} if window else {}))
         live.partial = ""
         live.last_used = self._now()
+        self._clear_approvals(conv_id, live)  # an interrupted turn whose cancel never arrived
         self._set_state(conv_id, "idle")
         self._broadcast(conv_id, "context", self._context(conv_id))
         if live.title_from is not None:
@@ -391,6 +422,39 @@ class ChatService:
         if isinstance(title, str) and title.strip():  # null when generation failed: keep the old title
             conv = self._index.update(conv_id, title=make_title(title))
             self._broadcast(conv_id, "conv", self._summary(conv))
+
+    def _on_control_request(self, conv_id: str, live: Live, msg: dict) -> None:
+        request, request_id = msg.get("request") or {}, msg.get("request_id")
+        if request.get("subtype") != "can_use_tool" or not isinstance(request_id, str):
+            return
+        root = self._launch.repo_root
+        # Every prompt gets an answer, even a malformed one: claude waits on it forever otherwise.
+        try:
+            path = approvable_path(str(request.get("tool_name", "")), request.get("input") or {}, root)
+            approval = new_approval(request_id, request, path, root) if path is not None else None
+        except Exception:
+            log.exception("chat %s: permission request %s not understood", conv_id, request_id)
+            approval = None
+        if approval is None:  # outside the whitelist and not a skill edit: refused as before the prompt tool
+            self._spawn_task(self._respond(conv_id, live.proc, request_id,
+                                           {"behavior": "deny", "message": AUTO_DENY_MESSAGE}))
+            return
+        live.approvals[request_id] = approval
+        self._broadcast(conv_id, "approval", approval.public())
+
+    async def _respond(self, conv_id: str, proc: ChatProcess, request_id: str, response: dict) -> None:
+        try:
+            await proc.respond(request_id, response)
+        except OSError as e:  # the process died: its exit already told the page
+            log.info("chat %s: permission answer not sent: %s", conv_id, e)
+
+    def _drop_approval(self, conv_id: str, live: Live, request_id: object) -> None:
+        if live.approvals.pop(request_id, None) is not None:
+            self._broadcast(conv_id, "approval_done", {"request_id": request_id})
+
+    def _clear_approvals(self, conv_id: str, live: Live) -> None:
+        for request_id in list(live.approvals):
+            self._drop_approval(conv_id, live, request_id)
 
     def _on_rate_limit(self, conv_id: str, info: dict) -> None:
         windows = info.get("unifiedWindows") or {}

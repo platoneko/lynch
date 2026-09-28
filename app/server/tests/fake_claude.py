@@ -8,6 +8,8 @@
   limit          a rejected rate-limit event, then a normal reply
   write <path>   a Write tool call on <path> and its result
   big            a tool result that is one 1 MB line
+  ask-edit <path>   an Edit (alpha → beta) that needs the host's permission; waits for the answer
+  ask-bash <cmd>    a Bash call that needs the host's permission; waits for the answer
   anything else  replies "echo: <text>"
 
 It appends user/assistant entries to $FAKE_CLAUDE_PROJECTS/<session>.jsonl the way Claude Code does.
@@ -113,6 +115,44 @@ def wait_next():
     reply("both handled")
 
 
+def ask(name, tool_input):
+    """A call the whitelist does not cover (--permission-prompt-tool stdio): asks the host, waits, obeys."""
+    tid = f"toolu_{uuid.uuid4().hex[:8]}"
+    rid = f"perm-{uuid.uuid4().hex[:8]}"
+    assistant({"type": "tool_use", "id": tid, "name": name, "input": tool_input})
+    emit({"type": "control_request", "request_id": rid, "request": {
+        "subtype": "can_use_tool", "tool_name": name, "input": tool_input, "tool_use_id": tid}})
+    while True:
+        line = sys.stdin.readline()
+        if not line:
+            sys.exit(0)
+        msg = json.loads(line)
+        if msg.get("type") == "control_request" and msg["request"]["subtype"] == "interrupt":
+            # What Claude Code 2.1.283 does when interrupted during a permission prompt.
+            emit({"type": "control_cancel_request", "request_id": rid})
+            emit({"type": "control_response", "response": {"subtype": "success", "request_id": msg["request_id"]}})
+            user([{"type": "tool_result", "tool_use_id": tid, "is_error": True,
+                   "content": "The user doesn't want to proceed with this tool use."}])
+            user("[Request interrupted by user for tool use]")
+            result("error_during_execution")
+            return
+        if msg.get("type") == "control_response" and msg["response"]["request_id"] == rid:
+            break
+    answer = msg["response"]["response"]
+    if answer["behavior"] != "allow":
+        user([{"type": "tool_result", "tool_use_id": tid, "is_error": True, "content": answer["message"]}])
+        reply("denied")
+        return
+    done = answer["updatedInput"]
+    if name == "Edit":
+        with open(done["file_path"]) as f:
+            text = f.read()
+        with open(done["file_path"], "w") as f:
+            f.write(text.replace(done["old_string"], done["new_string"], 1))
+    user([{"type": "tool_result", "tool_use_id": tid, "content": "The file has been updated successfully."}])
+    reply("allowed")
+
+
 def compact():
     global parent
     uid = str(uuid.uuid4())
@@ -146,12 +186,18 @@ def handle(text):
     elif text == "big":
         tool("Read", {"file_path": "big.txt"}, "y" * 1_000_000)
         reply("read")
+    elif text.startswith("ask-edit "):
+        ask("Edit", {"file_path": text[len("ask-edit "):], "old_string": "alpha", "new_string": "beta"})
+    elif text.startswith("ask-bash "):
+        ask("Bash", {"command": text[len("ask-bash "):]})
     else:
         reply(f"echo: {text}")
 
 
 for line in sys.stdin:
     msg = json.loads(line)
+    if msg.get("type") == "control_response":
+        continue  # a late answer to a permission request that is no longer waited on
     if msg.get("type") == "control_request":
         request = msg["request"]
         answer = ({"response": {"title": f"title: {request['description']}"}}
