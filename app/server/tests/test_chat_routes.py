@@ -140,3 +140,27 @@ def test_reaper_survives_a_failed_sweep():
         return stub
     stub = asyncio.run(main())
     assert stub.sweeps >= 3 and stub.shut
+
+
+def test_answer_an_approval(repo, tmp_path, quotes):
+    import time
+    from lynch_reader.chat.approvals import APPROVABLE_SKILL
+    f = tmp_path / APPROVABLE_SKILL / "r.md"
+    f.parent.mkdir(parents=True)
+    f.write_text("alpha\n")
+    c, svc = client(repo, tmp_path, quotes)
+    with c:
+        conv_id = c.post("/api/chats", json={"kind": "research", "text": f"ask-edit {f}"}).json()["id"]
+        deadline = time.monotonic() + 5
+        while not svc.snapshot(conv_id)["approvals"] and time.monotonic() < deadline:
+            time.sleep(0.02)
+        rid = svc.snapshot(conv_id)["approvals"][0]["request_id"]
+        url = f"/api/chats/{conv_id}/approvals/{rid}"
+        assert c.post(url, json={"allow": "yes"}).status_code == 400
+        assert c.post(url, content="{}", headers={"Content-Type": "text/plain"}).status_code == 415
+        assert c.post(f"/api/chats/nope/approvals/{rid}", json={"allow": True}).status_code == 404
+        assert c.post(url, json={"allow": True}).status_code == 204
+        assert c.post(url, json={"allow": True}).status_code == 409
+        while state_of(svc, conv_id) != "idle" and time.monotonic() < deadline:
+            time.sleep(0.02)
+    assert f.read_text() == "beta\n"
