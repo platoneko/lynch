@@ -19,7 +19,8 @@ from lynch_reader.chat.approvals import (AUTO_DENY_MESSAGE, USER_DENY_MESSAGE, A
 from lynch_reader.chat.config import (CHAT_EFFORTS, CHAT_MODELS, DEFAULT_EFFORT, DEFAULT_MODEL, IDLE_TIMEOUT_S,
                                       MAX_PROCESSES, LaunchConfig, launch_argv, launch_env)
 from lynch_reader.chat.index import ChatIndex, Conversation, make_title
-from lynch_reader.chat.items import compact_item, context_tokens, framework_ticker, message_items, notice_item
+from lynch_reader.chat.items import (compact_item, context_tokens, framework_ticker, message_items, notice_item,
+                                     retry_text)
 from lynch_reader.chat.process import ChatProcess
 
 log = logging.getLogger(__name__)
@@ -48,6 +49,7 @@ class Live:
     proc: ChatProcess | None = None
     last_used: float = 0.0
     partial: str = ""  # streamed text not yet closed by its full message
+    retry: str | None = None  # the API request being retried, until the model answers or the turn ends
     context_tokens: int | None = None
     subscribers: set[asyncio.Queue] = field(default_factory=set)
     # A new conversation's first message, until its first reply ends and claude is asked for a title;
@@ -110,8 +112,8 @@ class ChatService:
         if hist.unfinished and live.state == "dormant":
             items.append({"kind": "notice", "key": "interrupted", "text": "上次回答被中断"})
         tokens = live.context_tokens if live.context_tokens is not None else hist.context_tokens
-        return {"conv": self._summary(conv), "items": items, "partial": live.partial, "usage": self.usage,
-                "context": {"tokens": tokens, "window": conv.context_window},
+        return {"conv": self._summary(conv), "items": items, "partial": live.partial, "retry": live.retry,
+                "usage": self.usage, "context": {"tokens": tokens, "window": conv.context_window},
                 "approvals": [a.public() for a in live.approvals.values()]}
 
     # ---- commands
@@ -358,6 +360,7 @@ class ChatService:
 
     def _on_stream_event(self, conv_id: str, live: Live, event: dict) -> None:
         self._mark_busy(conv_id)
+        self._set_retry(conv_id, None)  # the model is answering
         delta = event.get("delta") or {}
         if delta.get("type") == "text_delta":
             live.partial += delta["text"]
@@ -390,6 +393,9 @@ class ChatService:
             live.context_tokens = None
             self._broadcast(conv_id, "item", compact_item(msg["uuid"], msg.get("compact_metadata") or {}))
             self._broadcast(conv_id, "context", self._context(conv_id))
+        elif msg.get("subtype") == "api_retry":
+            # Nothing else shows while claude waits on the API, for minutes when it stalls.
+            self._set_retry(conv_id, retry_text(msg))
 
     def _on_result(self, conv_id: str, live: Live, msg: dict) -> None:
         # The result may list helper models too; the window that matters is the conversation's own model's.
@@ -496,9 +502,17 @@ class ChatService:
 
     def _set_state(self, conv_id: str, state: str) -> None:
         live = self._live[conv_id]
+        if state not in BUSY:
+            self._set_retry(conv_id, None)  # the turn is over, however it ended
         if live.state != state:
             live.state = state
             self._broadcast(conv_id, "state", {"state": state})
+
+    def _set_retry(self, conv_id: str, text: str | None) -> None:
+        live = self._live[conv_id]
+        if live.retry != text:
+            live.retry = text
+            self._broadcast(conv_id, "retry", {"text": text})
 
     def _notice(self, conv_id: str, text: str) -> None:
         self._broadcast(conv_id, "item", notice_item(text))

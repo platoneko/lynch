@@ -37,3 +37,8 @@ export function sent(c: Composer, body: string): Composer {
   if (c.editing !== null) return cancelEdit(c);
   return composer(c.text.trim() === body ? '' : c.text);
 }
+
+/** An unanswered message back in the input, after whatever the reader typed since. Not during an edit. */
+export function putBack(c: Composer, text: string): Composer {
+  return typed(c, c.text.trim() ? `${c.text.trimEnd()}\n\n${text}` : text);
+}

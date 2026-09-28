@@ -72,6 +72,31 @@ def test_event_stream_starts_with_a_snapshot_then_live_events(tmp_path):
     assert svc._live and all(not live.subscribers for live in svc._live.values())  # unsubscribed on close
 
 
+def test_a_quiet_stream_sends_a_heartbeat_the_page_can_see(tmp_path, monkeypatch):
+    # An SSE comment never reaches the page's listeners, so it could not tell a quiet stream from a dead one.
+    monkeypatch.setattr("lynch_reader.chat.routes.HEARTBEAT_S", 0.05)
+
+    async def main():
+        svc, _ = make_service(tmp_path)
+        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium")
+        await until(lambda: state_of(svc, conv.id) == "idle")
+
+        async def connected():
+            return False
+
+        stream = event_stream(svc, conv.id, connected)
+        frames = [await anext(stream)]  # the snapshot, then maybe the title claude names after the first reply
+
+        async def until_quiet():
+            while frames[-1].startswith(("event: snapshot", "event: conv")):
+                frames.append(await anext(stream))
+        await asyncio.wait_for(until_quiet(), 5)
+        await stream.aclose()
+        await svc.shutdown()
+        return frames[-1]
+    assert asyncio.run(main()).startswith("event: ping\n")
+
+
 def test_app_without_chat_has_no_chat_routes(repo, tmp_path, quotes):
     c = TestClient(create_app(repo, tmp_path / "no-dist", quotes))
     assert c.get("/api/chats").status_code == 404

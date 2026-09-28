@@ -50,6 +50,17 @@ def notice_item(text: str) -> dict:
     return {"kind": "notice", "key": str(uuidlib.uuid4()), "text": text}
 
 
+def retry_text(msg: dict) -> str:
+    """An `api_retry` message for the reader: why the request failed, and how long the retry may take."""
+    attempt = f"第 {msg.get('attempt')}/{msg.get('max_retries')} 次重试"
+    no_response = msg.get("no_response")
+    if no_response:  # no first byte within claude's window; the retry waits much longer
+        return (f"接口 {no_response['waited_ms'] // 1000} 秒没有响应，{attempt}，"
+                f"最多再等 {round(no_response['retry_wait_ms'] / 60000)} 分钟")
+    cause = msg.get("error_status") or msg.get("error") or "连接失败"
+    return f"接口出错（{cause}），{round(msg.get('retry_delay_ms', 0) / 1000)} 秒后{attempt}"
+
+
 def context_tokens(message: dict) -> int | None:
     usage = message.get("usage")
     if not usage:

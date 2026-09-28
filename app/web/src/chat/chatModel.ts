@@ -2,16 +2,23 @@ import type {
   Approval, ChatEvent, ChatItem, ChatState, ChatSummary, ContextUsage, Snapshot, ToolItem, ToolResult, Usage,
 } from './types';
 
-/** A message sent while the agent runs, shown until the server replays it. */
+/**
+ * A sent message, shown until the server replays it. Claude replays a message only once the model starts
+ * answering it, which a slow or failing API can put off for minutes.
+ */
 export interface Queued {
   localId: string;
   text: string;
+  // behind: sent during another turn; waiting: its turn is the current or next one;
+  // unanswered: its turn ended without replaying it, so it was probably never answered
+  status: 'behind' | 'waiting' | 'unanswered';
 }
 
 export interface ChatView {
   conv: ChatSummary;
   items: ChatItem[];
   partial: string; // streamed text of the reply being written
+  retry: string | null;
   usage: Usage | null;
   context: ContextUsage;
   queued: Queued[];
@@ -25,15 +32,18 @@ export function isBusy(state: ChatState): boolean {
 /**
  * A (re)connect's snapshot as the view. A queued message consumed while the stream was down shows up only
  * here, never as a live `item`, so each user message new to this view settles one queued echo.
+ * `sent` is what the first view starts with pending: a new chat's first message, sent from the blank page.
  */
-export function fromSnapshot(s: Snapshot, prev: ChatView | null = null): ChatView {
+export function fromSnapshot(s: Snapshot, prev: ChatView | null = null, sent: Queued[] = []): ChatView {
   const known = new Set(prev?.items.map((i) => i.key));
-  let queued = prev?.queued ?? [];
+  let queued = prev?.queued ?? sent;
   for (const it of s.items) {
     if (it.kind === 'user' && !known.has(it.key)) queued = dropEcho(queued, it.text);
   }
+  if (prev && isBusy(prev.conv.state) && !isBusy(s.conv.state)) queued = turnEnded(queued);
   return {
-    conv: s.conv, items: s.items, partial: s.partial, usage: s.usage, context: s.context, queued, approvals: s.approvals,
+    conv: s.conv, items: s.items, partial: s.partial, retry: s.retry, usage: s.usage, context: s.context, queued,
+    approvals: s.approvals,
   };
 }
 
@@ -41,6 +51,19 @@ export function fromSnapshot(s: Snapshot, prev: ChatView | null = null): ChatVie
 function dropEcho(queued: Queued[], text: string): Queued[] {
   const at = queued.findIndex((q) => q.text === text);
   return at >= 0 ? queued.filter((_, n) => n !== at) : queued;
+}
+
+/**
+ * A turn ended. A message waiting on it without a replay went unanswered (the process died, the API gave
+ * up, the user stopped it), except a slash command, which claude runs itself and never replays.
+ * A message sent behind the turn is next in line.
+ */
+function turnEnded(queued: Queued[]): Queued[] {
+  return queued.flatMap((q): Queued[] => {
+    if (q.status === 'behind') return [{ ...q, status: 'waiting' }];
+    if (q.status === 'waiting') return q.text.startsWith('/') ? [] : [{ ...q, status: 'unanswered' }];
+    return [q];
+  });
 }
 
 /** An SSE frame as a typed event; unknown frames are ignored. */
@@ -51,6 +74,7 @@ export function toChatEvent(type: string, data: unknown): ChatEvent | null {
     case 'item': return { type, item: data as ChatItem };
     case 'tool_result': return { type, result: data as ToolResult };
     case 'state': return { type, state: d.state as ChatState };
+    case 'retry': return { type, text: d.text === null ? null : String(d.text) };
     case 'usage': return { type, usage: data as Usage };
     case 'context': return { type, context: data as ContextUsage };
     case 'conv': return { type, conv: data as ChatSummary };
@@ -79,8 +103,13 @@ export function applyEvent(v: ChatView, e: ChatEvent): ChatView {
         i.kind === 'tool' && i.id === r.id ? { ...i, output: r.output, is_error: r.is_error, denied: r.denied } : i);
       return { ...v, items };
     }
-    case 'state':
-      return { ...v, conv: { ...v.conv, state: e.state }, partial: isBusy(e.state) ? v.partial : '' };
+    case 'state': {
+      // dormant → idle is a process waking up for a message, not the end of a turn
+      const queued = isBusy(v.conv.state) && !isBusy(e.state) ? turnEnded(v.queued) : v.queued;
+      return { ...v, conv: { ...v.conv, state: e.state }, partial: isBusy(e.state) ? v.partial : '', queued };
+    }
+    case 'retry':
+      return { ...v, retry: e.text };
     case 'usage':
       return { ...v, usage: e.usage };
     case 'context':

@@ -198,6 +198,33 @@ def test_a_stray_status_outside_a_turn_keeps_idle(tmp_path):
     assert asyncio.run(main()) == "idle"
 
 
+def test_an_api_retry_shows_until_the_model_answers_or_the_turn_ends(tmp_path):
+    no_response = {"type": "system", "subtype": "api_retry", "attempt": 1, "max_retries": 1, "retry_delay_ms": 0,
+                   "error_status": None, "error": "unknown", "no_response": {"waited_ms": 181000, "retry_wait_ms": 599000}}
+    overloaded = {"type": "system", "subtype": "api_retry", "attempt": 2, "max_retries": 10, "retry_delay_ms": 2300,
+                  "error_status": 529, "error": "server_error"}
+    started = {"type": "stream_event", "event": {"type": "message_start"}}
+
+    async def main():
+        svc, _ = make_service(tmp_path)
+        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium")
+        await until(lambda: state_of(svc, conv.id) == "idle")
+        q = svc.subscribe(conv.id)
+        proc = svc._live[conv.id].proc
+        seen = []
+        for msg in (no_response, overloaded, started, overloaded, {"type": "result", "modelUsage": {}}):
+            svc._on_message(conv.id, proc, msg)
+            seen.append(svc.snapshot(conv.id)["retry"])
+        events = [d["text"] for e, d in [q.get_nowait() for _ in range(q.qsize())] if e == "retry"]
+        await svc.shutdown()
+        return seen, events
+    seen, events = asyncio.run(main())
+    no_response_text = "接口 181 秒没有响应，第 1/1 次重试，最多再等 10 分钟"
+    overloaded_text = "接口出错（529），2 秒后第 2/10 次重试"
+    assert seen == [no_response_text, overloaded_text, None, overloaded_text, None]
+    assert events == seen
+
+
 def test_context_window_comes_from_the_conversation_model(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)
