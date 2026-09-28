@@ -92,3 +92,15 @@ def test_ticker_prompt_names_its_files_and_rules():
 def test_research_prompt_has_no_ticker():
     p = system_prompt(conv(kind="research", ticker=None))
     assert "new ticker" in p and "None" not in p
+
+
+def test_permission_prompts_come_to_the_app():
+    # Without it claude refuses every .claude/ write outright; with it, the server answers (chat/approvals.py).
+    argv = launch_argv(CFG, conv(), resume=False)
+    assert flag(argv, "--permission-prompt-tool") == "stdio"
+    assert argv.index("--permission-prompt-tool") < argv.index("--allowedTools")
+
+
+def test_prompt_explains_skill_approvals():
+    p = system_prompt(conv(kind="research", ticker=None))
+    assert "frameworks/.claude/skills/sediment-framework/" in p and "diff on the phone" in p

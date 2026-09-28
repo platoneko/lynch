@@ -62,6 +62,9 @@ You are working inside the lynch phone app; the user replies turn by turn from a
 anchors or zones. AGENTS.md at the repo root is the code repo's contract.
 - Before changing any framework, read frameworks/AGENTS.md and follow the sediment-framework skill. \
 Do not create or modify anything under frameworks/ until the user explicitly says it may be written (e.g. 「可以落盘」).
+- Edits to the sediment-framework skill (frameworks/.claude/skills/sediment-framework/) need the user's explicit \
+go-ahead like a framework; after that, each Edit or Write shows the user its diff on the phone and waits for their \
+answer. Any other call outside the whitelist is refused.
 - For market data use the longbridge CLI with Bash, e.g. `longbridge quote AAPL.US --format json`; \
 `longbridge help` lists the commands. Only query commands are allowed (no orders, account data or login).
 - Write files only with the Write and Edit tools. Run git only as `git -C frameworks …`; `cd frameworks && git …` is refused.
@@ -103,6 +106,9 @@ def launch_argv(cfg: LaunchConfig, conv: Conversation, *, resume: bool, resume_a
         # Project layer only: .claude/settings.local.json allows broad Bash that would bypass the whitelist.
         "--setting-sources", "project",
         "--mcp-config", str(cfg.repo_root / ".mcp.json"), "--strict-mcp-config",
+        # Calls the whitelist does not cover come to the app (chat/approvals.py): skill edits wait for the
+        # phone, the rest are refused. Without it claude refuses every write under .claude/ outright.
+        "--permission-prompt-tool", "stdio",
         "--append-system-prompt", system_prompt(conv),
         "--allowedTools", *ALLOWED_TOOLS,  # variadic: must stay last
     ]

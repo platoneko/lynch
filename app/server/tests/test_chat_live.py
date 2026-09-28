@@ -54,7 +54,7 @@ def tool_pending(svc, conv_id):
 
 
 def one_turn(prompt: str) -> list[dict]:
-    """Every stream message of a fresh process's first turn."""
+    """Every stream message of a fresh process's first turn. Answers no permission prompt: use only prompts that need none."""
     async def main():
         got = []
         c = conv(id=str(uuid.uuid4()), model=MODEL, effort=EFFORT)
@@ -79,16 +79,53 @@ def test_launch_config_loads_wisburg_and_no_claudeai_connectors():
 
 
 
-def test_longbridge_cli_queries_run_and_orders_are_denied():
-    got = one_turn("Run these two Bash commands one at a time, then reply exactly: done\n"
-                   "1. `longbridge quote AAPL.US --format json`\n2. `longbridge order --help`")
-    denied = [d["tool_input"].get("command", "") for m in got if m.get("type") == "result"
-              for d in m.get("permission_denials", [])]
-    results = [b for m in got if m.get("type") == "user" for b in m["message"]["content"]
-               if isinstance(b, dict) and b.get("type") == "tool_result"]
-    assert [c for c in denied if "longbridge order" in c]
-    assert not [c for c in denied if "longbridge quote" in c]
-    assert [r for r in results if not r.get("is_error") and "AAPL" in str(r.get("content"))]
+def test_longbridge_cli_queries_run_and_orders_are_denied(tmp_path):
+    # Through the service: with --permission-prompt-tool stdio the refusal of `longbridge order` is the server's.
+    async def main():
+        svc = service(tmp_path)
+        conv_id = None
+        try:
+            c = await svc.create("research", None,
+                                 "Run these two Bash commands one at a time, then reply exactly: done\n"
+                                 "1. `longbridge quote AAPL.US --format json`\n2. `longbridge order --help`",
+                                 MODEL, EFFORT)
+            conv_id = c.id
+            await until(lambda: svc.snapshot(c.id)["conv"]["state"] == "idle", timeout=120)
+            return [i for i in svc.snapshot(c.id)["items"] if i["kind"] == "tool" and i["name"] == "Bash"]
+        finally:
+            await cleanup(svc, conv_id)
+    tools = asyncio.run(main())
+    order = [t for t in tools if "longbridge order" in t["input"].get("command", "")]
+    quote = [t for t in tools if "longbridge quote" in t["input"].get("command", "")]
+    assert order and all(t["denied"] for t in order)
+    assert quote and not quote[0]["denied"] and "AAPL" in (quote[0]["output"] or "")
+
+
+def test_a_skill_edit_waits_for_approval_and_lands_on_allow(tmp_path):
+    probe = REPO_ROOT / "frameworks/.claude/skills/sediment-framework/_live_probe.md"
+    probe.write_text("alpha\n")
+
+    async def main():
+        svc = service(tmp_path)
+        conv_id = None
+        try:
+            c = await svc.create("research", None,
+                                 f"Use the Edit tool once to replace alpha with beta in {probe}. Read it first. "
+                                 "Then reply exactly: done", MODEL, EFFORT)
+            conv_id = c.id
+            await until(lambda: svc.snapshot(c.id)["approvals"], timeout=120)
+            (approval,) = svc.snapshot(c.id)["approvals"]
+            await svc.answer_approval(c.id, approval["request_id"], True)
+            await until(lambda: svc.snapshot(c.id)["conv"]["state"] == "idle", timeout=120)
+            return approval
+        finally:
+            await cleanup(svc, conv_id)
+    try:
+        approval = asyncio.run(main())
+        assert approval["path"].endswith("sediment-framework/_live_probe.md") and "+beta" in approval["diff"]
+        assert probe.read_text() == "beta\n"
+    finally:
+        probe.unlink(missing_ok=True)
 
 def test_interjection_and_interrupt(tmp_path):
     async def main():
