@@ -41,8 +41,10 @@ def approvable_path(tool: str, tool_input: dict, repo_root: Path) -> Path | None
     if tool not in EDIT_TOOLS or not isinstance(raw, str) or not raw:
         return None
     path = Path(raw)
+    # Claude Code keeps its working directory between Bash calls and may `cd frameworks`, so a relative path
+    # may not mean to it what it means here: never approvable.
     if not path.is_absolute():
-        path = repo_root / path
+        return None
     # Resolving first: `.claude/skills` at the repo root is a symlink into frameworks/, and `..` or a symlink
     # inside the skill must not smuggle a write out of it.
     try:
@@ -55,14 +57,18 @@ def approvable_path(tool: str, tool_input: dict, repo_root: Path) -> Path | None
 def edit_diff(tool: str, tool_input: dict, path: Path, display: str) -> str:
     """The change as a unified diff with 3 lines of context, computed against the file as it is now."""
     before = path.read_text(errors="replace") if path.is_file() else ""
+    old, new = str(tool_input.get("old_string", "")), str(tool_input.get("new_string", ""))
     if tool == "Write":
         after = str(tool_input.get("content", ""))
-    else:
-        old, new = str(tool_input.get("old_string", "")), str(tool_input.get("new_string", ""))
-        if not old or old not in before:  # Claude Code will fail this edit itself; still show what it tried
-            return "\n".join(["（现文件里找不到要替换的原文，这次修改会失败）",
-                              *(f"-{l}" for l in old.splitlines()), *(f"+{l}" for l in new.splitlines())])
+    elif not old and not path.exists():  # Claude Code's create form: an empty old_string makes a new file
+        after = new
+    elif old and old in before:
         after = before.replace(old, new) if tool_input.get("replace_all") else before.replace(old, new, 1)
+    else:
+        # Claude Code checks an edit before asking, so it will apply: most likely its quote normalisation
+        # matched curly against straight quotes. Show what it replaces rather than predict a failure.
+        return "\n".join(["（现文件里找不到这段原文，可能是引号写法不同；以下是它要替换的内容）",
+                          *(f"-{l}" for l in old.splitlines()), *(f"+{l}" for l in new.splitlines())])
     lines = difflib.unified_diff(before.splitlines(), after.splitlines(), f"a/{display}", f"b/{display}", lineterm="")
     return "\n".join(lines) or "（内容没有变化）"
 

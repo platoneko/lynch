@@ -18,8 +18,16 @@ def skill(root: Path) -> Path:
 def test_edit_and_write_under_the_skill_are_approvable(tmp_path):
     f = skill(tmp_path)
     assert approvable_path("Edit", {"file_path": str(f)}, tmp_path) == f.resolve()
-    rel = "frameworks/.claude/skills/sediment-framework/references/new.md"
-    assert approvable_path("Write", {"file_path": rel}, tmp_path) == (tmp_path / rel).resolve()
+    new = tmp_path / "frameworks/.claude/skills/sediment-framework/references/new.md"
+    assert approvable_path("Write", {"file_path": str(new)}, tmp_path) == new.resolve()
+
+
+def test_a_relative_path_is_not_approvable(tmp_path):
+    # Claude Code keeps its working directory between Bash calls (`cd frameworks` is allowed), so the server
+    # cannot tell what a relative path means to it.
+    skill(tmp_path)
+    rel = "frameworks/.claude/skills/sediment-framework/references/r.md"
+    assert approvable_path("Edit", {"file_path": rel}, tmp_path) is None
 
 
 def test_other_tools_and_paths_are_not(tmp_path):
@@ -44,7 +52,7 @@ def test_the_repo_root_skills_symlink_is_approvable(tmp_path):
 
 def test_escape_via_dotdot_is_not_approvable(tmp_path):
     skill(tmp_path)
-    p = "frameworks/.claude/skills/sediment-framework/../../../../eval/x.py"
+    p = str(tmp_path / "frameworks/.claude/skills/sediment-framework/../../../../eval/x.py")
     assert approvable_path("Edit", {"file_path": p}, tmp_path) is None
 
 
@@ -94,10 +102,17 @@ def test_write_of_a_new_file_is_all_additions(tmp_path):
     assert d.splitlines()[-2:] == ["+x", "+y"]
 
 
-def test_edit_whose_old_text_is_missing_says_so(tmp_path):
+def test_edit_whose_old_text_is_not_found_verbatim_shows_what_it_replaces(tmp_path):
+    # Claude Code checked the edit before asking, so it applies (e.g. matched across quote styles).
     f = skill(tmp_path)
     d = edit_diff("Edit", {"old_string": "nope", "new_string": "yes"}, f, "r.md")
-    assert d.splitlines() == ["（现文件里找不到要替换的原文，这次修改会失败）", "-nope", "+yes"]
+    assert d.splitlines() == ["（现文件里找不到这段原文，可能是引号写法不同；以下是它要替换的内容）", "-nope", "+yes"]
+
+
+def test_edit_with_empty_old_text_on_a_missing_file_is_a_create(tmp_path):
+    new = tmp_path / "new.md"
+    d = edit_diff("Edit", {"old_string": "", "new_string": "x\ny"}, new, "new.md")
+    assert d.splitlines() == ["--- a/new.md", "+++ b/new.md", "@@ -0,0 +1,2 @@", "+x", "+y"]
 
 
 def test_unchanged_write_says_so(tmp_path):

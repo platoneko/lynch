@@ -67,13 +67,16 @@ def test_deny_leaves_the_file_and_marks_the_call_denied(tmp_path):
     assert tools[-1]["denied"]
 
 
-@pytest.mark.parametrize("text", ["ask-bash ls /", "ask-edit eval/lib/gordon.py",
-                                  "ask-edit frameworks/.claude/skills/other/SKILL.md"])
+@pytest.mark.parametrize("text", ["ask-bash ls /", "ask-edit {root}/eval/lib/gordon.py",
+                                  "ask-edit {root}/frameworks/.claude/skills/other/SKILL.md",
+                                  # relative: claude may have `cd`-ed, so the server cannot tell what it means
+                                  "ask-edit frameworks/.claude/skills/sediment-framework/references/r.md"])
 def test_other_requests_are_refused_without_asking_the_phone(tmp_path, text):
     # The fake blocks until someone answers; reaching idle with no approval ever listed means the server did.
     async def main():
+        skill_file(tmp_path)
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("research", None, text, "claude-opus-5-5", "medium")
+        conv = await svc.create("research", None, text.format(root=tmp_path), "claude-opus-5-5", "medium")
         seen = []
         await until(lambda: seen.extend(svc.snapshot(conv.id)["approvals"]) or state_of(svc, conv.id) == "idle")
         snap = svc.snapshot(conv.id)
@@ -82,6 +85,20 @@ def test_other_requests_are_refused_without_asking_the_phone(tmp_path, text):
     seen, snap = asyncio.run(main())
     assert seen == [] and snap["approvals"] == []
     assert [i for i in snap["items"] if i["kind"] == "tool"][-1]["denied"]
+
+
+def test_a_refusal_keeps_claude_codes_own_reason(tmp_path):
+    # The agent adapts to the specific rule (e.g. retries `cd … && git` as `git -C frameworks`).
+    reason = "Compound commands with cd and git require approval to prevent bare repository attacks"
+    async def main():
+        svc, _ = make_service(tmp_path)
+        conv = await svc.create("research", None, f"ask-reason {reason}", "claude-opus-5-5", "medium")
+        await until(lambda: state_of(svc, conv.id) == "idle")
+        tools = tool_items(svc, conv.id)
+        await svc.shutdown()
+        return tools
+    (tool,) = asyncio.run(main())
+    assert tool["denied"] and "requires approval" in tool["output"] and reason in tool["output"]
 
 
 def test_a_request_that_cannot_be_shown_is_refused(tmp_path, monkeypatch):
@@ -111,8 +128,8 @@ def test_the_repo_root_symlink_path_is_approvable(tmp_path):
         (tmp_path / ".claude").mkdir()
         (tmp_path / ".claude/skills").symlink_to("../frameworks/.claude/skills")
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("research", None, "ask-edit .claude/skills/sediment-framework/references/r.md",
-                                "claude-opus-5-5", "medium")
+        via = tmp_path / ".claude/skills/sediment-framework/references/r.md"
+        conv = await svc.create("research", None, f"ask-edit {via}", "claude-opus-5-5", "medium")
         approval = await pending(svc, conv.id)
         await svc.shutdown()
         return approval
@@ -181,6 +198,36 @@ def test_process_exit_clears_approvals(tmp_path):
         return approval, done, snap
     approval, done, snap = asyncio.run(main())
     assert done == {"request_id": approval["request_id"]} and snap["approvals"] == []
+
+
+def test_a_send_that_respawns_before_the_old_exit_drops_its_approvals(tmp_path):
+    # The dead leader's exit is reported only after its group sweep (up to 5 s). A send in that window starts a
+    # new process, and the late exit is then stale: the old cards must go when the new process takes over.
+    async def main():
+        f = skill_file(tmp_path)
+        svc, _ = make_service(tmp_path)
+        conv = await svc.create("research", None, f"ask-edit {f}", "claude-opus-5-5", "medium")
+        q = svc.subscribe(conv.id)
+        approval = await pending(svc, conv.id)
+        old = svc._live[conv.id].proc
+        late, report_exit = [], old._on_exit
+        old._on_exit = lambda *args: late.append(args)  # hold the exit report until the new process is in
+        old._proc.kill()
+        await old._proc.wait()
+        # "slow" keeps the new turn open, so its `result` cannot clear the old card as a fallback.
+        await svc.send(conv.id, "slow")
+        await until(lambda: late)
+        report_exit(*late[0])
+        snap = svc.snapshot(conv.id)
+        with pytest.raises(Conflict):  # a tap on the old card must not reach the new process
+            await svc.answer_approval(conv.id, approval["request_id"], True)
+        done = await next_event(q, "approval_done", timeout=1.0)
+        await svc.shutdown()
+        return approval, done, snap, f.read_text()
+    approval, done, snap, text = asyncio.run(main())
+    assert snap["approvals"] == [] and snap["conv"]["state"] == "running"
+    assert done == {"request_id": approval["request_id"]}
+    assert text == "alpha\n"
 
 
 def test_a_second_answer_is_a_conflict(tmp_path):

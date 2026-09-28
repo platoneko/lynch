@@ -273,6 +273,9 @@ class ChatService:
             await proc.start()
         except OSError as e:
             raise Conflict(f"无法启动 Claude：{e}") from e
+        # A dead predecessor's exit may not be reported yet, and once replaced it is ignored as stale:
+        # its cards go now, or a tap would send its request id to this process.
+        self._clear_approvals(conv.id, live)
         live.proc = proc
         live.partial = ""
         live.last_used = self._now()
@@ -436,8 +439,11 @@ class ChatService:
             log.exception("chat %s: permission request %s not understood", conv_id, request_id)
             approval = None
         if approval is None:  # outside the whitelist and not a skill edit: refused as before the prompt tool
-            self._spawn_task(self._respond(conv_id, live.proc, request_id,
-                                           {"behavior": "deny", "message": AUTO_DENY_MESSAGE}))
+            # Claude Code's own reason names the rule hit (e.g. `cd … && git`), which the agent can adapt to.
+            reason = request.get("decision_reason")
+            message = (f"{AUTO_DENY_MESSAGE} Claude Code's reason: {reason}"
+                       if isinstance(reason, str) and reason.strip() else AUTO_DENY_MESSAGE)
+            self._spawn_task(self._respond(conv_id, live.proc, request_id, {"behavior": "deny", "message": message}))
             return
         live.approvals[request_id] = approval
         self._broadcast(conv_id, "approval", approval.public())

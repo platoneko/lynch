@@ -10,6 +10,7 @@
   big            a tool result that is one 1 MB line
   ask-edit <path>   an Edit (alpha → beta) that needs the host's permission; waits for the answer
   ask-bash <cmd>    a Bash call that needs the host's permission; waits for the answer
+  ask-reason <why>  like ask-bash, with Claude Code's own reason for asking (`decision_reason`)
   anything else  replies "echo: <text>"
 
 It appends user/assistant entries to $FAKE_CLAUDE_PROJECTS/<session>.jsonl the way Claude Code does.
@@ -115,13 +116,14 @@ def wait_next():
     reply("both handled")
 
 
-def ask(name, tool_input):
+def ask(name, tool_input, reason=None):
     """A call the whitelist does not cover (--permission-prompt-tool stdio): asks the host, waits, obeys."""
     tid = f"toolu_{uuid.uuid4().hex[:8]}"
     rid = f"perm-{uuid.uuid4().hex[:8]}"
     assistant({"type": "tool_use", "id": tid, "name": name, "input": tool_input})
     emit({"type": "control_request", "request_id": rid, "request": {
-        "subtype": "can_use_tool", "tool_name": name, "input": tool_input, "tool_use_id": tid}})
+        "subtype": "can_use_tool", "tool_name": name, "input": tool_input, "tool_use_id": tid,
+        **({"decision_reason": reason} if reason else {})}})
     while True:
         line = sys.stdin.readline()
         if not line:
@@ -190,6 +192,8 @@ def handle(text):
         ask("Edit", {"file_path": text[len("ask-edit "):], "old_string": "alpha", "new_string": "beta"})
     elif text.startswith("ask-bash "):
         ask("Bash", {"command": text[len("ask-bash "):]})
+    elif text.startswith("ask-reason "):
+        ask("Bash", {"command": "cd frameworks && git status"}, reason=text[len("ask-reason "):])
     else:
         reply(f"echo: {text}")
 
