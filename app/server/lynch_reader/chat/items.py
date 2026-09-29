@@ -28,6 +28,11 @@ def message_items(entry: dict) -> list[dict]:
     """Items for one user/assistant message; tool results come back as `tool_result` patches."""
     if any(entry.get(flag) for flag in ("isSidechain", "isMeta", "isSynthetic", "isCompactSummary")):
         return []
+    # A message claude injects itself (a background task's completion) names where it came from;
+    # the app's own messages carry no origin, a terminal session's typed ones say "human".
+    origin = entry.get("origin")
+    if origin and origin.get("kind") != "human":
+        return []
     content = entry["message"]["content"]
     if entry["type"] == "assistant":
         return [item for i, block in enumerate(content) for item in _assistant_block(entry["uuid"], i, block)]

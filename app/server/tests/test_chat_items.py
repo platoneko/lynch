@@ -66,6 +66,11 @@ def test_internal_entries_are_hidden():
     assert message_items(user("u", [{"type": "text", "text": "Base directory for this skill: /x"}],
                               isSynthetic=True)) == []
     assert message_items(user("u", "side", isSidechain=True)) == []
+    # A background task's completion, which claude writes to the transcript only (the stream never replays it).
+    assert message_items(user("u", "<task-notification>\n<task-id>t1</task-id>",
+                              origin={"kind": "task-notification", "producer": "session-task"})) == []
+    # What a person typed in a terminal session of the same conversation.
+    assert message_items(user("u", "hi", origin={"kind": "human"}))[0]["text"] == "hi"
 
 
 def test_compact_item_reads_both_spellings():
