@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { groupChats, relativeTime } from './listModel';
+import { groupChats, relativeTime, tickerLabel } from './listModel';
 import type { ChatSummary } from './types';
 
 const chat = (id: string, over: Partial<ChatSummary>): ChatSummary => ({
@@ -30,6 +30,18 @@ describe('groupChats', () => {
     expect(groupChats(chats, '腾讯', names).groups.map((g) => g.ticker)).toEqual(['0700.HK']);
     expect(groupChats(chats, '宁德', names).research.map((c) => c.id)).toEqual(['r1']);
     expect(groupChats(chats, '宁德', names).groups).toEqual([]);
+  });
+});
+
+describe('tickerLabel', () => {
+  it('shows HK / A shares by Chinese name and US tickers by code', () => {
+    expect(tickerLabel({ ticker: '0700.HK', name: '腾讯控股 / Tencent Holdings Ltd.', market: 'HK' })).toBe('腾讯控股');
+    expect(tickerLabel({ ticker: '600309.SH', name: '万华化学 / Wanhua Chemical Group', market: 'A' })).toBe('万华化学');
+    expect(tickerLabel({ ticker: 'AMZN.US', name: '亚马逊 / Amazon.com, Inc.', market: 'US' })).toBe('AMZN.US');
+  });
+  it('falls back to the code when there is no name', () => {
+    expect(tickerLabel({ ticker: '0883.HK', name: null, market: 'HK' })).toBe('0883.HK');
+    expect(tickerLabel({ ticker: '0883.HK', name: '', market: 'HK' })).toBe('0883.HK');
   });
 });
 

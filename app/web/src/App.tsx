@@ -4,6 +4,7 @@ import { archiveChat, archiveTicker, fetchChatOptions, fetchChats } from './chat
 import { ChatPage } from './chat/ChatPage';
 import { ChatSheetButton } from './chat/ChatSheet';
 import { ChatsPage } from './chat/ChatsPage';
+import { tickerLabel } from './chat/listModel';
 import type { ChatList, ChatOptions } from './chat/types';
 import { AxisDocHead, DocPage, TickerDocHead } from './doc/DocPage';
 import { HomePage } from './home/HomePage';
@@ -44,6 +45,7 @@ export function App() {
     }
   }, [route.page, chatOptions]);
   const names = useMemo(() => new Map((catalog?.tickers ?? []).flatMap((t) => (t.name ? [[t.ticker, t.name] as const] : []))), [catalog]);
+  const labels = useMemo(() => new Map((catalog?.tickers ?? []).map((t) => [t.ticker, tickerLabel(t)] as const)), [catalog]);
   const archive = (p: Promise<unknown>) => p.then(loadChats, (e: unknown) => setChatError(String(e instanceof Error ? e.message : e)));
   const homeScroll = useRef(0);
   const openedFromHome = useRef(false);
@@ -119,7 +121,7 @@ export function App() {
   }
   if (route.page === 'chats') {
     return (
-      <ChatsPage list={chatList} error={chatError} names={names} onBack={goBack}
+      <ChatsPage list={chatList} error={chatError} names={names} labels={labels} onBack={goBack}
         onOpen={(id) => { window.location.hash = chatHash(id); }}
         onNewResearch={() => { window.location.hash = newChatHash(null); }}
         onOpenDoc={(t) => { window.location.hash = docHash(t); }}

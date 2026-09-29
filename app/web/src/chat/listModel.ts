@@ -1,3 +1,4 @@
+import type { TickerRow } from '../types';
 import { isBusy } from './chatModel';
 import type { ChatSummary } from './types';
 
@@ -30,6 +31,13 @@ export function groupChats(chats: ChatSummary[], query: string, names: ReadonlyM
       ticker, chats: list, running: list.some((c) => isBusy(c.state)), updated_at: list[0].updated_at,
     })),
   };
+}
+
+/** HK / A-share codes are bare numbers, so they read by Chinese name; US tickers are readable as is. */
+export function tickerLabel(row: Pick<TickerRow, 'ticker' | 'name' | 'market'>): string {
+  if (row.market !== 'HK' && row.market !== 'A') return row.ticker;
+  const zh = row.name?.split(' / ')[0].trim(); // title name is "中文名 / English Name"
+  return zh || row.ticker;
 }
 
 export function relativeTime(ts: number, now: number): string {
