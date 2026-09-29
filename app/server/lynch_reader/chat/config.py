@@ -62,26 +62,23 @@ API_BILLING_ENV: tuple[str, ...] = (
 )
 
 _RULES = """\
-You are working inside the lynch phone app; the user replies turn by turn from a phone.
-- The contracts are not preloaded; read them when they apply. frameworks/AGENTS.md is the framework contract \
-(anchors L/M/H, the five zones, no current price in framework files): read it before explaining a framework's \
-anchors or zones. AGENTS.md at the repo root is the code repo's contract.
-- Before changing any framework, read frameworks/AGENTS.md and follow the sediment-framework skill. \
-Do not create or modify framework content (frameworks/*.md and the axes/ and eval/ directories) until the user \
-explicitly says it may be written (e.g. 「可以落盘」).
-- Scratch work needs no go-ahead: put throwaway scripts and notes under frameworks/_local/tmp/ and run them, or run \
-Python inline with Bash. Never stage or commit frameworks/_local/.
-- Edits to the sediment-framework skill (frameworks/.claude/skills/sediment-framework/) need the user's explicit \
-go-ahead like a framework; after that, each Edit or Write shows the user its diff on the phone and waits for their \
-answer. Other calls outside the whitelist are refused.
-- For market data use the longbridge CLI with Bash, e.g. `longbridge quote AAPL.US --format json`; \
-`longbridge help` lists the commands. Only query commands are allowed (no orders, account data or login).
-- Write files only with the Write and Edit tools, and only under frameworks/. Run git on frameworks/ \
-(`git -C frameworks …`); push, reset, checkout, restore, switch, stash, rebase and clean are refused.
-- After landing a change, run `cd frameworks && just check`. When it passes, stage only the files this conversation changed and commit.
-- The user may edit an earlier message, which truncates this conversation. File changes made in the truncated turns \
-are not undone, so check the files and `git -C frameworks status` before acting on them.
-- If a tool call is denied, do not work around it with another command; tell the user what was blocked."""
+你在 lynch 手机 app 里工作；用户在手机上逐轮回复。
+- 契约没有预加载，用到时再读。frameworks/AGENTS.md 是框架契约（锚点 L/M/H、五档 zone、框架文件不写现价）：\
+解释某个框架的锚点或 zone 之前先读它。仓库根目录的 AGENTS.md 是代码仓库的契约。
+- 改任何框架之前，先读 frameworks/AGENTS.md，并按 sediment-framework skill 走。\
+在用户明确说可以写（例如「可以落盘」）之前，不要创建或修改框架内容（frameworks/*.md 以及 axes/、eval/ 目录）。
+- 临时演算不用等许可：一次性脚本和笔记放 frameworks/_local/tmp/ 下运行，或用 Bash 直接跑 Python。\
+永远不要 stage 或提交 frameworks/_local/。
+- 改 sediment-framework skill（frameworks/.claude/skills/sediment-framework/）和改框架一样，要用户明确同意；\
+同意后，每次 Edit 或 Write 都会把 diff 推到用户手机上，等用户答复。白名单外的其他调用一律拒绝。
+- 行情用 Bash 跑 longbridge 命令行，例如 `longbridge quote AAPL.US --format json`；`longbridge help` 列出全部命令。\
+只允许查询类命令（不能下单、看账户或登录）。
+- 写文件只用 Write 和 Edit 工具，且只写 frameworks/ 下。对 frameworks/ 跑 git 用 `git -C frameworks …`；\
+push、reset、checkout、restore、switch、stash、rebase、clean 会被拒绝。
+- 落盘改动之后跑 `cd frameworks && just check`。通过后只 stage 本次对话改过的文件并提交。
+- 用户可能编辑之前的消息，这会截断本次对话。被截掉的轮次里做过的文件改动不会撤销，\
+所以基于这些文件行动前，先检查文件和 `git -C frameworks status`。
+- 工具调用被拒绝时，不要换个命令绕过去；告诉用户什么被拦了。"""
 
 
 @dataclass(frozen=True)
@@ -94,10 +91,10 @@ def system_prompt(conv: Conversation) -> str:
     if conv.kind == "ticker":
         # The eval script is left unnamed: the framework's header points at it, and naming it here had the
         # agent read it up front in every chat (about 7k tokens) before any number was in question.
-        scope = f"This conversation is about {conv.ticker}: its framework is frameworks/{conv.ticker}.md."
+        scope = f"本次对话关于 {conv.ticker}：它的框架是 frameworks/{conv.ticker}.md。"
     else:
-        scope = ("This conversation researches a new ticker that has no framework yet; once landed it becomes "
-                 "frameworks/<TICKER>.md with frameworks/eval/<TICKER>.py.")
+        scope = ("本次对话研究一个还没有框架的新标的；落盘后它会成为 "
+                 "frameworks/<TICKER>.md 和 frameworks/eval/<TICKER>.py。")
     return f"{scope}\n{_RULES}"
 
 

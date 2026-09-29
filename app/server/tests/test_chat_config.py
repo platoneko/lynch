@@ -93,13 +93,13 @@ def test_ticker_prompt_names_its_files_and_rules():
     assert "frameworks/eval/" not in p  # read only when the numbers are checked, not up front
     assert "git -C frameworks" in p and "sediment-framework" in p
     # `claude -p` with project-only settings does not load AGENTS.md, so the prompt names the contracts
-    assert "frameworks/AGENTS.md" in p and "AGENTS.md at the repo root" in p
+    assert "frameworks/AGENTS.md" in p and "仓库根目录的 AGENTS.md" in p
     assert "longbridge quote" in p
 
 
 def test_research_prompt_has_no_ticker():
     p = system_prompt(conv(kind="research", ticker=None))
-    assert "new ticker" in p and "None" not in p
+    assert "新标的" in p and "None" not in p
 
 
 def test_permission_prompts_come_to_the_app():
@@ -111,10 +111,10 @@ def test_permission_prompts_come_to_the_app():
 
 def test_prompt_explains_skill_approvals():
     p = system_prompt(conv(kind="research", ticker=None))
-    assert "frameworks/.claude/skills/sediment-framework/" in p and "diff on the phone" in p
+    assert "frameworks/.claude/skills/sediment-framework/" in p and "diff 推到用户手机上" in p
 
 
 def test_prompt_frees_scratch_but_not_framework_content():
     p = system_prompt(conv(kind="research", ticker=None))
-    assert "frameworks/_local/tmp/" in p and "Never stage or commit frameworks/_local/" in p
+    assert "frameworks/_local/tmp/" in p and "永远不要 stage 或提交 frameworks/_local/" in p
     assert "「可以落盘」" in p
