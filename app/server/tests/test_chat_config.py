@@ -125,3 +125,10 @@ def test_prompt_frees_scratch_but_not_framework_content():
     p = system_prompt(conv(kind="research", ticker=None))
     assert "frameworks/_local/tmp/" in p and "永远不要 stage 或提交 frameworks/_local/" in p
     assert "「可以落盘」" in p
+
+
+def test_prompt_asks_for_chinese_replies():
+    # Without it a short first message (a bare company name) got English replies: nothing else in the run says
+    # which language to answer in.
+    for c in (conv(kind="ticker", ticker="NVDA.US"), conv(kind="research", ticker=None)):
+        assert "始终用简体中文和用户对话" in system_prompt(c)

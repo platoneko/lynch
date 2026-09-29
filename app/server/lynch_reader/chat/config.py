@@ -63,6 +63,7 @@ API_BILLING_ENV: tuple[str, ...] = (
 
 _RULES = """\
 你在 lynch 手机 app 里工作；用户在手机上逐轮回复。
+- 始终用简体中文和用户对话，第一轮就用中文，不论用户消息多短、读到的资料是什么语言。
 - 契约没有预加载，用到时再读。frameworks/AGENTS.md 是框架契约（锚点 L/M/H、五档 zone、框架文件不写现价）：\
 解释某个框架的锚点或 zone 之前先读它。仓库根目录的 AGENTS.md 是代码仓库的契约。
 - 改任何框架之前，先读 frameworks/AGENTS.md，并按 sediment-framework skill 走。\
