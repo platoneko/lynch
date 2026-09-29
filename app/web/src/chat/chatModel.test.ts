@@ -112,6 +112,13 @@ describe('fromSnapshot', () => {
     expect(fromSnapshot(snap([]), null, first).queued).toEqual(first);
     expect(fromSnapshot(snap([user('u1', 'A')]), null, first).queued).toEqual([]);
   });
+  it("keeps an edit's new text pending across the cut branch's snapshot until claude replays it", () => {
+    const edited = [pending('l1', 'B2')];
+    const prev = { ...fromSnapshot(snap([user('u1', 'A'), reply('a1#0'), user('u2', 'B'), reply('a2#0')])), queued: edited };
+    const cut = fromSnapshot({ ...snap([user('u1', 'A'), reply('a1#0')]), conv: { ...conv, state: 'running' } }, prev);
+    expect(cut.queued).toEqual(edited);
+    expect(applyEvent(cut, { type: 'item', item: user('u3', 'B2') }).queued).toEqual([]);
+  });
 });
 
 describe('toChatEvent', () => {

@@ -165,18 +165,15 @@ export function ChatPage({ id, newTicker, firstMessage, options, targets, onBack
         onCreated(created.id, body);
         return;
       }
-      if (editing !== null) {
-        await editMessage(id, editing, body);
-      } else {
-        const localId = `${Date.now()}-${Math.random()}`;
-        const status = busy ? 'behind' : 'waiting';
-        setView((v) => v && { ...v, queued: [...v.queued, { localId, text: body, status }] });
-        try {
-          await sendMessage(id, body);
-        } catch (e) {
-          setView((v) => v && { ...v, queued: v.queued.filter((q) => q.localId !== localId) });
-          throw e;
-        }
+      // An edit's new text, like a message, is replayed only once the model starts answering it.
+      const localId = `${Date.now()}-${Math.random()}`;
+      const status = busy ? 'behind' : 'waiting';
+      setView((v) => v && { ...v, queued: [...v.queued, { localId, text: body, status }] });
+      try {
+        await (editing !== null ? editMessage(id, editing, body) : sendMessage(id, body));
+      } catch (e) {
+        setView((v) => v && { ...v, queued: v.queued.filter((q) => q.localId !== localId) });
+        throw e;
       }
       setInput((c) => sent(c, body));
     } catch (e) {
