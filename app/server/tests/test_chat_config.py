@@ -84,7 +84,14 @@ def test_longbridge_is_the_cli_with_query_commands_only():
 def test_env_drops_api_billing_and_claudeai_connectors():
     env = launch_env({"PATH": "/bin", "HOME": "/h", "ANTHROPIC_API_KEY": "k", "ANTHROPIC_BASE_URL": "u",
                       "CLAUDE_CODE_USE_BEDROCK": "1"})
-    assert env == {"PATH": "/bin", "HOME": "/h", "ENABLE_CLAUDEAI_MCP_SERVERS": "false"}
+    assert env == {"PATH": "/bin", "HOME": "/h", "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
+                   "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR": "1"}
+
+
+def test_env_keeps_bash_in_the_repo_root():
+    # Edit(frameworks/**) resolves against the session's working directory: after a Bash `cd frameworks` the
+    # rule stopped matching and every framework Edit was refused (300308.SZ chat, 2026-09-30).
+    assert launch_env({})["CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR"] == "1"
 
 
 def test_ticker_prompt_names_its_files_and_rules():

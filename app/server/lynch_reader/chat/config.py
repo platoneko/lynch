@@ -125,4 +125,8 @@ def launch_argv(cfg: LaunchConfig, conv: Conversation, *, resume: bool, resume_a
 def launch_env(base: Mapping[str, str]) -> dict[str, str]:
     env = {k: v for k, v in base.items() if k not in API_BILLING_ENV}
     env["ENABLE_CLAUDEAI_MCP_SERVERS"] = "false"  # the account's Drive / Docs connectors are not research tools
+    # Edit(frameworks/**) and Write(frameworks/**) resolve against the session's working directory, which a
+    # Bash `cd frameworks && …` moves for the rest of the run; returning to the repo root after each Bash call
+    # keeps the whitelist meaning frameworks/ (verified against Claude Code 2.1.284 on 2026-09-30).
+    env["CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR"] = "1"
     return env
