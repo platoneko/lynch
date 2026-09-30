@@ -1,6 +1,7 @@
 server/.venv/
 web/node_modules/
 web/dist/
+web/tsconfig.tsbuildinfo
 android/.gradle/
 android/build/
 android/app/build/
