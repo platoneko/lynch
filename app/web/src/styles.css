@@ -45,7 +45,7 @@ button { font: inherit; color: inherit; }
 /* Home */
 .home-top { position: sticky; top: 0; z-index: 2; background: var(--bg); padding: 10px 16px 6px; border-bottom: 1px solid var(--line); }
 .home-search-row { display: flex; gap: 8px; }
-.home-search { flex: 1; min-width: 0; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--text); font-size: 16px; }
+.home-search, .bar-search { flex: 1; min-width: 0; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--text); font-size: 16px; }
 .quote-time { align-self: center; color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .icon-btn { width: 40px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
 .chips { display: flex; gap: 6px; overflow-x: auto; padding-top: 8px; scrollbar-width: none; }
@@ -105,6 +105,9 @@ button { font: inherit; color: inherit; }
 .bar-row { display: flex; gap: 8px; }
 .bar-jump { flex: 1; min-width: 0; text-align: left; padding: 6px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
 .bar-jump:disabled { color: var(--muted); }
+.bar-count { align-self: center; color: var(--muted); font-size: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+::highlight(doc-search) { background: rgba(255, 196, 0, 0.35); }
+::highlight(doc-search-current) { background: #ff9d00; color: #1c1c1e; }
 /* Bottom room lets even the last short section scroll up to the bar, so a jump can make it current. */
 .doc-body { padding: var(--bar-h) 16px calc(100vh - var(--bar-h)); }
 .doc-head { padding: 12px 0 4px; border-bottom: 1px solid var(--line); }

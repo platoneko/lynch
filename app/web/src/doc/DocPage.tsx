@@ -5,8 +5,9 @@ import { fmt, priceDecimals } from '../home/PriceBar';
 import { BandHead } from '../home/TickerCard';
 import { docHash } from '../route';
 import type { AxisInfo, TickerRow } from '../types';
-import { buildDoc, renderFragment, sectionLabel, type BuiltDoc, type LinkTargets } from './buildDoc';
+import { buildDoc, renderFragment, sectionLabel, type BuiltDoc, type DocSection, type LinkTargets } from './buildDoc';
 import { currentIndex, isVisible, neighbors, openIdsFor } from './nav';
+import { countHits, findHits, hitRanges, inertFragment, listMatches, paintHits, revealHit, stepMatch } from './search';
 
 /** A folding, jumpable markdown document: a ticker's framework or a shared axis. */
 export function DocPage({ load: fetchSource, targets, head, onBack, barExtra }: {
@@ -21,6 +22,9 @@ export function DocPage({ load: fetchSource, targets, head, onBack, barExtra }: 
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
   const [current, setCurrent] = useState(-1);
   const [pendingJump, setPendingJump] = useState<number | null>(null);
+  const [query, setQuery] = useState<string | null>(null); // null while the search row is closed
+  const [cursor, setCursor] = useState<number | null>(null); // the match last jumped to
+  const [pendingMatch, setPendingMatch] = useState(false);
   const topBar = useRef<HTMLElement>(null);
 
   const load = () => {
@@ -31,6 +35,15 @@ export function DocPage({ load: fetchSource, targets, head, onBack, barExtra }: 
   useEffect(load, []);
 
   const doc: BuiltDoc | null = useMemo(() => (source ? buildDoc(source, targets) : null), [source, targets]);
+
+  // Closed sections are not in the DOM, so search counts their hits in an inert copy of each body.
+  const searching = query !== null;
+  const bodies = useMemo(() => (doc && searching ? doc.sections.map((s) => inertFragment(s.bodyHtml)) : []), [doc, searching]);
+  const matches = useMemo(() => {
+    if (!doc || !query) return [];
+    return listMatches(doc.sections.map((s, i) =>
+      findHits(headingText(s, doc.sections), query).length + countHits(bodies[i], query)));
+  }, [doc, bodies, query]);
 
   // Track which heading the reader is in: the last one scrolled under the top bar.
   useEffect(() => {
@@ -59,6 +72,22 @@ export function DocPage({ load: fetchSource, targets, head, onBack, barExtra }: 
     setPendingJump(null);
   }, [pendingJump, open]);
 
+  // Paint the hits in the open sections, the current one apart; after a jump, bring it into view.
+  useLayoutEffect(() => {
+    if (!query) return;
+    // A section's hits in the order `matches` numbers them: its heading, then its body if open.
+    const liveHits = (index: number) => {
+      const head = document.querySelector(`[data-sec="${index}"]`);
+      const body = head?.nextElementSibling;
+      return head ? [...hitRanges(head, query), ...(body ? hitRanges(body, query) : [])] : [];
+    };
+    const all = [...new Set(matches.map((m) => m.section))].flatMap(liveHits);
+    const target = cursor === null ? undefined : liveHits(matches[cursor].section)[matches[cursor].nth];
+    if (pendingMatch && target) revealHit(target, topBar.current?.offsetHeight ?? 0);
+    setPendingMatch(false);
+    return paintHits(all, target);
+  }, [query, matches, cursor, pendingMatch, open]);
+
   if (error) {
     return (
       <div className="status-screen">
@@ -77,6 +106,17 @@ export function DocPage({ load: fetchSource, targets, head, onBack, barExtra }: 
     setOpen((o) => new Set([...o, ...openIdsFor(sections, i)]));
     setPendingJump(i);
   };
+  const goMatch = (dir: 1 | -1) => {
+    const i = stepMatch(matches, cursor, current, dir);
+    if (i === null) return;
+    setOpen((o) => new Set([...o, ...openIdsFor(sections, matches[i].section)]));
+    setCursor(i);
+    setPendingMatch(true);
+  };
+  const search = (q: string | null) => {
+    setQuery(q);
+    setCursor(null);
+  };
   const toggle = (id: string) =>
     setOpen((o) => {
       const n = new Set(o);
@@ -88,13 +128,27 @@ export function DocPage({ load: fetchSource, targets, head, onBack, barExtra }: 
   return (
     <div className="doc">
       <header className="bar bar-top" ref={topBar}>
-        <div className="bar-row">
-          <button className="icon-btn" onClick={onBack} aria-label="返回">‹</button>
-          <button className="bar-jump" disabled={up === null} onClick={() => up !== null && jump(up)}>
-            ↑ {up !== null ? label(up) : '已到开头'}
-          </button>
-          {barExtra}
-        </div>
+        {query === null ? (
+          <div className="bar-row">
+            <button className="icon-btn" onClick={onBack} aria-label="返回">‹</button>
+            <button className="bar-jump" disabled={up === null} onClick={() => up !== null && jump(up)}>
+              ↑ {up !== null ? label(up) : '已到开头'}
+            </button>
+            <button className="icon-btn" onClick={() => search('')} aria-label="搜索本文">🔍</button>
+            {barExtra}
+          </div>
+        ) : (
+          <div className="bar-row">
+            <input className="bar-search" type="text" enterKeyHint="search" autoFocus placeholder="搜索本文"
+              value={query} onChange={(e) => search(e.target.value)}
+              // Enter while an IME is composing only commits the pinyin; it is not a search.
+              onKeyDown={(e) => e.key === 'Enter' && !e.nativeEvent.isComposing && goMatch(e.shiftKey ? -1 : 1)} />
+            <span className="bar-count">{cursor === null ? '–' : cursor + 1}/{matches.length}</span>
+            <button className="icon-btn" disabled={matches.length === 0} onClick={() => goMatch(-1)} aria-label="上一处">↑</button>
+            <button className="icon-btn" disabled={matches.length === 0} onClick={() => goMatch(1)} aria-label="下一处">↓</button>
+            <button className="icon-btn" onClick={() => search(null)} aria-label="关闭搜索">✕</button>
+          </div>
+        )}
       </header>
 
       <main className="doc-body">
@@ -109,7 +163,7 @@ export function DocPage({ load: fetchSource, targets, head, onBack, barExtra }: 
             <section key={s.id} className={`sec sec-${s.level}`}>
               <Heading className="sec-head" data-sec={s.index} onClick={() => toggle(s.id)}>
                 <span className="sec-caret">{isOpen ? '▾' : '▸'}</span>
-                {s.level === 2 ? sectionLabel(s, sections) : s.title}
+                {headingText(s, sections)}
               </Heading>
               {isOpen && <div className="md" dangerouslySetInnerHTML={{ __html: s.bodyHtml }} />}
             </section>
@@ -124,6 +178,11 @@ export function DocPage({ load: fetchSource, targets, head, onBack, barExtra }: 
       </footer>
     </div>
   );
+}
+
+/** A heading as shown (and searched): a chapter by its § label, a subsection by its own title. */
+function headingText(s: DocSection, sections: DocSection[]): string {
+  return s.level === 2 ? sectionLabel(s, sections) : s.title;
 }
 
 /** A framework's head: its zone, extra bands, and the axes it is mounted on. */
