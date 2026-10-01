@@ -75,6 +75,16 @@ func isNavigation(r *http.Request) bool {
 		strings.Contains(r.Header.Get("Accept"), "text/html")
 }
 
+// httpFrontend is lynch's frontend: the gated reverse proxy on an http.Server.
+type httpFrontend struct{ hs *http.Server }
+
+func (f httpFrontend) serve(ln net.Listener) { f.hs.Serve(ln) }
+
+// Close, not just the listener: the port is fixed, so the WebView reuses a
+// pooled keep-alive connection across restarts, and one still served by
+// this session's gate (old secret) would answer the new boot URL with 403.
+func (f httpFrontend) close() { f.hs.Close() }
+
 const retryPage = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">

@@ -16,18 +16,24 @@ import (
 	"tailscale.com/tsnet"
 )
 
-const hostname = "lynch-phone"
-
 var (
 	mu  sync.Mutex
 	cur *session
 )
 
+// frontend serves the loopback port; each Start mode supplies its own.
+type frontend interface {
+	serve(ln net.Listener)
+	// close drops every connection the frontend holds, so the fixed port can be
+	// listened on again right after Stop.
+	close()
+}
+
 type session struct {
 	srv    *tsnet.Server
 	ln     net.Listener
-	hs     *http.Server
-	secret string
+	front  frontend
+	secret string // "" when there is no WebView to boot
 	done   chan struct{}
 	// started closes once srv.Start has returned: tsnet.Server.Close must not
 	// run before or concurrently with Start.
@@ -46,13 +52,27 @@ type status struct {
 	Error   string `json:"error,omitempty"`
 }
 
-// Start brings up the app-private tsnet node and the loopback proxy to target.
+// Start brings up the app-private tsnet node and the gated loopback HTTP proxy to target.
 // It listens on 127.0.0.1:port and returns at once; progress is read through Status.
-func Start(dataDir, target string, port int) error {
+func Start(dataDir, hostname, target string, port int) error {
+	secret, err := newSecret()
+	if err != nil {
+		return err
+	}
+	return start(dataDir, hostname, target, port, secret, func(srv *tsnet.Server, _ *session) frontend {
+		return httpFrontend{&http.Server{Handler: newGate(secret, newProxy(target, srv.Dial))}}
+	})
+}
+
+func start(dataDir, hostname, target string, port int, secret string,
+	newFront func(srv *tsnet.Server, s *session) frontend) error {
 	mu.Lock()
 	defer mu.Unlock()
 	if cur != nil {
 		return errors.New("already started; call Stop first")
+	}
+	if hostname == "" {
+		return errors.New("hostname is empty")
 	}
 	if target == "" {
 		return errors.New("server address is empty")
@@ -78,21 +98,17 @@ func Start(dataDir, target string, port int) error {
 		UserLogf: func(string, ...any) {},
 	}
 
-	// Step 2: the gated proxy listens right away; dials simply fail until the node runs.
-	secret, err := newSecret()
-	if err != nil {
-		return err
-	}
+	// Step 2: the frontend listens right away; dials simply fail until the node runs.
 	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
 		return fmt.Errorf("本机端口 %d 无法使用（可能被其他 app 占用），请在设置里换一个端口：%w", port, err)
 	}
-	hs := &http.Server{Handler: newGate(secret, newProxy(target, srv.Dial))}
 	s := &session{
-		srv: srv, ln: ln, hs: hs, secret: secret,
+		srv: srv, ln: ln, secret: secret,
 		done: make(chan struct{}), started: make(chan struct{}), state: "starting",
 	}
-	go hs.Serve(ln)
+	s.front = newFront(srv, s)
+	go s.front.serve(ln)
 
 	// Step 3: bring the node up and keep Status current in the background.
 	go s.run()
@@ -202,12 +218,10 @@ func Stop() {
 		return
 	}
 	close(s.done)
-	// Close, not just the listener: the port is fixed, so the WebView reuses a
-	// pooled keep-alive connection across restarts, and one still served by
-	// this session's gate (old secret) would answer the new boot URL with 403.
-	s.hs.Close()
-	// Serve may not have registered ln yet, in which case hs.Close skips it and
-	// the port would be freed asynchronously; release it now for a quick re-Start.
+	s.front.close()
+	// Serve may not have registered ln yet, in which case the frontend's close
+	// skips it and the port would be freed asynchronously; release it now for a
+	// quick re-Start.
 	s.ln.Close()
 	<-s.started
 	// A Start that failed before tsnet built its system (bad Dir) has nothing to

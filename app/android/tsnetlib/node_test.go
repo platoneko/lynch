@@ -29,14 +29,14 @@ func TestStoppedState(t *testing.T) {
 	if BootURL() != "" {
 		t.Fatal("BootURL before Start must be empty")
 	}
-	if err := Start(t.TempDir(), "", freePort(t)); err == nil {
+	if err := Start(t.TempDir(), "lynch-phone", "", freePort(t)); err == nil {
 		t.Fatal("empty target must be rejected")
 	}
 }
 
 // A rotation or quick back-out can Stop while the node is still inside srv.Start.
 func TestStopRightAfterStart(t *testing.T) {
-	if err := Start(t.TempDir(), "127.0.0.1:1", freePort(t)); err != nil {
+	if err := Start(t.TempDir(), "lynch-phone", "127.0.0.1:1", freePort(t)); err != nil {
 		t.Fatal(err)
 	}
 	Stop()
@@ -56,9 +56,19 @@ func TestStateOf(t *testing.T) {
 	}
 }
 
+func TestEmptyHostnameRejected(t *testing.T) {
+	if err := Start(t.TempDir(), "", "127.0.0.1:1", freePort(t)); err == nil {
+		Stop()
+		t.Fatal("empty hostname must be rejected")
+	}
+	if got := Status(); got != `{"state":"stopped"}` {
+		t.Fatalf("Status() after rejected hostname = %s", got)
+	}
+}
+
 func TestPortOutOfRangeRejected(t *testing.T) {
 	for _, port := range []int{0, 80, 70000} {
-		if err := Start(t.TempDir(), "127.0.0.1:1", port); err == nil {
+		if err := Start(t.TempDir(), "lynch-phone", "127.0.0.1:1", port); err == nil {
 			Stop()
 			t.Fatalf("port %d must be rejected", port)
 		}
@@ -76,7 +86,7 @@ func TestBusyPortFails(t *testing.T) {
 	defer busy.Close()
 	port := busy.Addr().(*net.TCPAddr).Port
 
-	err = Start(t.TempDir(), "127.0.0.1:1", port)
+	err = Start(t.TempDir(), "lynch-phone", "127.0.0.1:1", port)
 	if err == nil {
 		Stop()
 		t.Fatalf("Start on busy port %d must fail", port)
@@ -103,7 +113,7 @@ func TestRestartOnSamePortAcceptsNewBoot(t *testing.T) {
 	}
 
 	for _, round := range []string{"first", "second"} {
-		if err := Start(dir, "127.0.0.1:1", port); err != nil {
+		if err := Start(dir, "lynch-phone", "127.0.0.1:1", port); err != nil {
 			t.Fatalf("%s Start: %v", round, err)
 		}
 		boot := BootURL()

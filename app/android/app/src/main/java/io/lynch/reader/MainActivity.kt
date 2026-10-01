@@ -58,7 +58,7 @@ class MainActivity : Activity() {
                 Tsnetlib.setInterfaces(NetInterfaces.json())
                 // Activity re-creation must not start a second node.
                 if (JSONObject(Tsnetlib.status()).optString("state") == "stopped") {
-                    Tsnetlib.start(File(filesDir, "tailnet").absolutePath, serverAddress(), localPort().toLong())
+                    Tsnetlib.start(File(filesDir, "tailnet").absolutePath, HOSTNAME, serverAddress(), localPort().toLong())
                 }
             }.exceptionOrNull()
             main.post { if (err != null) showError(err.message ?: err.toString()) else poll() }
@@ -248,6 +248,7 @@ class MainActivity : Activity() {
 
     companion object {
         const val TAG = "lynch"
+        private const val HOSTNAME = "lynch-phone"
         private const val KEY_SERVER = "server"
         private const val DEFAULT_SERVER = "pivot-home.tail090ab2.ts.net:3151"
         private const val KEY_PORT = "port"
