@@ -39,17 +39,21 @@ type session struct {
 	// run before or concurrently with Start.
 	started chan struct{}
 
-	mu      sync.Mutex
-	state   string
-	authURL string
-	errMsg  string
+	mu        sync.Mutex
+	state     string
+	authURL   string
+	errMsg    string
+	dialErr   string
+	dialErrAt int64 // Unix ms of dialErr
 }
 
 type status struct {
-	State   string `json:"state"`
-	AuthURL string `json:"auth_url,omitempty"`
-	Port    int    `json:"port,omitempty"`
-	Error   string `json:"error,omitempty"`
+	State       string `json:"state"`
+	AuthURL     string `json:"auth_url,omitempty"`
+	Port        int    `json:"port,omitempty"`
+	Error       string `json:"error,omitempty"`
+	DialError   string `json:"dial_error,omitempty"`
+	DialErrorAt int64  `json:"dial_error_at,omitempty"`
 }
 
 // Start brings up the app-private tsnet node and the gated loopback HTTP proxy to target.
@@ -61,6 +65,17 @@ func Start(dataDir, hostname, target string, port int) error {
 	}
 	return start(dataDir, hostname, target, port, secret, func(srv *tsnet.Server, _ *session) frontend {
 		return httpFrontend{&http.Server{Handler: newGate(secret, newProxy(target, srv.Dial))}}
+	})
+}
+
+// StartForward brings up the node and a raw TCP forward from 127.0.0.1:port to target.
+// Anything on the phone can reach the port, so the client must bring its own auth.
+func StartForward(dataDir, hostname, target string, port int) error {
+	if _, _, err := net.SplitHostPort(target); err != nil {
+		return fmt.Errorf("目标地址 %q 要写成 主机:端口：%w", target, err)
+	}
+	return start(dataDir, hostname, target, port, "", func(srv *tsnet.Server, s *session) frontend {
+		return newForwarder(target, srv.Dial, s.setDialError)
 	})
 }
 
@@ -172,6 +187,12 @@ func (s *session) set(state, authURL, errMsg string) {
 	s.state, s.authURL, s.errMsg = state, authURL, errMsg
 }
 
+func (s *session) setDialError(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dialErr, s.dialErrAt = err.Error(), time.Now().UnixMilli()
+}
+
 func (s *session) isRunning() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -193,7 +214,10 @@ func Status() string {
 		return `{"state":"stopped"}`
 	}
 	s.mu.Lock()
-	st := status{State: s.state, AuthURL: s.authURL, Port: s.port(), Error: s.errMsg}
+	st := status{
+		State: s.state, AuthURL: s.authURL, Port: s.port(), Error: s.errMsg,
+		DialError: s.dialErr, DialErrorAt: s.dialErrAt,
+	}
 	s.mu.Unlock()
 	b, _ := json.Marshal(st)
 	return string(b)
@@ -202,7 +226,7 @@ func Status() string {
 // BootURL is the one URL the WebView loads first; it carries the per-launch secret.
 func BootURL() string {
 	s := currentSession()
-	if s == nil {
+	if s == nil || s.secret == "" {
 		return ""
 	}
 	return fmt.Sprintf("http://127.0.0.1:%d%s?k=%s", s.port(), bootPath, s.secret)

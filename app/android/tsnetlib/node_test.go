@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // freePort finds a loopback port nothing is listening on right now.
@@ -133,5 +134,75 @@ func TestRestartOnSamePortAcceptsNewBoot(t *testing.T) {
 		if resp.StatusCode != http.StatusFound {
 			t.Fatalf("%s boot: got %d, want 302", round, resp.StatusCode)
 		}
+	}
+}
+
+func TestStartForwardRejectsEmptyHostname(t *testing.T) {
+	if err := StartForward(t.TempDir(), "", "127.0.0.1:1", freePort(t)); err == nil {
+		Stop()
+		t.Fatal("empty hostname must be rejected")
+	}
+}
+
+// A target without a port would start fine and then fail every dial; refuse it up front.
+func TestStartForwardRejectsTargetWithoutPort(t *testing.T) {
+	for _, target := range []string{"", "pivot-home.tail090ab2.ts.net"} {
+		if err := StartForward(t.TempDir(), "tailfwd-phone", target, freePort(t)); err == nil {
+			Stop()
+			t.Fatalf("target %q must be rejected", target)
+		}
+		if got := Status(); got != `{"state":"stopped"}` {
+			t.Fatalf("Status() after rejected target %q = %s", target, got)
+		}
+	}
+}
+
+// Forward mode has no WebView to boot, and Stop must free the fixed port at once
+// so a settings change can restart on it.
+func TestStartForwardStopFreesPort(t *testing.T) {
+	port := freePort(t)
+	if err := StartForward(t.TempDir(), "tailfwd-phone", "127.0.0.1:1", port); err != nil {
+		t.Fatal(err)
+	}
+	if BootURL() != "" {
+		Stop()
+		t.Fatal("forward mode must not have a boot URL")
+	}
+	if got := Status(); !strings.Contains(got, fmt.Sprintf(`"port":%d`, port)) {
+		Stop()
+		t.Fatalf("Status() = %s, want port %d", got, port)
+	}
+	Stop()
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		t.Fatalf("port %d not free right after Stop: %v", port, err)
+	}
+	ln.Close()
+}
+
+// Before login the node cannot dial; the failure must reach Status for the app to show.
+func TestStartForwardReportsDialErrorInStatus(t *testing.T) {
+	defer func(d time.Duration) { dialTimeout = d }(dialTimeout)
+	dialTimeout = 50 * time.Millisecond
+	port := freePort(t)
+	if err := StartForward(t.TempDir(), "tailfwd-phone", "127.0.0.1:1", port); err != nil {
+		t.Fatal(err)
+	}
+	defer Stop()
+	c, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	expectClosed(t, c)
+	deadline := time.Now().Add(10 * time.Second)
+	for !strings.Contains(Status(), `"dial_error":`) {
+		if time.Now().After(deadline) {
+			t.Fatalf("Status() = %s, want dial_error", Status())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := Status(); !strings.Contains(got, `"dial_error_at":`) {
+		t.Fatalf("Status() = %s, want dial_error_at", got)
 	}
 }
