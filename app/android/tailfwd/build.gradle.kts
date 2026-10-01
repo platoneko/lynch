@@ -25,4 +25,6 @@ dependencies {
     implementation(project(":tailnet"))
     // Each app packages the aar itself: AGP refuses a local .aar bundled into a library.
     implementation(files("../libs/tsnetlib.aar"))
+    // Plain JVM tests of the Android-free rules (Forwards, DeviceName); never packaged.
+    testImplementation("junit:junit:4.13.2")
 }
