@@ -15,12 +15,13 @@ import android.os.IBinder
 import android.os.Looper
 import io.lynch.tailnet.InterfaceFeed
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import tsnetlib.Tsnetlib
 
 /**
- * Owns the forward: the tsnet node, the loopback port and the interface feed live
- * here, so the forward keeps running while Orca is in front or the screen is off.
+ * Owns the node and its forwards: the tsnet node, the loopback ports and the interface feed live
+ * here, so forwarding keeps running while another app is in front or the screen is off.
  */
 class ForwardService : Service() {
     private val main = Handler(Looper.getMainLooper())
@@ -52,13 +53,7 @@ class ForwardService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        when {
-            !running -> startForwarding()
-            intent?.action == ACTION_RESTART -> {
-                worker.execute { Tsnetlib.stop() }
-                startNode()
-            }
-        }
+        if (!running) startForwarding()
         return START_STICKY
     }
 
@@ -67,7 +62,7 @@ class ForwardService : Service() {
         super.onDestroy()
     }
 
-    // ── Step 1: start / stop; every Tsnetlib start/stop runs in order on one worker ──
+    // ── Step 1: the master switch; every Tsnetlib call runs in order on one worker ──
 
     private fun startForwarding() {
         running = true
@@ -80,15 +75,20 @@ class ForwardService : Service() {
 
     private fun startNode() {
         val settings = Settings(this)
-        val target = settings.target
-        val port = settings.port
+        val hostname = settings.hostname
+        val wanted = settings.forwards.filter { it.enabled }
         val dir = File(filesDir, "tailnet").absolutePath
         val gen = ++generation
         worker.execute {
             val err = runCatching {
                 interfaces.pushNow()
-                Tsnetlib.startForward(dir, HOSTNAME, target, port.toLong())
-            }.exceptionOrNull() ?: return@execute
+                Tsnetlib.startNode(dir, hostname)
+            }.exceptionOrNull()
+            if (err == null) {
+                nodeUp = true
+                reconcile(wanted)
+                return@execute
+            }
             main.post {
                 // A queued start can fail after a later start or a stop, possibly of another
                 // service instance; only the current start's failure may stop the service.
@@ -113,7 +113,12 @@ class ForwardService : Service() {
         generation++
         main.removeCallbacksAndMessages(null)
         interfaces.unwatch()
-        worker.execute { Tsnetlib.stop() }
+        worker.execute {
+            Tsnetlib.stop()
+            nodeUp = false
+            opened.clear()
+            errors.clear()
+        }
     }
 
     // ── Step 2: keep the notification in step with the node ──
@@ -133,16 +138,20 @@ class ForwardService : Service() {
     }
 
     private fun notification(status: ForwardStatus?): Notification {
-        val headline = status?.headline(Settings(this).target) ?: "连接中…"
-        val details = listOfNotNull(headline, status?.dialFailure()).joinToString("\n")
+        val headline = status?.headline() ?: "连接中…"
+        val problems = status?.let { s ->
+            Settings(this).forwards.filter { it.enabled }.flatMap { f ->
+                s.problems(f, errors[f.id]).map { "${f.name}：$it" }
+            }
+        }.orEmpty()
         val stop = PendingIntent.getService(
             this, 1, Intent(this, ForwardService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE,
         )
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_forward)
-            .setContentTitle("tailfwd")
+            .setContentTitle("tailfwd · ${status?.openCount ?: 0} 条转发中")
             .setContentText(headline)
-            .setStyle(Notification.BigTextStyle().bigText(details))
+            .setStyle(Notification.BigTextStyle().bigText((listOf(headline) + problems).joinToString("\n")))
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setContentIntent(openScreen())
@@ -169,15 +178,13 @@ class ForwardService : Service() {
 
     companion object {
         private const val ACTION_STOP = "io.lynch.tailfwd.STOP"
-        private const val ACTION_RESTART = "io.lynch.tailfwd.RESTART"
-        private const val HOSTNAME = "tailfwd-phone"
         private const val CHANNEL = "forward"
         private const val NOTIFICATION_ID = 1
         // Not NOTIFICATION_ID: stopForeground's asynchronous cancel of that id could remove a
         // failure notification posted right after it. The next start cancels this one instead.
         private const val FAILURE_NOTIFICATION_ID = 2
 
-        // One thread for all Tsnetlib start/stop calls, so a restart's Stop always lands before its Start.
+        // One thread for all Tsnetlib start / open / close / stop calls, so they land in order.
         private val worker = Executors.newSingleThreadExecutor()
 
         // Bumped by every start and stop (main thread only); a start's failure counts only while
@@ -185,12 +192,21 @@ class ForwardService : Service() {
         // with running == true ever reaches stopForwarding() from a failure.
         private var generation = 0
 
-        /** Whether the user has the forward switched on; the screen reads it. */
+        // Worker thread only: whether StartNode succeeded, and each open forward as it was opened.
+        private var nodeUp = false
+        private val opened = mutableMapOf<String, Forward>()
+
+        private val errors = ConcurrentHashMap<String, String>()
+
+        /** Why a forward failed to open (e.g. its port is taken), by id; its next open replaces it. */
+        val openErrors: Map<String, String> get() = errors
+
+        /** Whether the user has the master switch on; the screen reads it. */
         @Volatile
         var running = false
             private set
 
-        /** Why the last start failed (e.g. the port is taken); cleared by the next start. */
+        /** Why the last node start failed; cleared by the next start. */
         @Volatile
         var startError: String? = null
             private set
@@ -203,8 +219,36 @@ class ForwardService : Service() {
             context.startService(Intent(context, ForwardService::class.java).setAction(ACTION_STOP))
         }
 
-        fun restart(context: Context) {
-            context.startService(Intent(context, ForwardService::class.java).setAction(ACTION_RESTART))
+        /**
+         * Applies the saved list to the running node at once: opens what was added or switched
+         * on, closes what was deleted or switched off, reopens what changed port or target, and
+         * leaves every other forward alone. While stopped the list just waits for the next start.
+         */
+        fun sync(context: Context) {
+            if (!running) return
+            val wanted = Settings(context).forwards.filter { it.enabled }
+            worker.execute { reconcile(wanted) }
+        }
+
+        // Worker thread.
+        private fun reconcile(wanted: List<Forward>) {
+            if (!nodeUp) return // the start failed, or a stop is queued ahead of this
+            val plan = Forwards.plan(opened, wanted)
+            // Closes first: a port may be moving from a closed forward to an opened one.
+            for (id in plan.close) {
+                Tsnetlib.closeForward(id)
+                opened.remove(id)
+            }
+            // A deleted or switched-off forward's old failure is no longer news.
+            errors.keys.retainAll(wanted.map { it.id }.toSet())
+            for (f in plan.open) {
+                runCatching { Tsnetlib.openForward(f.id, f.port.toLong(), f.target) }
+                    .onSuccess {
+                        opened[f.id] = f
+                        errors.remove(f.id)
+                    }
+                    .onFailure { errors[f.id] = it.message ?: it.toString() }
+            }
         }
     }
 }
