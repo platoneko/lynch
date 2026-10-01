@@ -17,7 +17,7 @@ var (
 
 // SetInterfaces receives the phone's interfaces from Kotlin: since Android 11 an
 // app cannot list them via netlink, which is what Go's net package relies on.
-// Kotlin calls it before Start and again on every network change.
+// Kotlin calls it before StartNode and again on every network change.
 func SetInterfaces(rowsJSON string) error {
 	var rows []struct {
 		Name      string   `json:"name"`

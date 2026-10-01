@@ -58,8 +58,9 @@ export function backoffMs(attempt: number): number {
 
 /**
  * Follows one conversation. Every (re)connect starts with a snapshot that replaces the view.
- * The browser retries a dropped network by itself; a non-200 answer (404 once the chat is archived or its
- * transcript cleaned, the phone proxy's 502 while the server restarts) closes the EventSource for good,
+ * The browser retries a dropped network by itself (as when the server restarts behind the phone's forward,
+ * which drops the connection); a non-200 answer (404 once the chat is archived or its transcript cleaned)
+ * closes the EventSource for good,
  * and a connection that died silently (a frozen phone app, a changed tailnet path) never errors at all:
  * no frame for STALE_MS counts as the latter. Both are handled here: report `lost`, then `gone` if the chat
  * left the list, else reopen after a backoff. Returns a closer that also cancels a pending reopen.

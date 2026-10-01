@@ -18,7 +18,7 @@ from lynch_reader.chat.service import ChatService, Conflict, Invalid, NotFound
 
 log = logging.getLogger(__name__)
 
-# Keeps the phone proxy and WebView from dropping a quiet stream, and lets the page tell quiet from dead
+# Keeps the phone's forward and WebView from dropping a quiet stream, and lets the page tell quiet from dead
 # (web chat/api.ts STALE_MS allows three missed beats).
 HEARTBEAT_S = 15.0
 REAP_INTERVAL_S = 60.0
