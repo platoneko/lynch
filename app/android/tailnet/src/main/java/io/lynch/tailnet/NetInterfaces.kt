@@ -1,4 +1,4 @@
-package io.lynch.reader
+package io.lynch.tailnet
 
 import android.util.Log
 import java.net.NetworkInterface
@@ -6,7 +6,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /** Interface rows for tsnetlib.SetInterfaces; Go cannot enumerate them itself on Android 11+. */
-object NetInterfaces {
+internal object NetInterfaces {
     // Bit values of Go's net.Flags (net/interface.go).
     private const val UP = 1
     private const val LOOPBACK = 4
@@ -19,7 +19,7 @@ object NetInterfaces {
         val all = NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
         for (ni in all) {
             val row = runCatching { row(ni) }
-                .onFailure { Log.w(MainActivity.TAG, "skipping interface ${ni.name}", it) }
+                .onFailure { Log.w(InterfaceFeed.TAG,"skipping interface ${ni.name}", it) }
                 .getOrNull() ?: continue
             rows.put(row)
         }

@@ -5,5 +5,6 @@ web/tsconfig.tsbuildinfo
 android/.gradle/
 android/build/
 android/app/build/
-android/app/libs/
+android/libs/
+android/tailnet/build/
 android/local.properties

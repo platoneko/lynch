@@ -2,16 +2,12 @@ package io.lynch.reader
 
 import android.app.Activity
 import android.content.Intent
-import android.net.ConnectivityManager
-import android.net.LinkProperties
-import android.net.Network
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.text.InputType
-import android.util.Log
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
@@ -25,6 +21,7 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import io.lynch.tailnet.InterfaceFeed
 import java.io.File
 import org.json.JSONObject
 import tsnetlib.Tsnetlib
@@ -38,6 +35,7 @@ class MainActivity : Activity() {
     private lateinit var addressInput: EditText
     private lateinit var portInput: EditText
     private lateinit var web: WebView
+    private lateinit var interfaces: InterfaceFeed
     private var authUrl: String? = null
     private var loadedPort = 0 // proxy port the WebView was booted against; 0 = not loaded
     private var clearHistoryOnLoad = false // set when a new proxy session is booted
@@ -45,7 +43,8 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         buildViews()
-        watchNetwork()
+        interfaces = InterfaceFeed(this) { Tsnetlib.setInterfaces(it) }
+        interfaces.watch()
         startTailnet()
     }
 
@@ -55,7 +54,7 @@ class MainActivity : Activity() {
         showPanel("连接中…")
         Thread {
             val err = runCatching {
-                Tsnetlib.setInterfaces(NetInterfaces.json())
+                interfaces.pushNow()
                 // Activity re-creation must not start a second node.
                 if (JSONObject(Tsnetlib.status()).optString("state") == "stopped") {
                     Tsnetlib.start(File(filesDir, "tailnet").absolutePath, HOSTNAME, serverAddress(), localPort().toLong())
@@ -89,22 +88,6 @@ class MainActivity : Activity() {
         Thread {
             Tsnetlib.stop()
             main.post { startTailnet() }
-        }.start()
-    }
-
-    private fun watchNetwork() {
-        val cm = getSystemService(ConnectivityManager::class.java)
-        cm.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) = refreshInterfaces()
-            override fun onLost(network: Network) = refreshInterfaces()
-            override fun onLinkPropertiesChanged(network: Network, lp: LinkProperties) = refreshInterfaces()
-        })
-    }
-
-    private fun refreshInterfaces() {
-        Thread {
-            runCatching { Tsnetlib.setInterfaces(NetInterfaces.json()) }
-                .onFailure { Log.w(TAG, "setInterfaces failed", it) }
         }.start()
     }
 
@@ -247,7 +230,6 @@ class MainActivity : Activity() {
     }
 
     companion object {
-        const val TAG = "lynch"
         private const val HOSTNAME = "lynch-phone"
         private const val KEY_SERVER = "server"
         private const val DEFAULT_SERVER = "pivot-home.tail090ab2.ts.net:3151"
