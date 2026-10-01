@@ -48,6 +48,12 @@ class MainActivity : Activity() {
         load(localPort())
     }
 
+    // Coming back (typically from 打开 tailfwd → 启动) is the moment the forward may answer now.
+    override fun onResume() {
+        super.onResume()
+        if (mainFrameFailed) retry()
+    }
+
     override fun onPause() {
         // The device cookie is the pairing: get it on disk before the process may be killed.
         CookieManager.getInstance().flush()
