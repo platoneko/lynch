@@ -69,3 +69,19 @@ describe('unpaired device', () => {
     expect(assign).not.toHaveBeenCalled();
   });
 });
+
+describe('nothing answers', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('get and post say tailfwd may not be running when fetch itself fails', async () => {
+    vi.stubGlobal('fetch', async () => { throw new TypeError('Failed to fetch'); });
+    await expect(get('/api/tickers')).rejects.toThrow('连不上 lynch 服务，请确认 tailfwd 在运行');
+    await expect(post('/api/chats', {})).rejects.toThrow('连不上 lynch 服务，请确认 tailfwd 在运行');
+  });
+
+  it('other fetch failures pass through unchanged', async () => {
+    const abort = new DOMException('The operation was aborted.', 'AbortError');
+    vi.stubGlobal('fetch', async () => { throw abort; });
+    await expect(get('/x')).rejects.toBe(abort);
+  });
+});

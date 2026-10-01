@@ -20,9 +20,3 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
 }
-
-dependencies {
-    implementation(project(":tailnet"))
-    // Each app packages the aar itself: AGP refuses a local .aar bundled into a library.
-    implementation(files("../libs/tsnetlib.aar"))
-}

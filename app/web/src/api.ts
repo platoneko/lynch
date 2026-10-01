@@ -5,10 +5,20 @@ function pairIfUnpaired(res: Response): void {
   if (res.status === 401) window.location.assign('/pair');
 }
 
+/** fetch() rejects with a TypeError only when nothing answered: on the phone, tailfwd's lynch forward is down. */
+async function send(path: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(path, init);
+  } catch (e) {
+    if (e instanceof TypeError) throw new Error('连不上 lynch 服务，请确认 tailfwd 在运行');
+    throw e;
+  }
+}
+
 export async function get(path: string): Promise<Response> {
-  const res = await fetch(path, { cache: 'no-store' });
+  const res = await send(path, { cache: 'no-store' });
   pairIfUnpaired(res);
-  // The phone proxy explains a dead server in the body; surface it verbatim.
+  // The server explains a failure in the body; surface it verbatim.
   if (!res.ok) throw new Error(`${res.status} ${(await res.text()).slice(0, 300)}`);
   return res;
 }
@@ -19,7 +29,7 @@ export async function get(path: string): Promise<Response> {
  * Always JSON, even without a body: the server refuses other content types (its CSRF guard).
  */
 export async function post(path: string, body: unknown = {}): Promise<Response> {
-  const res = await fetch(path, {
+  const res = await send(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
