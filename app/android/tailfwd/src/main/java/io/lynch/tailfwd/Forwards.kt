@@ -36,10 +36,16 @@ object Forwards {
         }
     }
 
-    /** "host:port" with a non-empty host and a port in 1–65535 (tsnetlib refuses anything else). */
+    /**
+     * "host:port" with a non-empty host and a port in 1–65535, an IPv6 host bracketed and no '/'
+     * (a pasted URL): checked at save, so the list never holds a target tsnetlib refuses at open.
+     */
     fun isTarget(s: String): Boolean {
         val colon = s.lastIndexOf(':')
-        if (colon <= 0) return false
+        if (colon <= 0 || '/' in s) return false
+        val host = s.substring(0, colon)
+        // Go's net.SplitHostPort takes a ':' in the host only inside "[...]".
+        if (':' in host && !(host.startsWith('[') && host.endsWith(']'))) return false
         val port = s.substring(colon + 1).toIntOrNull() ?: return false
         return port in 1..65535
     }

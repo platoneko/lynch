@@ -63,7 +63,8 @@ class ForwardsTest {
 
     @Test
     fun targetMustBeHostColonPort() {
-        for (t in listOf("", "pivot-home", "pivot-home:", ":6768", "pivot-home:http", "pivot-home:0", "pivot-home:65536")) {
+        for (t in listOf("", "pivot-home", "pivot-home:", ":6768", "pivot-home:http", "pivot-home:0", "pivot-home:65536",
+            "ws://pivot-home:6768", "pivot-home:6768/", "fd7a::1:80")) {
             assertEquals(t, "目标要写成 主机:端口（端口 1–65535）", Forwards.problem(fwd("a", target = t), emptyList()))
         }
         for (t in listOf("pivot-home.tail090ab2.ts.net:6768", "100.93.210.104:3151", "[fd7a::1]:80")) {
