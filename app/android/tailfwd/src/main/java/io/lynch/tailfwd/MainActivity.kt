@@ -43,11 +43,12 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         settings = Settings(this)
         buildViews()
-        showForwards()
     }
 
+    // onPause drops queued callbacks, a pending showForwards among them: rebuild the list here.
     override fun onResume() {
         super.onResume()
+        showForwards()
         refresh()
     }
 
@@ -69,12 +70,16 @@ class MainActivity : Activity() {
         authUrl = s.authUrl.takeIf { running }
         loginButton.visibility = if (authUrl != null) View.VISIBLE else View.GONE
         toggleButton.text = if (running) "停止" else "启动"
+        showRowStatus(s, running)
+        main.postDelayed(::refresh, 500)
+    }
+
+    private fun showRowStatus(s: ForwardStatus, running: Boolean) {
         for (row in rows) {
             val text = rowStatus(row.forward, s, running)
             row.status.text = text
             row.status.visibility = if (text.isEmpty()) View.GONE else View.VISIBLE
         }
-        main.postDelayed(::refresh, 500)
     }
 
     // Only a switched-on forward under a running service has anything to report.
@@ -110,6 +115,8 @@ class MainActivity : Activity() {
         list.removeAllViews()
         rows = settings.forwards.map { f -> Row(f, TextView(this)) }
         rows.forEach { list.addView(rowView(it)) }
+        // Filled now, not at the next refresh, so a redrawn row never shows blank.
+        showRowStatus(ForwardStatus.parse(Tsnetlib.status()), ForwardService.running)
     }
 
     private fun rowView(row: Row): View {
@@ -126,7 +133,7 @@ class MainActivity : Activity() {
             setPadding(pad / 2, 0, 0, 0)
             addView(TextView(this@MainActivity).apply { text = f.name; textSize = 16f })
             addView(TextView(this@MainActivity).apply { text = "127.0.0.1:${f.port} → ${f.target}" })
-            addView(row.status.apply { visibility = View.GONE })
+            addView(row.status)
             setOnClickListener { edit(f) }
         }
         return LinearLayout(this).apply {
