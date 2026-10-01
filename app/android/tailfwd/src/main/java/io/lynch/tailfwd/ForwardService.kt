@@ -63,6 +63,7 @@ class ForwardService : Service() {
     private fun startForwarding() {
         running = true
         startError = null
+        getSystemService(NotificationManager::class.java).cancel(FAILURE_NOTIFICATION_ID)
         interfaces.watch()
         startNode()
         main.post(::poll)
@@ -73,14 +74,21 @@ class ForwardService : Service() {
         val target = settings.target
         val port = settings.port
         val dir = File(filesDir, "tailnet").absolutePath
+        val gen = ++generation
         worker.execute {
             val err = runCatching {
                 interfaces.pushNow()
                 Tsnetlib.startForward(dir, HOSTNAME, target, port.toLong())
             }.exceptionOrNull() ?: return@execute
             main.post {
-                startError = err.message ?: err.toString()
+                // A queued start can fail after a later start or a stop, possibly of another
+                // service instance; only the current start's failure may stop the service.
+                if (gen != generation) return@post
+                val reason = err.message ?: err.toString()
+                startError = reason
                 stopForwarding()
+                getSystemService(NotificationManager::class.java)
+                    .notify(FAILURE_NOTIFICATION_ID, failureNotification(reason))
             }
         }
     }
@@ -94,6 +102,7 @@ class ForwardService : Service() {
     private fun shutDownNode() {
         if (!running) return
         running = false
+        generation++
         main.removeCallbacksAndMessages(null)
         interfaces.unwatch()
         worker.execute { Tsnetlib.stop() }
@@ -118,9 +127,6 @@ class ForwardService : Service() {
     private fun notification(status: ForwardStatus?): Notification {
         val headline = status?.headline(Settings(this).target) ?: "连接中…"
         val details = listOfNotNull(headline, status?.dialFailure()).joinToString("\n")
-        val open = PendingIntent.getActivity(
-            this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE,
-        )
         val stop = PendingIntent.getService(
             this, 1, Intent(this, ForwardService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE,
         )
@@ -131,10 +137,26 @@ class ForwardService : Service() {
             .setStyle(Notification.BigTextStyle().bigText(details))
             .setOngoing(true)
             .setOnlyAlertOnce(true)
-            .setContentIntent(open)
+            .setContentIntent(openScreen())
             .addAction(Notification.Action.Builder(Icon.createWithResource(this, R.drawable.ic_forward), "停止", stop).build())
             .build()
     }
+
+    private fun failureNotification(reason: String): Notification {
+        val text = "启动失败：$reason"
+        return Notification.Builder(this, CHANNEL)
+            .setSmallIcon(R.drawable.ic_forward)
+            .setContentTitle("tailfwd")
+            .setContentText(text)
+            .setStyle(Notification.BigTextStyle().bigText(text))
+            .setAutoCancel(true)
+            .setContentIntent(openScreen())
+            .build()
+    }
+
+    private fun openScreen(): PendingIntent = PendingIntent.getActivity(
+        this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE,
+    )
 
     companion object {
         private const val ACTION_STOP = "io.lynch.tailfwd.STOP"
@@ -142,9 +164,17 @@ class ForwardService : Service() {
         private const val HOSTNAME = "tailfwd-phone"
         private const val CHANNEL = "forward"
         private const val NOTIFICATION_ID = 1
+        // Not NOTIFICATION_ID: stopForeground's asynchronous cancel of that id could remove a
+        // failure notification posted right after it. The next start cancels this one instead.
+        private const val FAILURE_NOTIFICATION_ID = 2
 
         // One thread for all Tsnetlib start/stop calls, so a restart's Stop always lands before its Start.
         private val worker = Executors.newSingleThreadExecutor()
+
+        // Bumped by every start and stop (main thread only); a start's failure counts only while
+        // it is still current. This also keeps watch() / unwatch() paired: only the live instance
+        // with running == true ever reaches stopForwarding() from a failure.
+        private var generation = 0
 
         /** Whether the user has the forward switched on; the screen and the tile read it. */
         @Volatile
