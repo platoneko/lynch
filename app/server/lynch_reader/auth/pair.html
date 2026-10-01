@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>配对 lynch</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 16px/1.5 system-ui, sans-serif; max-width: 22rem; margin: 15vh auto 0; padding: 0 16px; }
+  input, button { font: inherit; width: 100%; box-sizing: border-box; padding: .6rem; margin-top: .75rem; }
+  input { letter-spacing: .15em; text-transform: uppercase; }
+  #err { color: #d33; min-height: 1.5em; }
+</style>
+</head>
+<body>
+<h1>配对这台设备</h1>
+<p>在服务器上运行 <code>just app-pair</code>，把显示的配对码填在下面。</p>
+<form id="form">
+  <input id="code" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false"
+         placeholder="XXXX-XXXX" required>
+  <button>配对</button>
+</form>
+<p id="err" role="alert"></p>
+<script>
+  const input = document.getElementById('code');
+  const err = document.getElementById('err');
+  // Prefilled from the link `just app-pair` prints; never submitted by itself.
+  input.value = new URLSearchParams(location.search).get('code') || '';
+  document.getElementById('form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    err.textContent = '';
+    try {
+      const res = await fetch('/api/pair', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: input.value }),
+      });
+      if (res.ok) { location.assign('/'); return; }
+      const body = await res.json().catch(() => ({}));
+      err.textContent = body.error || ('配对失败（' + res.status + '）');
+    } catch {
+      err.textContent = '连不上服务器';
+    }
+  });
+</script>
+</body>
+</html>

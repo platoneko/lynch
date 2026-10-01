@@ -8,11 +8,13 @@ from starlette.testclient import TestClient
 from lynch_reader.chat.routes import chat_lifespan, event_stream
 from lynch_reader.web import create_app
 from tests.chat_helpers import make_service, state_of, until
+from tests.conftest import paired_devices
 
 
 def client(repo, tmp_path, quotes):
     svc, _ = make_service(tmp_path)
-    return TestClient(create_app(repo, tmp_path / "no-dist", quotes, chat=svc)), svc
+    devices, cookies = paired_devices(tmp_path)
+    return TestClient(create_app(repo, tmp_path / "no-dist", quotes, devices, chat=svc), cookies=cookies), svc
 
 
 def test_create_list_send_and_errors(repo, tmp_path, quotes):
@@ -98,7 +100,8 @@ def test_a_quiet_stream_sends_a_heartbeat_the_page_can_see(tmp_path, monkeypatch
 
 
 def test_app_without_chat_has_no_chat_routes(repo, tmp_path, quotes):
-    c = TestClient(create_app(repo, tmp_path / "no-dist", quotes))
+    devices, cookies = paired_devices(tmp_path)
+    c = TestClient(create_app(repo, tmp_path / "no-dist", quotes, devices), cookies=cookies)
     assert c.get("/api/chats").status_code == 404
 
 

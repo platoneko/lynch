@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from lynch_reader.auth.store import DeviceStore
 from lynch_reader.catalog import Quote, QuoteCache
 from eval.lib.price import SessionQuote  # after catalog, which puts the repo root on sys.path
 
@@ -72,3 +73,9 @@ def clock() -> FakeClock:
 def quotes(fetch: FakeFetch, clock: FakeClock) -> QuoteCache:
     # One fake serves as both clocks unless a test needs them apart.
     return QuoteCache(fetch=fetch, monotonic=clock, wall=clock)
+
+
+def paired_devices(tmp_path: Path) -> tuple[DeviceStore, dict[str, str]]:
+    """A device store with one paired device, and the cookies a TestClient needs to be that device."""
+    store = DeviceStore(tmp_path / "app-auth" / "devices.json")
+    return store, {"lynch_device": store.redeem(store.create_pairing("test"))}

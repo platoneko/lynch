@@ -4,7 +4,7 @@ from starlette.testclient import TestClient
 
 from lynch_reader.catalog import QUOTE_REFRESH_MAX_AGE_S, QuoteCache
 from lynch_reader.web import create_app
-from tests.conftest import FakeFetch
+from tests.conftest import FakeFetch, paired_devices
 
 
 def client(repo, tmp_path, quotes, with_dist=True):
@@ -12,7 +12,8 @@ def client(repo, tmp_path, quotes, with_dist=True):
     if with_dist:
         dist.mkdir()
         (dist / "index.html").write_text("<!doctype html><title>lynch</title>", encoding="utf-8")
-    return TestClient(create_app(repo, dist, quotes))
+    devices, cookies = paired_devices(tmp_path)
+    return TestClient(create_app(repo, dist, quotes, devices), cookies=cookies)
 
 
 def test_tickers_json(repo, tmp_path, quotes):
