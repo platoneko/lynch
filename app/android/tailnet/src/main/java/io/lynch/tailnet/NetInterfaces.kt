@@ -19,7 +19,7 @@ internal object NetInterfaces {
         val all = NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
         for (ni in all) {
             val row = runCatching { row(ni) }
-                .onFailure { Log.w(InterfaceFeed.TAG,"skipping interface ${ni.name}", it) }
+                .onFailure { Log.w(InterfaceFeed.TAG, "skipping interface ${ni.name}", it) }
                 .getOrNull() ?: continue
             rows.put(row)
         }

@@ -5,7 +5,6 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -14,7 +13,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import android.service.quicksettings.TileService
 import io.lynch.tailnet.InterfaceFeed
 import java.io.File
 import java.util.concurrent.Executors
@@ -44,7 +42,16 @@ class ForwardService : Service() {
             return START_NOT_STICKY
         }
         // A null intent is the system re-creating us after a kill (START_STICKY): forward again.
-        goForeground(notification(null))
+        try {
+            goForeground(notification(null))
+        } catch (e: IllegalStateException) {
+            // Android 12+ forbids entering the foreground from the background
+            // (ForegroundServiceStartNotAllowedException); the sticky restart and a tile tap
+            // while the app is in the background can both hit it. Ask the user to start it.
+            notifyFailure("无法在后台启动转发，请打开 tailfwd 启动")
+            stopSelf()
+            return START_NOT_STICKY
+        }
         when {
             !running -> startForwarding()
             intent?.action == ACTION_RESTART -> {
@@ -64,7 +71,6 @@ class ForwardService : Service() {
 
     private fun startForwarding() {
         running = true
-        refreshTile()
         startError = null
         getSystemService(NotificationManager::class.java).cancel(FAILURE_NOTIFICATION_ID)
         interfaces.watch()
@@ -90,8 +96,7 @@ class ForwardService : Service() {
                 val reason = err.message ?: err.toString()
                 startError = reason
                 stopForwarding()
-                getSystemService(NotificationManager::class.java)
-                    .notify(FAILURE_NOTIFICATION_ID, failureNotification(reason))
+                notifyFailure("启动失败：$reason")
             }
         }
     }
@@ -105,16 +110,10 @@ class ForwardService : Service() {
     private fun shutDownNode() {
         if (!running) return
         running = false
-        refreshTile()
         generation++
         main.removeCallbacksAndMessages(null)
         interfaces.unwatch()
         worker.execute { Tsnetlib.stop() }
-    }
-
-    // The tile only redraws when asked; tell it whenever running flips.
-    private fun refreshTile() {
-        TileService.requestListeningState(this, ComponentName(this, ForwardTile::class.java))
     }
 
     // ── Step 2: keep the notification in step with the node ──
@@ -151,9 +150,9 @@ class ForwardService : Service() {
             .build()
     }
 
-    private fun failureNotification(reason: String): Notification {
-        val text = "启动失败：$reason"
-        return Notification.Builder(this, CHANNEL)
+    // Dismissible, and a tap opens the screen; the next start cancels it.
+    private fun notifyFailure(text: String) {
+        val n = Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_forward)
             .setContentTitle("tailfwd")
             .setContentText(text)
@@ -161,6 +160,7 @@ class ForwardService : Service() {
             .setAutoCancel(true)
             .setContentIntent(openScreen())
             .build()
+        getSystemService(NotificationManager::class.java).notify(FAILURE_NOTIFICATION_ID, n)
     }
 
     private fun openScreen(): PendingIntent = PendingIntent.getActivity(
