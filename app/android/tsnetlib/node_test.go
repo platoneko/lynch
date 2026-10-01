@@ -265,7 +265,9 @@ func TestStatusReportsDialErrorsPerForward(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	seen := map[string]bool{}
 	for _, f := range parseStatus(t).Forwards {
+		seen[f.ID] = true
 		switch f.ID {
 		case "orca":
 			if f.DialError == "" || f.DialErrorAt == 0 || f.Port != orca {
@@ -276,5 +278,8 @@ func TestStatusReportsDialErrorsPerForward(t *testing.T) {
 				t.Fatalf("lynch status = %+v, want no dial error and port %d", f, lynch)
 			}
 		}
+	}
+	if !seen["orca"] || !seen["lynch"] {
+		t.Fatalf("Status() = %s, want both orca and lynch", Status())
 	}
 }
