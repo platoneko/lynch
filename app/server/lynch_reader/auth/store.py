@@ -161,17 +161,20 @@ class DeviceStore:
 
     @contextmanager
     def _locked(self) -> Iterator[dict]:
-        """Read-modify-write: the yielded dict is written back unless the block raises.
+        """Read-modify-write: the yielded dict is written back if the block changed it and did not raise.
 
-        A corrupt file raises StoreCorrupt from the read, before anything is written.
+        A corrupt file raises StoreCorrupt from the read, before anything is written. An unchanged dict is
+        not written: /api/pair is open to unpaired callers, who must not be able to drive disk writes.
         """
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         fd = os.open(self._lock_path, os.O_RDWR | os.O_CREAT, 0o600)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
             data = self._read()
+            before = json.dumps(data, sort_keys=True)
             yield data
-            self._write(data)
+            if json.dumps(data, sort_keys=True) != before:
+                self._write(data)
         finally:
             os.close(fd)  # releases the flock
 

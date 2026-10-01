@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
@@ -59,6 +61,36 @@ def test_paired_device_gets_through(app_parts):
     assert c.get("/", headers=HTML).status_code == 200
 
 
+def assert_device_cookie(set_cookie: str, token: str | None = None) -> None:
+    parts = [p.strip() for p in set_cookie.split(";")]
+    name, _, value = parts[0].partition("=")
+    assert name == "lynch_device" and value and (token is None or value == token)
+    attrs = {p.lower() for p in parts[1:]}
+    assert {"httponly", "samesite=strict", "path=/", "max-age=315360000"} <= attrs
+    assert "secure" not in attrs
+
+
+def test_paired_page_load_renews_the_device_cookie(app_parts):
+    # Chromium and Android WebView cap Max-Age at 400 days; a device in use gets its cookie back each load.
+    app, _, cookies = app_parts
+    c = TestClient(app, cookies=cookies)
+    r = c.get("/", headers=HTML)
+    assert r.status_code == 200
+    assert_device_cookie(r.headers["set-cookie"], cookies["lynch_device"])
+
+
+def test_paired_api_call_does_not_renew_the_cookie(app_parts):
+    app, _, cookies = app_parts
+    r = TestClient(app, cookies=cookies).get("/api/tickers")
+    assert r.status_code == 200 and "set-cookie" not in r.headers
+
+
+def test_unpaired_page_load_gets_no_device_cookie(app_parts):
+    app, _, _ = app_parts
+    r = anon(app).get("/", headers=HTML)
+    assert r.status_code == 302 and "lynch_device" not in r.headers.get("set-cookie", "")
+
+
 def test_revoked_device_is_refused_at_once(app_parts):
     app, devices, cookies = app_parts
     c = TestClient(app, cookies=cookies, follow_redirects=False)
@@ -98,11 +130,7 @@ def test_pairing_with_the_code_sets_the_device_cookie(app_parts):
     c = TestClient(app, follow_redirects=False)
     r = c.post("/api/pair", json={"code": code})
     assert r.status_code == 204
-    set_cookie = r.headers["set-cookie"]
-    parts = [p.strip().lower() for p in set_cookie.split(";")]
-    assert parts[0].startswith("lynch_device=")
-    assert "httponly" in parts and "samesite=strict" in parts and "path=/" in parts
-    assert "max-age=315360000" in parts and "secure" not in parts
+    assert_device_cookie(r.headers["set-cookie"])
     assert c.get("/api/tickers").status_code == 200  # the client kept the cookie
     assert [d.name for d in devices.devices()] == ["test", "mac"]
 
@@ -146,6 +174,23 @@ def test_pairing_post_must_be_json(app_parts):
     r = anon(app).post("/api/pair", content=f'{{"code": "{code}"}}', headers={"Content-Type": "text/plain"})
     assert r.status_code == 415
     assert anon(app).post("/api/pair", json={"code": code}).status_code == 204  # the code was not spent
+
+
+TOO_LARGE = {"error": "请求体过大"}
+
+
+def test_pairing_post_over_one_kib_is_refused(app_parts):
+    app, devices, _ = app_parts
+    code = devices.create_pairing("x")
+    c = anon(app)
+    big = {"code": code, "pad": "x" * 2048}
+    r = c.post("/api/pair", json=big)
+    assert r.status_code == 413 and r.json() == TOO_LARGE
+    # Chunked, so no Content-Length to go by.
+    body = json.dumps(big).encode()
+    r = c.post("/api/pair", content=iter([body[:1000], body[1000:]]), headers={"Content-Type": "application/json"})
+    assert r.status_code == 413 and r.json() == TOO_LARGE
+    assert c.post("/api/pair", json={"code": code}).status_code == 204  # the code was not spent
 
 
 def test_only_the_two_pairing_routes_are_open(app_parts):

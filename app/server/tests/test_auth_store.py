@@ -90,6 +90,28 @@ def test_no_pending_code_is_invalid(store):
         store.redeem("ABCD-EFGH")
 
 
+def _file_id(path):
+    st = path.stat()
+    return st.st_ino, st.st_mtime_ns
+
+
+def test_a_no_op_does_not_create_the_file(store, path):
+    # /api/pair is open to unpaired callers; a request that changes nothing must not cost a disk write.
+    with pytest.raises(InvalidCode):
+        store.redeem("ABCD-EFGH")
+    assert store.revoke("00000000") is False
+    assert not path.exists()
+
+
+def test_a_no_op_leaves_the_file_untouched(store, path):
+    store.redeem(store.create_pairing("x"))
+    before = _file_id(path)
+    with pytest.raises(InvalidCode):
+        store.redeem("ABCD-EFGH")  # no pending code
+    assert store.revoke("00000000") is False
+    assert _file_id(path) == before
+
+
 def test_second_device_keeps_the_first(store):
     first = store.redeem(store.create_pairing("phone"))
     second = store.redeem(store.create_pairing("mac"))

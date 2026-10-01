@@ -32,6 +32,19 @@ def test_pair_without_a_name_uses_the_time(store, capsys):
     assert re.fullmatch(r"设备 \d{4}-\d{2}-\d{2} \d{2}:\d{2}", store.devices()[0].name)
 
 
+def test_pair_name_after_double_dash_may_start_with_a_dash(store, capsys):
+    # `just app-pair` passes the name after `--`, so a leading "-" is not read as an option.
+    assert main(["pair", "--", "-手机"], store) == 0
+    store.redeem(re.search(CODE, capsys.readouterr().out).group(0))
+    assert [d.name for d in store.devices()] == ["-手机"]
+
+
+def test_pair_empty_name_after_double_dash_uses_the_time(store, capsys):
+    assert main(["pair", "--", ""], store) == 0
+    store.redeem(re.search(CODE, capsys.readouterr().out).group(0))
+    assert re.fullmatch(r"设备 \d{4}-\d{2}-\d{2} \d{2}:\d{2}", store.devices()[0].name)
+
+
 def test_devices_lists_id_time_and_name(store, capsys):
     assert main(["devices"], store) == 0
     assert "还没有" in capsys.readouterr().out
