@@ -323,6 +323,21 @@ app-status:
     code=$(curl --noproxy '*' -sS -o /dev/null -w '%{http_code}' "http://{{app_host}}:{{app_port}}/api/tickers" || true)
     echo "GET /api/tickers -> ${code:-unreachable}"
 
+[doc('生成一次性配对码（10 分钟有效），新设备在 /pair 输入；name 省略时用当前时间')]
+app-pair name="":
+    @(cd app/server && uv sync --quiet)
+    @PYTHONPATH=app/server app/server/.venv/bin/python -m lynch_reader.auth pair {{quote(name)}}
+
+[doc('列出已配对设备（id、配对时间、名字）')]
+app-devices:
+    @(cd app/server && uv sync --quiet)
+    @PYTHONPATH=app/server app/server/.venv/bin/python -m lynch_reader.auth devices
+
+[doc('吊销一台设备，立即生效')]
+app-revoke id:
+    @(cd app/server && uv sync --quiet)
+    @PYTHONPATH=app/server app/server/.venv/bin/python -m lynch_reader.auth revoke {{quote(id)}}
+
 [doc('构建手机阅读 app 的 debug APK')]
 app-apk:
     app/android/build-apk.sh

@@ -40,7 +40,7 @@ python3 -m unittest discover -s eval/lib -t . -p 'test_*.py'
 - app 服务端（`app/server`）自身不写 `frameworks/`、`output/bands/`；**对话**会起 Claude Code 子进程（`claude -p`，走本机登录的订阅额度），它像普通 Claude Code 研究会话一样可以跑任意 Bash（禁用清单除外：sudo、会丢工作或推出去的 git、`longbridge` 非查询命令），Write / Edit 只限 `frameworks/`，临时演算放 `frameworks/_local/tmp/`（不提交）。启动参数、白名单与禁用清单的唯一真源是 `app/server/lynch_reader/chat/config.py`。
 - app 对话是用户在场、逐轮确认的研究对话，**不属于**框架契约所禁止的「弱流水线」；落盘仍须用户明确说「可以落盘」，并走 `sediment-framework`。
 - 对话历史就是 Claude Code 的会话记录（`~/.claude/projects/<slug>/<id>.jsonl`，30 天清理）；`output/chat/index.json` 只是列表索引。
-- 服务端无鉴权，只绑 tailnet 地址——前提是 tailnet 里只有用户自己的设备。
+- 服务端只放行已配对设备：设备 cookie 用一次性配对码换取（`just app-pair [设备名]` 生成，10 分钟有效；`just app-devices` 查看，`just app-revoke <id>` 吊销，立即生效），存于 `output/app-auth/`（只存哈希，不提交）；仍只绑 tailnet 地址。
 - 白名单与禁用清单是护栏，不是沙箱：agent 能在本机执行任意代码（`bash -c` 或脚本就能绕过禁用清单），所以只能由用户本人驱动对话。
 - 白名单外的调用由服务端代答（`--permission-prompt-tool stdio`）：只有改 `frameworks/.claude/skills/sediment-framework/` 的 Edit / Write 推到手机逐处审批（看 diff 点允许 / 拒绝），其余一律拒绝。规则与 diff 在 `app/server/lynch_reader/chat/approvals.py`。
 - app 对话的行情走 `longbridge` 命令行（和 `eval/lib`、日报共用它的登录），禁用清单拦下单、账户、登录与升级等非查询子命令（CLI 日后新增的子命令要补进清单）；登录过期时在终端 `longbridge auth login`。
