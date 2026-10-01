@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -13,6 +14,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.service.quicksettings.TileService
 import io.lynch.tailnet.InterfaceFeed
 import java.io.File
 import java.util.concurrent.Executors
@@ -62,6 +64,7 @@ class ForwardService : Service() {
 
     private fun startForwarding() {
         running = true
+        refreshTile()
         startError = null
         getSystemService(NotificationManager::class.java).cancel(FAILURE_NOTIFICATION_ID)
         interfaces.watch()
@@ -102,10 +105,16 @@ class ForwardService : Service() {
     private fun shutDownNode() {
         if (!running) return
         running = false
+        refreshTile()
         generation++
         main.removeCallbacksAndMessages(null)
         interfaces.unwatch()
         worker.execute { Tsnetlib.stop() }
+    }
+
+    // The tile only redraws when asked; tell it whenever running flips.
+    private fun refreshTile() {
+        TileService.requestListeningState(this, ComponentName(this, ForwardTile::class.java))
     }
 
     // ── Step 2: keep the notification in step with the node ──
