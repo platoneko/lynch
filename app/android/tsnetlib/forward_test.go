@@ -225,8 +225,9 @@ func TestForwardCloseDropsLiveConnections(t *testing.T) {
 // Stop while a dial waits for the node (e.g. before login) must not hang, and
 // the cut-short dial is not a failure worth showing.
 func TestForwardCloseCancelsPendingDial(t *testing.T) {
-	dialing := make(chan struct{})
+	dialing, returned := make(chan struct{}), make(chan struct{})
 	hang := func(ctx context.Context, _, _ string) (net.Conn, error) {
+		defer close(returned)
 		close(dialing)
 		<-ctx.Done()
 		return nil, ctx.Err()
@@ -240,4 +241,11 @@ func TestForwardCloseCancelsPendingDial(t *testing.T) {
 	}
 	f.close()
 	expectClosed(t, c)
+	// The client closes either way (close drops tracked connections); only the dial
+	// returning proves close cancelled it.
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("pending dial was not cancelled")
+	}
 }
