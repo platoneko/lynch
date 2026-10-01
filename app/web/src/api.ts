@@ -1,7 +1,13 @@
 import type { Catalog } from './types';
 
+/** 401 = this device was never paired or was revoked; the server's pairing page is the only way back in. */
+function pairIfUnpaired(res: Response): void {
+  if (res.status === 401) window.location.assign('/pair');
+}
+
 export async function get(path: string): Promise<Response> {
   const res = await fetch(path, { cache: 'no-store' });
+  pairIfUnpaired(res);
   // The phone proxy explains a dead server in the body; surface it verbatim.
   if (!res.ok) throw new Error(`${res.status} ${(await res.text()).slice(0, 300)}`);
   return res;
@@ -18,6 +24,7 @@ export async function post(path: string, body: unknown = {}): Promise<Response> 
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
+  pairIfUnpaired(res);
   if (!res.ok) {
     const text = await res.text();
     let reason = text.slice(0, 300);
