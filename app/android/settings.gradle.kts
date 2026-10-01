@@ -6,4 +6,4 @@ dependencyResolutionManagement {
     repositories { google(); mavenCentral() }
 }
 rootProject.name = "lynch-reader"
-include(":app", ":tailnet")
+include(":app", ":tailnet", ":tailfwd")

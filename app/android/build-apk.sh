@@ -15,4 +15,4 @@ cd "$here"
 export JAVA_HOME="${ANDROID_JAVA_HOME:-$HOME/.local/opt/jdk-17}"
 echo "sdk.dir=$ANDROID_HOME" > local.properties
 ./gradlew "${proxy_opts[@]}" --no-daemon assembleDebug
-ls -l app/build/outputs/apk/debug/app-debug.apk
+ls -l app/build/outputs/apk/debug/app-debug.apk tailfwd/build/outputs/apk/debug/tailfwd-debug.apk

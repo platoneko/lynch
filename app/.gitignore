@@ -7,4 +7,5 @@ android/build/
 android/app/build/
 android/libs/
 android/tailnet/build/
+android/tailfwd/build/
 android/local.properties
