@@ -2,7 +2,6 @@ package io.lynch.reader
 
 import android.app.Activity
 import android.content.Intent
-import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -38,6 +37,8 @@ class MainActivity : Activity() {
     private lateinit var portInput: EditText
     private lateinit var web: WebView
     private var port = 0 // the loopback port the WebView is pinned to
+    // Cleared only by load()/retry(): Chromium commits an error page for a failed navigation and
+    // reports its start/finish after onReceivedError, which must not bring the WebView back.
     private var mainFrameFailed = false
     private var clearHistoryOnLoad = false // set when the port changes
 
@@ -61,12 +62,15 @@ class MainActivity : Activity() {
             clearHistoryOnLoad = true
         }
         showPanel("连接中…")
+        mainFrameFailed = false
         web.loadUrl("http://127.0.0.1:$port/")
     }
 
+    // loadUrl, not reload: a failed navigation may have committed no entry for reload to repeat.
     private fun retry() {
         showPanel("连接中…")
-        web.reload()
+        mainFrameFailed = false
+        web.loadUrl(web.url ?: "http://127.0.0.1:$port/")
     }
 
     private fun configureWeb(w: WebView) {
@@ -89,10 +93,6 @@ class MainActivity : Activity() {
                     clearHistoryOnLoad = false
                     view.clearHistory()
                 }
-            }
-
-            override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
-                mainFrameFailed = false
             }
 
             // Network-level failure only (an HTTP error status still renders the server's page):
