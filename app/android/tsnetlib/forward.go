@@ -2,10 +2,38 @@ package tsnetlib
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"sync"
+	"time"
 )
+
+type dialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
+
+// tsnet's Dial blocks until the node is Running, so an unbounded dial would hold a
+// client's connection open for the whole login. A var only so tests can shorten it.
+var dialTimeout = 15 * time.Second
+
+// Right after the node reaches Running its netmap may not be in yet, so the
+// MagicDNS target falls through to system DNS and "no such host" (every cold
+// start). Redial at this interval until the name resolves or the dial times out.
+var lookupRetry = 300 * time.Millisecond
+
+func dialUntilResolved(ctx context.Context, dial dialFunc, network, addr string) (net.Conn, error) {
+	for {
+		conn, err := dial(ctx, network, addr)
+		var dnsErr *net.DNSError
+		if err == nil || !errors.As(err, &dnsErr) || !dnsErr.IsNotFound {
+			return conn, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, err // the lookup error says more than "deadline exceeded"
+		case <-time.After(lookupRetry):
+		}
+	}
+}
 
 // forwarder pipes each loopback connection to the one fixed target over dial
 // (the tailnet in production), byte for byte; it never reads the stream, so the
@@ -15,7 +43,7 @@ type forwarder struct {
 	dial        dialFunc
 	onDialError func(error)
 
-	// ctx ends on close, so a dial still waiting for the node gives up at Stop.
+	// ctx ends on close, so a dial still waiting for the node gives up when the forward closes.
 	ctx    context.Context
 	cancel context.CancelFunc
 
@@ -36,7 +64,7 @@ func (f *forwarder) serve(ln net.Listener) {
 	for {
 		c, err := ln.Accept()
 		if err != nil {
-			return // Stop closed the listener
+			return // the forward was closed
 		}
 		go f.handle(c)
 	}
@@ -53,7 +81,7 @@ func (f *forwarder) handle(client net.Conn) {
 	cancel()
 	if err != nil {
 		client.Close()
-		if f.ctx.Err() == nil { // a dial cut short by Stop is not a failure
+		if f.ctx.Err() == nil { // a dial cut short by close is not a failure
 			f.onDialError(err)
 		}
 		return

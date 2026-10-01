@@ -1,11 +1,9 @@
 package tsnetlib
 
 import (
+	"encoding/json"
 	"fmt"
-	"io"
 	"net"
-	"net/http"
-	"net/http/cookiejar"
 	"strconv"
 	"strings"
 	"testing"
@@ -23,27 +21,65 @@ func freePort(t *testing.T) int {
 	return ln.Addr().(*net.TCPAddr).Port
 }
 
+func portFree(port int) bool {
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		return false
+	}
+	ln.Close()
+	return true
+}
+
+func accepts(port int) bool {
+	c, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		return false
+	}
+	c.Close()
+	return true
+}
+
+func startNode(t *testing.T) {
+	t.Helper()
+	if err := StartNode(t.TempDir(), "tailfwd-phone"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(Stop)
+}
+
+func mustOpen(t *testing.T, id string, port int) {
+	t.Helper()
+	if err := OpenForward(id, port, "127.0.0.1:1"); err != nil {
+		t.Fatalf("OpenForward(%s, %d): %v", id, port, err)
+	}
+}
+
+func parseStatus(t *testing.T) status {
+	t.Helper()
+	var st status
+	if err := json.Unmarshal([]byte(Status()), &st); err != nil {
+		t.Fatal(err)
+	}
+	return st
+}
+
+func openIDs(t *testing.T) []string {
+	t.Helper()
+	var ids []string
+	for _, f := range parseStatus(t).Forwards {
+		ids = append(ids, f.ID)
+	}
+	return ids
+}
+
 func TestStoppedState(t *testing.T) {
 	if got := Status(); got != `{"state":"stopped"}` {
 		t.Fatalf("Status() = %s", got)
 	}
-	if BootURL() != "" {
-		t.Fatal("BootURL before Start must be empty")
+	if err := OpenForward("orca", freePort(t), "127.0.0.1:1"); err == nil {
+		t.Fatal("OpenForward without a node must fail")
 	}
-	if err := Start(t.TempDir(), "lynch-phone", "", freePort(t)); err == nil {
-		t.Fatal("empty target must be rejected")
-	}
-}
-
-// A rotation or quick back-out can Stop while the node is still inside srv.Start.
-func TestStopRightAfterStart(t *testing.T) {
-	if err := Start(t.TempDir(), "lynch-phone", "127.0.0.1:1", freePort(t)); err != nil {
-		t.Fatal(err)
-	}
-	Stop()
-	if got := Status(); got != `{"state":"stopped"}` {
-		t.Fatalf("Status() after Stop = %s", got)
-	}
+	CloseForward("orca") // no node: a no-op
 }
 
 func TestStateOf(t *testing.T) {
@@ -57,8 +93,8 @@ func TestStateOf(t *testing.T) {
 	}
 }
 
-func TestEmptyHostnameRejected(t *testing.T) {
-	if err := Start(t.TempDir(), "", "127.0.0.1:1", freePort(t)); err == nil {
+func TestStartNodeRejectsEmptyHostname(t *testing.T) {
+	if err := StartNode(t.TempDir(), ""); err == nil {
 		Stop()
 		t.Fatal("empty hostname must be rejected")
 	}
@@ -67,129 +103,156 @@ func TestEmptyHostnameRejected(t *testing.T) {
 	}
 }
 
-func TestPortOutOfRangeRejected(t *testing.T) {
-	for _, port := range []int{0, 80, 70000} {
-		if err := Start(t.TempDir(), "lynch-phone", "127.0.0.1:1", port); err == nil {
-			Stop()
-			t.Fatalf("port %d must be rejected", port)
-		}
-		if got := Status(); got != `{"state":"stopped"}` {
-			t.Fatalf("Status() after rejected port %d = %s", port, got)
-		}
+func TestStartNodeTwiceFails(t *testing.T) {
+	startNode(t)
+	if err := StartNode(t.TempDir(), "tailfwd-phone"); err == nil {
+		t.Fatal("a second StartNode must fail")
 	}
 }
 
-func TestBusyPortFails(t *testing.T) {
-	busy, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
+// A quick back-out can Stop while the node is still inside srv.Start.
+func TestStopRightAfterStartNode(t *testing.T) {
+	if err := StartNode(t.TempDir(), "tailfwd-phone"); err != nil {
 		t.Fatal(err)
-	}
-	defer busy.Close()
-	port := busy.Addr().(*net.TCPAddr).Port
-
-	err = Start(t.TempDir(), "lynch-phone", "127.0.0.1:1", port)
-	if err == nil {
-		Stop()
-		t.Fatalf("Start on busy port %d must fail", port)
-	}
-	if !strings.Contains(err.Error(), strconv.Itoa(port)) {
-		t.Fatalf("error does not name the port %d: %v", port, err)
-	}
-	if got := Status(); got != `{"state":"stopped"}` {
-		t.Fatalf("Status() after failed Start = %s", got)
-	}
-}
-
-// The origin is stable across restarts, so a pooled keep-alive connection
-// outlives Stop; the new session's boot must not be served on it by the old gate.
-func TestRestartOnSamePortAcceptsNewBoot(t *testing.T) {
-	dir, port := t.TempDir(), freePort(t)
-	jar, err := cookiejar.New(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	client := &http.Client{
-		Jar:           jar,
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}
-
-	for _, round := range []string{"first", "second"} {
-		if err := Start(dir, "lynch-phone", "127.0.0.1:1", port); err != nil {
-			t.Fatalf("%s Start: %v", round, err)
-		}
-		boot := BootURL()
-		if !strings.HasPrefix(boot, fmt.Sprintf("http://127.0.0.1:%d/", port)) {
-			Stop()
-			t.Fatalf("%s BootURL %q not on port %d", round, boot, port)
-		}
-		resp, err := client.Get(boot)
-		if err != nil {
-			Stop()
-			t.Fatalf("%s boot: %v", round, err)
-		}
-		// Drain before Close so the connection goes back to the client's pool.
-		io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
-		Stop()
-		if resp.StatusCode != http.StatusFound {
-			t.Fatalf("%s boot: got %d, want 302", round, resp.StatusCode)
-		}
-	}
-}
-
-func TestStartForwardRejectsEmptyHostname(t *testing.T) {
-	if err := StartForward(t.TempDir(), "", "127.0.0.1:1", freePort(t)); err == nil {
-		Stop()
-		t.Fatal("empty hostname must be rejected")
-	}
-}
-
-// A target without a port would start fine and then fail every dial; refuse it up front.
-func TestStartForwardRejectsTargetWithoutPort(t *testing.T) {
-	for _, target := range []string{"", "pivot-home.tail090ab2.ts.net"} {
-		if err := StartForward(t.TempDir(), "tailfwd-phone", target, freePort(t)); err == nil {
-			Stop()
-			t.Fatalf("target %q must be rejected", target)
-		}
-		if got := Status(); got != `{"state":"stopped"}` {
-			t.Fatalf("Status() after rejected target %q = %s", target, got)
-		}
-	}
-}
-
-// Forward mode has no WebView to boot, and Stop must free the fixed port at once
-// so a settings change can restart on it.
-func TestStartForwardStopFreesPort(t *testing.T) {
-	port := freePort(t)
-	if err := StartForward(t.TempDir(), "tailfwd-phone", "127.0.0.1:1", port); err != nil {
-		t.Fatal(err)
-	}
-	if BootURL() != "" {
-		Stop()
-		t.Fatal("forward mode must not have a boot URL")
-	}
-	if got := Status(); !strings.Contains(got, fmt.Sprintf(`"port":%d`, port)) {
-		Stop()
-		t.Fatalf("Status() = %s, want port %d", got, port)
 	}
 	Stop()
-	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-	if err != nil {
-		t.Fatalf("port %d not free right after Stop: %v", port, err)
+	if got := Status(); got != `{"state":"stopped"}` {
+		t.Fatalf("Status() after Stop = %s", got)
 	}
-	ln.Close()
 }
 
-// Before login the node cannot dial; the failure must reach Status for the app to show.
-func TestStartForwardReportsDialErrorInStatus(t *testing.T) {
-	defer func(d time.Duration) { dialTimeout = d }(dialTimeout)
-	dialTimeout = 50 * time.Millisecond
+func TestOpenForwardRejectsBadArguments(t *testing.T) {
+	startNode(t)
 	port := freePort(t)
-	if err := StartForward(t.TempDir(), "tailfwd-phone", "127.0.0.1:1", port); err != nil {
+	for _, c := range []struct {
+		id     string
+		port   int
+		target string
+	}{
+		{"", port, "127.0.0.1:1"},
+		{"orca", 0, "127.0.0.1:1"}, {"orca", 80, "127.0.0.1:1"}, {"orca", 70000, "127.0.0.1:1"},
+		{"orca", port, ""}, {"orca", port, "pivot-home.tail090ab2.ts.net"}, {"orca", port, "pivot-home:"},
+		{"orca", port, ":6768"}, {"orca", port, "pivot-home:http"}, {"orca", port, "pivot-home:0"},
+		{"orca", port, "pivot-home:70000"},
+	} {
+		if err := OpenForward(c.id, c.port, c.target); err == nil {
+			t.Fatalf("OpenForward(%q, %d, %q) must be rejected", c.id, c.port, c.target)
+		}
+	}
+	if ids := openIDs(t); len(ids) != 0 {
+		t.Fatalf("open forwards after rejections: %v", ids)
+	}
+	if !portFree(port) {
+		t.Fatalf("port %d left listening by a rejected open", port)
+	}
+}
+
+func TestTwoForwardsCloseOneKeepsTheOther(t *testing.T) {
+	startNode(t)
+	orca, lynch := freePort(t), freePort(t)
+	mustOpen(t, "orca", orca)
+	mustOpen(t, "lynch", lynch)
+	if !accepts(orca) || !accepts(lynch) {
+		t.Fatal("both forwards must accept connections")
+	}
+	if got := openIDs(t); strings.Join(got, ",") != "lynch,orca" {
+		t.Fatalf("open forwards = %v, want [lynch orca] (sorted by id)", got)
+	}
+	CloseForward("orca")
+	if !portFree(orca) {
+		t.Fatalf("port %d not free right after CloseForward", orca)
+	}
+	if !accepts(lynch) {
+		t.Fatal("closing orca must not touch lynch")
+	}
+	if got := openIDs(t); strings.Join(got, ",") != "lynch" {
+		t.Fatalf("open forwards = %v, want [lynch]", got)
+	}
+}
+
+func TestOpenForwardSamePortTwiceFails(t *testing.T) {
+	startNode(t)
+	port := freePort(t)
+	mustOpen(t, "orca", port)
+	err := OpenForward("lynch", port, "127.0.0.1:1")
+	if err == nil {
+		t.Fatal("a second forward on the same port must fail")
+	}
+	if !strings.Contains(err.Error(), strconv.Itoa(port)) || !strings.Contains(err.Error(), "被占用") {
+		t.Fatalf("error %q should say port %d is taken", err, port)
+	}
+	if !accepts(port) {
+		t.Fatal("the first forward must keep serving")
+	}
+	if got := openIDs(t); strings.Join(got, ",") != "orca" {
+		t.Fatalf("open forwards = %v, want [orca]", got)
+	}
+}
+
+func TestOpenForwardSameIDTwiceFails(t *testing.T) {
+	startNode(t)
+	first, second := freePort(t), freePort(t)
+	mustOpen(t, "orca", first)
+	if err := OpenForward("orca", second, "127.0.0.1:1"); err == nil {
+		t.Fatal("the same id twice must fail")
+	}
+	if !portFree(second) {
+		t.Fatalf("port %d left listening by a rejected open", second)
+	}
+}
+
+// Editing a forward is a close then an open of the same id, often on the same port.
+func TestReopenSameIDAndPortAfterClose(t *testing.T) {
+	startNode(t)
+	port := freePort(t)
+	mustOpen(t, "orca", port)
+	CloseForward("orca")
+	mustOpen(t, "orca", port)
+	if !accepts(port) {
+		t.Fatal("reopened forward must accept")
+	}
+}
+
+func TestCloseForwardUnknownIDIsANoOp(t *testing.T) {
+	startNode(t)
+	port := freePort(t)
+	mustOpen(t, "orca", port)
+	CloseForward("nope")
+	if !accepts(port) {
+		t.Fatal("closing an unknown id must not touch other forwards")
+	}
+}
+
+func TestStopClosesEveryForward(t *testing.T) {
+	if err := StartNode(t.TempDir(), "tailfwd-phone"); err != nil {
 		t.Fatal(err)
 	}
-	defer Stop()
-	c, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	orca, lynch := freePort(t), freePort(t)
+	mustOpen(t, "orca", orca)
+	mustOpen(t, "lynch", lynch)
+	Stop()
+	if !portFree(orca) || !portFree(lynch) {
+		t.Fatal("Stop must free every forward's port at once")
+	}
+	if got := Status(); got != `{"state":"stopped"}` {
+		t.Fatalf("Status() after Stop = %s", got)
+	}
+	// The next node starts with no forwards.
+	startNode(t)
+	if ids := openIDs(t); len(ids) != 0 {
+		t.Fatalf("a new node starts with forwards %v", ids)
+	}
+}
+
+// Before login the node cannot dial; the failure must be listed under that forward only.
+func TestStatusReportsDialErrorsPerForward(t *testing.T) {
+	defer func(d time.Duration) { dialTimeout = d }(dialTimeout)
+	dialTimeout = 50 * time.Millisecond
+	startNode(t)
+	orca, lynch := freePort(t), freePort(t)
+	mustOpen(t, "orca", orca)
+	mustOpen(t, "lynch", lynch)
+	c, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", orca))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,11 +261,20 @@ func TestStartForwardReportsDialErrorInStatus(t *testing.T) {
 	deadline := time.Now().Add(10 * time.Second)
 	for !strings.Contains(Status(), `"dial_error":`) {
 		if time.Now().After(deadline) {
-			t.Fatalf("Status() = %s, want dial_error", Status())
+			t.Fatalf("Status() = %s, want a dial_error", Status())
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if got := Status(); !strings.Contains(got, `"dial_error_at":`) {
-		t.Fatalf("Status() = %s, want dial_error_at", got)
+	for _, f := range parseStatus(t).Forwards {
+		switch f.ID {
+		case "orca":
+			if f.DialError == "" || f.DialErrorAt == 0 || f.Port != orca {
+				t.Fatalf("orca status = %+v, want its dial error, time and port %d", f, orca)
+			}
+		case "lynch":
+			if f.DialError != "" || f.DialErrorAt != 0 || f.Port != lynch {
+				t.Fatalf("lynch status = %+v, want no dial error and port %d", f, lynch)
+			}
+		}
 	}
 }

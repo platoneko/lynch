@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"sync"
+	"syscall"
 	"time"
 
 	"tailscale.com/logtail"
@@ -17,70 +19,53 @@ import (
 )
 
 var (
+	// mu guards cur and the current session's forward table.
 	mu  sync.Mutex
 	cur *session
 )
 
-// frontend serves the loopback port; each Start mode supplies its own.
-type frontend interface {
-	serve(ln net.Listener)
-	// close drops every connection the frontend holds, so the fixed port can be
-	// listened on again right after Stop.
-	close()
-}
-
+// session is one running node and the named forwards that share it (and its login).
 type session struct {
-	srv    *tsnet.Server
-	ln     net.Listener
-	front  frontend
-	secret string // "" when there is no WebView to boot
-	done   chan struct{}
+	srv  *tsnet.Server
+	done chan struct{}
 	// started closes once srv.Start has returned: tsnet.Server.Close must not
 	// run before or concurrently with Start.
-	started chan struct{}
+	started  chan struct{}
+	forwards map[string]*forward // by id; guarded by the package mu
+
+	mu      sync.Mutex // guards the node state below
+	state   string
+	authURL string
+	errMsg  string
+}
+
+// forward is one named loopback port and the forwarder behind it.
+type forward struct {
+	ln net.Listener
+	f  *forwarder
 
 	mu        sync.Mutex
-	state     string
-	authURL   string
-	errMsg    string
 	dialErr   string
 	dialErrAt int64 // Unix ms of dialErr
 }
 
 type status struct {
-	State       string `json:"state"`
-	AuthURL     string `json:"auth_url,omitempty"`
-	Port        int    `json:"port,omitempty"`
-	Error       string `json:"error,omitempty"`
+	State    string          `json:"state"`
+	AuthURL  string          `json:"auth_url,omitempty"`
+	Error    string          `json:"error,omitempty"`
+	Forwards []forwardStatus `json:"forwards,omitempty"`
+}
+
+type forwardStatus struct {
+	ID          string `json:"id"`
+	Port        int    `json:"port"`
 	DialError   string `json:"dial_error,omitempty"`
 	DialErrorAt int64  `json:"dial_error_at,omitempty"`
 }
 
-// Start brings up the app-private tsnet node and the gated loopback HTTP proxy to target.
-// It listens on 127.0.0.1:port and returns at once; progress is read through Status.
-func Start(dataDir, hostname, target string, port int) error {
-	secret, err := newSecret()
-	if err != nil {
-		return err
-	}
-	return start(dataDir, hostname, target, port, secret, func(srv *tsnet.Server, _ *session) frontend {
-		return httpFrontend{&http.Server{Handler: newGate(secret, newProxy(target, srv.Dial))}}
-	})
-}
-
-// StartForward brings up the node and a raw TCP forward from 127.0.0.1:port to target.
-// Anything on the phone can reach the port, so the client must bring its own auth.
-func StartForward(dataDir, hostname, target string, port int) error {
-	if _, _, err := net.SplitHostPort(target); err != nil {
-		return fmt.Errorf("目标地址 %q 要写成 主机:端口：%w", target, err)
-	}
-	return start(dataDir, hostname, target, port, "", func(srv *tsnet.Server, s *session) frontend {
-		return newForwarder(target, srv.Dial, s.setDialError)
-	})
-}
-
-func start(dataDir, hostname, target string, port int, secret string,
-	newFront func(srv *tsnet.Server, s *session) frontend) error {
+// StartNode brings up the app-private tsnet node and returns at once; progress is
+// read through Status. Forwards are opened on it with OpenForward.
+func StartNode(dataDir, hostname string) error {
 	mu.Lock()
 	defer mu.Unlock()
 	if cur != nil {
@@ -89,14 +74,8 @@ func start(dataDir, hostname, target string, port int, secret string,
 	if hostname == "" {
 		return errors.New("hostname is empty")
 	}
-	if target == "" {
-		return errors.New("server address is empty")
-	}
-	if port < 1024 || port > 65535 {
-		return fmt.Errorf("本机端口 %d 超出 1024–65535，请在设置里换一个端口", port)
-	}
 
-	// Step 1: keep tsnet's state and logs inside the app-private directory.
+	// Keep tsnet's state and logs inside the app-private directory.
 	logsDir := filepath.Join(dataDir, "logs")
 	if err := os.MkdirAll(logsDir, 0o700); err != nil {
 		return err
@@ -106,26 +85,18 @@ func start(dataDir, hostname, target string, port int, secret string,
 		return err
 	}
 	logtail.Disable() // never upload logs from the phone node
-	srv := &tsnet.Server{
-		Dir:      filepath.Join(dataDir, "tsnet"),
-		Hostname: hostname,
-		Logf:     func(string, ...any) {},
-		UserLogf: func(string, ...any) {},
-	}
-
-	// Step 2: the frontend listens right away; dials simply fail until the node runs.
-	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-	if err != nil {
-		return fmt.Errorf("本机端口 %d 无法使用（可能被其他 app 占用），请在设置里换一个端口：%w", port, err)
-	}
 	s := &session{
-		srv: srv, ln: ln, secret: secret,
-		done: make(chan struct{}), started: make(chan struct{}), state: "starting",
+		srv: &tsnet.Server{
+			Dir:      filepath.Join(dataDir, "tsnet"),
+			Hostname: hostname,
+			Logf:     func(string, ...any) {},
+			UserLogf: func(string, ...any) {},
+		},
+		done:     make(chan struct{}),
+		started:  make(chan struct{}),
+		forwards: map[string]*forward{},
+		state:    "starting",
 	}
-	s.front = newFront(srv, s)
-	go s.front.serve(ln)
-
-	// Step 3: bring the node up and keep Status current in the background.
 	go s.run()
 	cur = s
 	return nil
@@ -187,19 +158,11 @@ func (s *session) set(state, authURL, errMsg string) {
 	s.state, s.authURL, s.errMsg = state, authURL, errMsg
 }
 
-func (s *session) setDialError(err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.dialErr, s.dialErrAt = err.Error(), time.Now().UnixMilli()
-}
-
 func (s *session) isRunning() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.state == "running"
 }
-
-func (s *session) port() int { return s.ln.Addr().(*net.TCPAddr).Port }
 
 func currentSession() *session {
 	mu.Lock()
@@ -207,46 +170,120 @@ func currentSession() *session {
 	return cur
 }
 
-// Status reports progress as JSON for the Kotlin shell.
+// OpenForward listens on 127.0.0.1:port at once and pipes each connection to
+// target over the node; until the node is up a connection waits for its dial
+// (see dialTimeout). Anything on the phone can reach the port, so the client
+// must bring its own auth. A refusal leaves every other forward as it was.
+func OpenForward(id string, port int, target string) error {
+	if id == "" {
+		return errors.New("forward id is empty")
+	}
+	if port < 1024 || port > 65535 {
+		return fmt.Errorf("本机端口 %d 超出 1024–65535", port)
+	}
+	if err := checkTarget(target); err != nil {
+		return err
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if cur == nil {
+		return errors.New("节点未启动")
+	}
+	if _, ok := cur.forwards[id]; ok {
+		return fmt.Errorf("转发 %s 已经打开", id)
+	}
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		if errors.Is(err, syscall.EADDRINUSE) {
+			return fmt.Errorf("端口 %d 被占用", port)
+		}
+		return fmt.Errorf("端口 %d 无法使用：%w", port, err)
+	}
+	fw := &forward{ln: ln}
+	fw.f = newForwarder(target, cur.srv.Dial, fw.setDialError)
+	go fw.f.serve(ln)
+	cur.forwards[id] = fw
+	return nil
+}
+
+// checkTarget refuses a target that would open fine and then fail every dial.
+func checkTarget(target string) error {
+	host, port, err := net.SplitHostPort(target)
+	if err == nil && host != "" {
+		if n, err := strconv.Atoi(port); err == nil && n >= 1 && n <= 65535 {
+			return nil
+		}
+	}
+	return fmt.Errorf("目标地址 %q 要写成 主机:端口（端口 1–65535）", target)
+}
+
+// CloseForward closes one forward: its port is free when this returns, its
+// connections are dropped and its pending dials cancelled. An unknown id is a no-op.
+func CloseForward(id string) {
+	mu.Lock()
+	defer mu.Unlock()
+	if cur == nil {
+		return
+	}
+	if fw, ok := cur.forwards[id]; ok {
+		delete(cur.forwards, id)
+		fw.close()
+	}
+}
+
+func (fw *forward) close() {
+	fw.f.close()
+	fw.ln.Close()
+}
+
+func (fw *forward) setDialError(err error) {
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
+	fw.dialErr, fw.dialErrAt = err.Error(), time.Now().UnixMilli()
+}
+
+func (fw *forward) status(id string) forwardStatus {
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
+	return forwardStatus{
+		ID: id, Port: fw.ln.Addr().(*net.TCPAddr).Port,
+		DialError: fw.dialErr, DialErrorAt: fw.dialErrAt,
+	}
+}
+
+// Status reports the node and its open forwards as JSON for the Kotlin shell.
 func Status() string {
-	s := currentSession()
-	if s == nil {
+	mu.Lock()
+	defer mu.Unlock()
+	if cur == nil {
 		return `{"state":"stopped"}`
 	}
-	s.mu.Lock()
-	st := status{
-		State: s.state, AuthURL: s.authURL, Port: s.port(), Error: s.errMsg,
-		DialError: s.dialErr, DialErrorAt: s.dialErrAt,
+	cur.mu.Lock()
+	st := status{State: cur.state, AuthURL: cur.authURL, Error: cur.errMsg}
+	cur.mu.Unlock()
+	for id, fw := range cur.forwards {
+		st.Forwards = append(st.Forwards, fw.status(id))
 	}
-	s.mu.Unlock()
+	sort.Slice(st.Forwards, func(i, j int) bool { return st.Forwards[i].ID < st.Forwards[j].ID })
 	b, _ := json.Marshal(st)
 	return string(b)
 }
 
-// BootURL is the one URL the WebView loads first; it carries the per-launch secret.
-func BootURL() string {
-	s := currentSession()
-	if s == nil || s.secret == "" {
-		return ""
-	}
-	return fmt.Sprintf("http://127.0.0.1:%d%s?k=%s", s.port(), bootPath, s.secret)
-}
-
-// Stop closes the proxy and the node; the node identity stays on disk.
+// Stop closes every forward, then the node; the node identity stays on disk.
 func Stop() {
 	mu.Lock()
 	s := cur
 	cur = nil
+	if s != nil {
+		for _, fw := range s.forwards {
+			fw.close()
+		}
+	}
 	mu.Unlock()
 	if s == nil {
 		return
 	}
 	close(s.done)
-	s.front.close()
-	// Serve may not have registered ln yet, in which case the frontend's close
-	// skips it and the port would be freed asynchronously; release it now for a
-	// quick re-Start.
-	s.ln.Close()
 	<-s.started
 	// A Start that failed before tsnet built its system (bad Dir) has nothing to
 	// close, and tsnet's Close would dereference the missing system.
