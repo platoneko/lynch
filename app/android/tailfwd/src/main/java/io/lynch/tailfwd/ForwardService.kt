@@ -46,8 +46,8 @@ class ForwardService : Service() {
             goForeground(notification(null))
         } catch (e: IllegalStateException) {
             // Android 12+ forbids entering the foreground from the background
-            // (ForegroundServiceStartNotAllowedException); the sticky restart and a tile tap
-            // while the app is in the background can both hit it. Ask the user to start it.
+            // (ForegroundServiceStartNotAllowedException); the system's sticky restart after a
+            // kill, or any start while the app is in the background, can hit it. Ask the user to start it.
             notifyFailure("无法在后台启动转发，请打开 tailfwd 启动")
             stopSelf()
             return START_NOT_STICKY
@@ -185,7 +185,7 @@ class ForwardService : Service() {
         // with running == true ever reaches stopForwarding() from a failure.
         private var generation = 0
 
-        /** Whether the user has the forward switched on; the screen and the tile read it. */
+        /** Whether the user has the forward switched on; the screen reads it. */
         @Volatile
         var running = false
             private set
