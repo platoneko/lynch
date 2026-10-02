@@ -57,6 +57,11 @@ def test_same_ticker_twice_merges_sources_by_url():
     assert c["name"] == "AXT Inc" and [s["handle"] for s in c["sources"]] == ["alice", "bob"]
 
 
+def test_same_url_twice_in_one_entry_keeps_one_source():
+    p = parse_candidates(block({"ticker": "AXTI.US", "name": "", "sources": [src(), src()]}))
+    [c] = p.candidates
+    assert [s["url"] for s in c["sources"]] == ["https://x.com/alice/status/1"] and p.dropped == 0
+
 def test_last_block_wins():
     text = block({"ticker": "AAPL.US", "name": "Apple", "sources": [src()]}) + "\n" + \
         block({"ticker": "MSFT.US", "name": "Microsoft", "sources": [src()]})

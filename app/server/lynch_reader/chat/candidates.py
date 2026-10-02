@@ -47,7 +47,10 @@ def parse_candidates(text: str) -> Parsed | None:
         known = merged.setdefault(candidate["ticker"], {**candidate, "sources": []})
         known["name"] = known["name"] or candidate["name"]
         urls = {s["url"] for s in known["sources"]}
-        known["sources"] += [s for s in candidate["sources"] if s["url"] not in urls]
+        for source in candidate["sources"]:  # a post repeated inside one entry counts once too
+            if source["url"] not in urls:
+                urls.add(source["url"])
+                known["sources"].append(source)
     return Parsed((text[:block.start()] + text[block.end():]).strip(), list(merged.values()), dropped)
 
 
