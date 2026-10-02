@@ -131,18 +131,19 @@ def test_a_turn_ends_when_grok_exits_not_at_its_result(tmp_path):
         conv = await svc.create("discover", None, "linger", "grok-4.6", "high", 256000)
         await until(lambda: svc.snapshot(conv.id)["conv"]["cost_usd"] is not None)  # its result arrived
         await svc.reap_idle()
-        await svc.interrupt(conv.id)
         during = state_of(svc, conv.id)
         with pytest.raises(Conflict):
             await svc.send(conv.id, "more")
-        await settled(svc, conv.id)
+        # Stop still ends a grok that lingers after answering (it might never exit), without a 已停止.
+        await svc.interrupt(conv.id)
+        stopped = state_of(svc, conv.id)
         await svc.send(conv.id, "again")
         await settled(svc, conv.id)
         snap = svc.snapshot(conv.id)
         await svc.shutdown()
-        return during, snap
-    during, snap = asyncio.run(main())
-    assert during == "running"
+        return during, stopped, snap
+    during, stopped, snap = asyncio.run(main())
+    assert (during, stopped) == ("running", "dormant")
     assert texts(snap) == [("user", "linger"), ("text", "echo: linger"), ("user", "again"), ("text", "echo: again")]
     assert len(turns(tmp_path)) == 2
 

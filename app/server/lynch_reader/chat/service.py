@@ -396,10 +396,12 @@ class ChatService:
     async def _stop_grok_turn(self, conv_id: str, live: Live) -> None:
         """grok has no interrupt message: the turn's process is ended, and the log marks the stop."""
         async with live.lock:
-            if live.state not in BUSY or live.result_seen:
-                return  # the turn ended while we waited for the lock, or grok has answered and is finishing
+            if live.state not in BUSY:
+                return  # the turn ended while we waited for the lock
+            answered = live.result_seen  # grok lingering after its reply: end it, but no 已停止 after a full answer
             await self._stop(conv_id)
-            self._broadcast_entry(conv_id, self._grok_log(conv_id).interrupted())
+            if not answered:
+                self._broadcast_entry(conv_id, self._grok_log(conv_id).interrupted())
 
     async def _kol_sources(self) -> KolSources:
         try:
