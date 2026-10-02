@@ -1,9 +1,11 @@
 /** Mirrors lynch_reader/chat: summaries from ChatService.list, items from chat/items.py. */
 export type ChatState = 'running' | 'compacting' | 'idle' | 'dormant';
 
+export type ChatKind = 'research' | 'ticker' | 'discover';
+
 export interface ChatSummary {
   id: string;
-  kind: 'research' | 'ticker';
+  kind: ChatKind; // discover: a Grok search of the KOL list on X
   ticker: string | null; // research: null until its framework is written
   title: string;
   model: string;
@@ -11,6 +13,7 @@ export interface ChatSummary {
   created_at: number; // seconds since the epoch
   updated_at: number;
   context_window: number | null;
+  cost_usd?: number | null; // discover: what its turns have cost so far, in USD
   archived: boolean;
   state: ChatState;
 }
@@ -33,6 +36,7 @@ export interface ChatOptions {
   efforts: string[];
   default_model: string;
   default_effort: string;
+  discover: DiscoverOptions;
 }
 
 export interface ContextUsage {
@@ -53,7 +57,7 @@ export interface ToolItem {
 
 export type ChatItem =
   | { kind: 'user'; key: string; uuid: string; text: string }
-  | { kind: 'text'; key: string; text: string }
+  | { kind: 'text'; key: string; text: string; candidates?: Candidate[]; candidates_dropped?: number }
   | ToolItem
   | { kind: 'compact'; key: string; trigger: string | null; pre_tokens: number | null; post_tokens: number | null }
   | { kind: 'notice'; key: string; text: string };
@@ -96,3 +100,45 @@ export type ChatEvent =
   | { type: 'conv'; conv: ChatSummary }
   | { type: 'approval'; approval: Approval }
   | { type: 'approval_done'; request_id: string };
+
+/** A Grok model that can search X (server chat/grok.py `GrokModel.public`). */
+export interface DiscoverModel {
+  id: string;
+  label: string;
+  windows: number[]; // context windows in tokens
+  efforts: string[];
+  default_effort: string;
+}
+
+export interface DiscoverOptions {
+  models: DiscoverModel[];
+  default_model: string | null;
+  default_window: number;
+  hint: string | null; // why the list is empty
+}
+
+export type Stance = 'bullish' | 'bearish' | 'neutral';
+
+/** One KOL post behind a candidate (server chat/candidates.py). */
+export interface CandidateSource {
+  handle: string; // without "@"
+  stance: Stance;
+  reason: string;
+  quote: string; // the post's own words
+  url: string;
+  posted_at: string; // ISO 8601
+}
+
+export interface Candidate {
+  ticker: string; // CODE.MARKET
+  name: string; // always set for HK / SH / SZ
+  sources: CandidateSource[];
+}
+
+/** A row of the candidate list (server `CandidateStore`). */
+export interface SavedCandidate extends Candidate {
+  sources: (CandidateSource & { saved_at: number; conv_id: string })[];
+  first_saved_at: number;
+  updated_at: number;
+  dismissed: boolean;
+}

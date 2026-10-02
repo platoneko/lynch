@@ -15,6 +15,7 @@ describe('groupChats', () => {
     chat('n2', { updated_at: 30, state: 'running' }),
     chat('t1', { ticker: '0700.HK', updated_at: 40 }),
     chat('landed', { kind: 'research', ticker: '0700.HK', updated_at: 5 }),
+    chat('d1', { kind: 'discover', ticker: null, title: 'KOL 看了啥', updated_at: 60 }),
   ];
   it('puts unlanded research on top and groups the rest by ticker, newest first', () => {
     const v = groupChats(chats, '', names);
@@ -30,6 +31,12 @@ describe('groupChats', () => {
     expect(groupChats(chats, '腾讯', names).groups.map((g) => g.ticker)).toEqual(['0700.HK']);
     expect(groupChats(chats, '宁德', names).research.map((c) => c.id)).toEqual(['r1']);
     expect(groupChats(chats, '宁德', names).groups).toEqual([]);
+  });
+  it('lists discover chats on their own, apart from research', () => {
+    const v = groupChats(chats, '', names);
+    expect(v.discover.map((c) => c.id)).toEqual(['d1']);
+    expect(v.research.map((c) => c.id)).toEqual(['r1']);
+    expect(groupChats(chats, 'kol', names).discover.map((c) => c.id)).toEqual(['d1']);
   });
 });
 

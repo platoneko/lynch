@@ -4,7 +4,9 @@ export type Route =
   | { page: 'axis'; name: string }
   | { page: 'chats' }
   | { page: 'chat'; id: string }
-  | { page: 'chat-new'; ticker: string | null };
+  | { page: 'chat-new'; ticker: string | null }
+  | { page: 'chat-new-discover' }
+  | { page: 'candidates' };
 
 export function parseRoute(hash: string): Route {
   const doc = /^#\/doc\/([^/?#]+)$/.exec(hash);
@@ -12,6 +14,9 @@ export function parseRoute(hash: string): Route {
   const axis = /^#\/axis\/([^/?#]+)$/.exec(hash);
   if (axis) return { page: 'axis', name: decodeURIComponent(axis[1]) };
   if (hash === '#/chats') return { page: 'chats' };
+  if (hash === '#/candidates') return { page: 'candidates' };
+  // Checked before chat ids: `new-discover` would otherwise read as one (ids are uuids).
+  if (hash === '#/chat/new-discover') return { page: 'chat-new-discover' };
   // `new` is not a conversation id: ids are uuids.
   const fresh = /^#\/chat\/new(?:\/([^/?#]+))?$/.exec(hash);
   if (fresh) return { page: 'chat-new', ticker: fresh[1] ? decodeURIComponent(fresh[1]) : null };
@@ -38,4 +43,12 @@ export function chatHash(id: string): string {
 
 export function newChatHash(ticker: string | null): string {
   return ticker ? `#/chat/new/${encodeURIComponent(ticker)}` : '#/chat/new';
+}
+
+export function newDiscoverHash(): string {
+  return '#/chat/new-discover';
+}
+
+export function candidatesHash(): string {
+  return '#/candidates';
 }

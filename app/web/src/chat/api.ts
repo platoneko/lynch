@@ -1,6 +1,6 @@
 import { get, post } from '../api';
 import { toChatEvent } from './chatModel';
-import type { ChatEvent, ChatList, ChatOptions, Snapshot } from './types';
+import type { ChatEvent, ChatKind, ChatList, ChatOptions, SavedCandidate, Snapshot } from './types';
 
 const base = (id: string) => `/api/chats/${encodeURIComponent(id)}`;
 
@@ -13,7 +13,7 @@ export async function fetchChatOptions(): Promise<ChatOptions> {
 }
 
 export async function createChat(body: {
-  kind: 'research' | 'ticker'; ticker: string | null; text: string; model: string; effort: string;
+  kind: ChatKind; ticker: string | null; text: string; model: string; effort: string; context_window?: number;
 }): Promise<{ id: string }> {
   return (await post('/api/chats', body)).json();
 }
@@ -44,6 +44,19 @@ export async function answerApproval(id: string, requestId: string, allow: boole
 
 export async function archiveTicker(ticker: string): Promise<{ archived: number }> {
   return (await post('/api/chats/archive', { ticker })).json();
+}
+
+/** Saves the ticked candidates of one Grok reply; the server reads them back from the transcript. */
+export async function saveCandidates(id: string, key: string, tickers: string[]): Promise<{ saved: string[] }> {
+  return (await post(`${base(id)}/candidates`, { key, tickers })).json();
+}
+
+export async function fetchCandidates(): Promise<SavedCandidate[]> {
+  return ((await (await get('/api/candidates')).json()) as { candidates: SavedCandidate[] }).candidates;
+}
+
+export async function dismissCandidate(ticker: string): Promise<void> {
+  await post(`/api/candidates/${encodeURIComponent(ticker)}/dismiss`);
 }
 
 const EVENTS = ['delta', 'item', 'tool_result', 'state', 'retry', 'usage', 'context', 'conv', 'approval', 'approval_done'];

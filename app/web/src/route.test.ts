@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { axisHash, chatHash, chatsHash, docHash, newChatHash, parseRoute } from './route';
+import { axisHash, candidatesHash, chatHash, chatsHash, docHash, newChatHash, newDiscoverHash, parseRoute } from './route';
 
 describe('route', () => {
   it('parses doc and falls back to home', () => {
@@ -24,5 +24,11 @@ describe('route', () => {
     expect(parseRoute(chatHash('a-b'))).toEqual({ page: 'chat', id: 'a-b' });
     expect(parseRoute(newChatHash('0700.HK'))).toEqual({ page: 'chat-new', ticker: '0700.HK' });
     expect(parseRoute(chatsHash())).toEqual({ page: 'chats' });
+  });
+  it('parses the discover and candidate pages before chat ids', () => {
+    expect(parseRoute('#/chat/new-discover')).toEqual({ page: 'chat-new-discover' });
+    expect(parseRoute(newDiscoverHash())).toEqual({ page: 'chat-new-discover' });
+    expect(parseRoute('#/candidates')).toEqual({ page: 'candidates' });
+    expect(parseRoute(candidatesHash())).toEqual({ page: 'candidates' });
   });
 });

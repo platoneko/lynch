@@ -10,6 +10,7 @@ export interface ChatGroup {
 }
 
 export interface ChatListView {
+  discover: ChatSummary[]; // Grok searches of the KOL list, newest first
   research: ChatSummary[]; // new-ticker research not yet landed
   groups: ChatGroup[]; // newest activity first
 }
@@ -17,7 +18,9 @@ export interface ChatListView {
 export function groupChats(chats: ChatSummary[], query: string, names: ReadonlyMap<string, string>): ChatListView {
   const q = query.trim().toLowerCase();
   const byTime = [...chats].sort((a, b) => b.updated_at - a.updated_at);
-  const research = byTime.filter((c) => c.ticker === null && (!q || c.title.toLowerCase().includes(q)));
+  const titled = (c: ChatSummary) => !q || c.title.toLowerCase().includes(q);
+  const discover = byTime.filter((c) => c.kind === 'discover' && titled(c));
+  const research = byTime.filter((c) => c.kind !== 'discover' && c.ticker === null && titled(c));
   const groups = new Map<string, ChatSummary[]>();
   for (const c of byTime) {
     if (c.ticker === null) continue;
@@ -26,6 +29,7 @@ export function groupChats(chats: ChatSummary[], query: string, names: ReadonlyM
     groups.set(c.ticker, [...(groups.get(c.ticker) ?? []), c]);
   }
   return {
+    discover,
     research,
     groups: [...groups].map(([ticker, list]) => ({
       ticker, chats: list, running: list.some((c) => isBusy(c.state)), updated_at: list[0].updated_at,
