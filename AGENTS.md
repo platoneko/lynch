@@ -44,10 +44,10 @@ python3 -m unittest discover -s eval/lib -t . -p 'test_*.py'
 - 白名单与禁用清单是护栏，不是沙箱：agent 能在本机执行任意代码（`bash -c` 或脚本就能绕过禁用清单），所以只能由用户本人驱动对话。
 - 白名单外的调用由服务端代答（`--permission-prompt-tool stdio`）：只有改 `frameworks/.claude/skills/sediment-framework/` 的 Edit / Write 推到手机逐处审批（看 diff 点允许 / 拒绝），其余一律拒绝。规则与 diff 在 `app/server/lynch_reader/chat/approvals.py`。
 - app 对话的行情走 `longbridge` 命令行（和 `eval/lib`、日报共用它的登录），禁用清单拦下单、账户、登录与升级等非查询子命令（CLI 日后新增的子命令要补进清单）；登录过期时在终端 `longbridge auth login`。
-- 「发现新票」对话走 **Grok**（`grok` 命令行，本机 grok.com 登录）：每轮起一个 `grok -p` 子进程，只能用 X 搜索和网页搜索——在独立空目录 `output/chat/grok-workdir/` 运行、关掉 Claude / Cursor 兼容加载、显式 deny 终端与读写文件与外部插件工具。启动参数与隔离清单的唯一真源是 `app/server/lynch_reader/chat/grok.py`；升级 grok 后跑 `LYNCH_LIVE_GROK=1 uv run pytest tests/test_chat_grok_live.py -q -s`。
+- 「发现新票」对话走 **Grok**（`grok` 命令行，本机 grok.com 登录）：每轮起一个 `grok -p` 子进程，只能用 X 搜索和网页搜索——在独立空目录 `output/chat/grok-workdir/` 运行、关掉 Claude / Cursor 兼容加载、显式 deny 终端与读写文件与外部插件工具。启动参数与隔离清单的唯一真源是 `app/server/lynch_reader/chat/grok.py`；升级 grok 后跑 `(cd app/server && LYNCH_LIVE_GROK=1 uv run pytest tests/test_chat_grok_live.py -q -s)`。
 - Grok 读的 KOL 名单与回看时长来自 invest 自己的加载函数（`../invest/scripts/load_kol_handles.py`、`load_policies.py`），每轮现读；lynch 不复制名单。
 - Grok 对话记录由服务端写在 `output/chat/grok/<id>.jsonl`（Claude 记录同格式）；上下文长度在新建时经 ACP 选定。
-- 候选区 `output/candidates/candidates.json` 只由服务端在用户点「存入候选区」后写入，且只存 Grok 原话里出现过的候选；不写 invest。
+- 候选区 `output/candidates/candidates.json` 由服务端维护：新候选只在用户点「存入候选区」时进入（「划掉」只改已有候选的状态），且只存 Grok 原话里出现过的候选；不写 invest。
 
 ## 密钥与本地
 
