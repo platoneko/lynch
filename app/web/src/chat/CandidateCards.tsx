@@ -1,0 +1,72 @@
+import { useState } from 'react';
+import { saveCandidates } from './api';
+import { candidateLabel, defaultPicked, STANCE_LABEL } from './candidateModel';
+import type { Candidate, CandidateSource } from './types';
+
+/** The candidates one Grok reply ends with. Ticking and tapping 存入候选区 is the user's consent to save them. */
+export function CandidateCards({ convId, itemKey, candidates, dropped, hasFramework, saved, onSaved }: {
+  convId: string;
+  itemKey: string;
+  candidates: Candidate[];
+  dropped: number;
+  hasFramework: (ticker: string) => boolean;
+  saved: ReadonlySet<string>; // tickers already in the candidate list (not dismissed)
+  onSaved: (tickers: string[]) => void;
+}) {
+  const [picked, setPicked] = useState(() => defaultPicked(candidates, hasFramework, saved));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const toggle = (t: string) =>
+    setPicked((p) => {
+      const n = new Set(p);
+      if (n.has(t)) n.delete(t);
+      else n.add(t);
+      return n;
+    });
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      onSaved((await saveCandidates(convId, itemKey, [...picked])).saved);
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="cand-cards">
+      {candidates.map((c) => (
+        <div key={c.ticker} className="cand-card">
+          <input type="checkbox" aria-label={`选择 ${candidateLabel(c)}`} checked={picked.has(c.ticker)}
+            onChange={() => toggle(c.ticker)} />
+          <div className="cand-body">
+            <div className="cand-head">
+              <span className="cand-label">{candidateLabel(c)}</span>
+              {hasFramework(c.ticker) && <span className="cand-badge">已有框架</span>}
+              {saved.has(c.ticker) && <span className="cand-badge">已在候选区</span>}
+            </div>
+            {c.sources.map((s) => <CandidateSourceView key={s.url} source={s} />)}
+          </div>
+        </div>
+      ))}
+      {dropped > 0 && <div className="notice">另有 {dropped} 条格式不合格，已忽略</div>}
+      {error && <div className="banner-error">{error}</div>}
+      <button className="text-btn cand-save" disabled={busy || picked.size === 0} onClick={save}>
+        存入候选区（{picked.size}）
+      </button>
+    </div>
+  );
+}
+
+export function CandidateSourceView({ source: s }: { source: CandidateSource }) {
+  return (
+    <div className="cand-src">
+      <div className="cand-src-head">@{s.handle} · {STANCE_LABEL[s.stance]} · {s.posted_at.slice(0, 10)}</div>
+      <div>{s.reason}</div>
+      <blockquote className="cand-quote">{s.quote}</blockquote>
+      <a className="cand-link" href={s.url} target="_blank" rel="noreferrer">原帖</a>
+    </div>
+  );
+}

@@ -1,9 +1,11 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { renderFragment, type LinkTargets } from '../doc/buildDoc';
-import { answerApproval, createChat, editMessage, interruptChat, openChatEvents, renameChat, sendMessage } from './api';
+import { answerApproval, createChat, editMessage, fetchCandidates, interruptChat, openChatEvents, renameChat, sendMessage } from './api';
+import { CandidateCards } from './CandidateCards';
+import { costText, DISCOVER_OPENER, discoverModelText, partialText } from './candidateModel';
 import {
-  applyEvent, compactText, contextText, contextWarn, diffLineClass, editableUuids, fromSnapshot, inputJumps, isBusy, stateText,
-  toolDetail, toolSummary, turnDocLinks, usageText, type ChatView, type InputJumps, type Queued,
+  applyEvent, compactText, contextText, contextWarn, diffLineClass, editableUuids, formatTokens, fromSnapshot, inputJumps, isBusy,
+  stateText, toolDetail, toolSummary, turnDocLinks, usageText, type ChatView, type InputJumps, type Queued,
 } from './chatModel';
 import { cancelEdit, composer, draftText, putBack, sent, startEdit, typed, type Composer } from './composer';
 import { clearDraft, loadDraft, loadShowTools, saveDraft, saveShowTools } from './drafts';
@@ -25,12 +27,13 @@ function inputLayout(header: HTMLElement | null, body: HTMLElement | null, foote
 type RenderedText = Map<string, { text: string; html: string }>; // item key → its source and HTML
 
 /**
- * One conversation; with `id === null`, the blank page before its first message.
+ * One conversation; with `id === null`, the blank page before its first message (a Grok discover chat when `newDiscover`).
  * `firstMessage`: the text the blank page just created this conversation with, pending until claude replays it.
  */
-export function ChatPage({ id, newTicker, firstMessage, options, targets, onBack, onOpenDoc, onCreated }: {
+export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, targets, onBack, onOpenDoc, onCreated }: {
   id: string | null;
   newTicker: string | null;
+  newDiscover: boolean; // the blank page of a 发现新票 chat
   firstMessage: string | null;
   options: ChatOptions | null;
   targets: LinkTargets;
@@ -38,7 +41,7 @@ export function ChatPage({ id, newTicker, firstMessage, options, targets, onBack
   onOpenDoc: (ticker: string) => void;
   onCreated: (id: string, text: string) => void;
 }) {
-  const draftKey = id ?? `new/${newTicker ?? ''}`;
+  const draftKey = id ?? (newDiscover ? 'new-discover/' : `new/${newTicker ?? ''}`);
   const [view, setView] = useState<ChatView | null>(null);
   const [input, setInput] = useState<Composer>(() => composer(loadDraft(draftKey)));
   const [sending, setSending] = useState(false);
@@ -54,6 +57,8 @@ export function ChatPage({ id, newTicker, firstMessage, options, targets, onBack
   const [renaming, setRenaming] = useState<string | null>(null); // the title being typed, while the sheet is open
   const [model, setModel] = useState('');
   const [effort, setEffort] = useState('');
+  const [ctxWindow, setCtxWindow] = useState(0); // discover: the context window picked on the blank page
+  const [savedTickers, setSavedTickers] = useState<ReadonlySet<string>>(new Set()); // discover: in the candidate list
   const [stream, setStream] = useState(0); // bumping it reopens the event stream (after an edit)
   const [answering, setAnswering] = useState<ReadonlySet<string>>(new Set()); // approvals whose answer is in flight
   const inputEl = useRef<HTMLTextAreaElement>(null);
@@ -68,13 +73,36 @@ export function ChatPage({ id, newTicker, firstMessage, options, targets, onBack
     const next = layout().jumps;
     setJumps((j) => (j.prev === next.prev && j.last === next.last ? j : next)); // scroll fires often; rerender on change only
   };
+  const conv = view?.conv;
+  const discover = conv ? conv.kind === 'discover' : newDiscover;
+  const discoverModel = options?.discover.models.find((m) => m.id === model);
+  const pickDiscoverModel = (id: string) => {
+    const m = options?.discover.models.find((x) => x.id === id);
+    if (!m) return;
+    setModel(m.id);
+    if (!m.efforts.includes(effort)) setEffort(m.default_effort);
+    if (!m.windows.includes(ctxWindow)) setCtxWindow(m.windows[0]);
+  };
 
   useEffect(() => {
-    if (options && !model) {
+    if (!options || model) return;
+    if (!newDiscover) {
       setModel(options.default_model);
       setEffort(options.default_effort);
+      return;
     }
-  }, [options, model]);
+    const d = options.discover;
+    const m = d.models.find((x) => x.id === d.default_model) ?? d.models[0];
+    if (!m) return;
+    setModel(m.id);
+    setEffort(m.default_effort);
+    setCtxWindow(m.windows.includes(d.default_window) ? d.default_window : m.windows[0]);
+  }, [options, model, newDiscover]);
+
+  useEffect(() => {
+    if (id === null || !discover) return;
+    fetchCandidates().then((l) => setSavedTickers(new Set(l.filter((c) => !c.dismissed).map((c) => c.ticker))), () => {});
+  }, [id, discover]);
 
   useEffect(() => {
     if (id === null) return;
@@ -152,7 +180,8 @@ export function ChatPage({ id, newTicker, firstMessage, options, targets, onBack
   };
 
   const submit = async () => {
-    const body = text.trim();
+    // A blank 发现新票 page may send with no text: the opener asks for the default KOL sweep.
+    const body = text.trim() || (discover && id === null ? DISCOVER_OPENER : '');
     if (!body || inFlight.current) return;
     inFlight.current = true;
     setSending(true);
@@ -160,7 +189,10 @@ export function ChatPage({ id, newTicker, firstMessage, options, targets, onBack
     try {
       if (id === null) {
         setCreating(body);
-        const created = await createChat({ kind: newTicker ? 'ticker' : 'research', ticker: newTicker, text: body, model, effort });
+        const created = await createChat({
+          kind: discover ? 'discover' : newTicker ? 'ticker' : 'research', ticker: discover ? null : newTicker,
+          text: body, model, effort, ...(discover ? { context_window: ctxWindow } : {}),
+        });
         clearDraft(draftKey);
         onCreated(created.id, body);
         return;
@@ -220,9 +252,8 @@ export function ChatPage({ id, newTicker, firstMessage, options, targets, onBack
     }
   };
 
-  const conv = view?.conv;
   const modelLabel = (m: string) => options?.models.find((x) => x.id === m)?.label ?? m;
-  const title = conv?.title ?? (id !== null ? '对话' : newTicker ? `讨论 ${newTicker}` : '新票调研');
+  const title = conv?.title ?? (id !== null ? '对话' : newDiscover ? '发现新票' : newTicker ? `讨论 ${newTicker}` : '新票调研');
   const ticker = conv?.ticker ?? newTicker;
 
   return (
@@ -234,9 +265,10 @@ export function ChatPage({ id, newTicker, firstMessage, options, targets, onBack
             <div className="chat-title-main">{title}</div>
             <div className="chat-meta">
               {ticker && <button className="chat-ticker" onClick={() => onOpenDoc(ticker)}>{ticker}</button>}
-              {conv && <span>{modelLabel(conv.model)} · {conv.effort}</span>}
+              {conv && <span>{discover ? discoverModelText(conv) : `${modelLabel(conv.model)} · ${conv.effort}`}</span>}
               {view && <span className={contextWarn(view.context) ? 'ctx-warn' : ''}>ctx {contextText(view.context)}</span>}
-              {view?.usage && <span>{usageText(view.usage)}</span>}
+              {discover ? conv && costText(conv.cost_usd) && <span>{costText(conv.cost_usd)}</span>
+                : view?.usage && <span>{usageText(view.usage)}</span>}
             </div>
           </div>
           {id !== null && <button className="icon-btn" disabled={gone} onClick={() => setMenu(!menu)} aria-label="更多">⋯</button>}
@@ -249,7 +281,9 @@ export function ChatPage({ id, newTicker, firstMessage, options, targets, onBack
                 {showTools ? '隐藏调用过程' : '显示调用过程'}
               </button>
               <button onClick={() => { setMenu(false); setRenaming(conv?.title ?? ''); }}>重命名</button>
-              <button disabled={busy} onClick={() => { setMenu(false); setCompactOpen(true); }}>压缩上下文</button>
+              {!discover && (
+                <button disabled={busy} onClick={() => { setMenu(false); setCompactOpen(true); }}>压缩上下文</button>
+              )}
             </div>
           </>
         )}
@@ -263,12 +297,17 @@ export function ChatPage({ id, newTicker, firstMessage, options, targets, onBack
             {it.kind === 'user' && (
               <div className="msg msg-user">
                 <div className="msg-text">{it.text}</div>
-                {editable.has(it.uuid) && (
+                {editable.has(it.uuid) && !discover && (
                   <button className="edit-btn" disabled={busy || gone || sending} onClick={() => edit(it)} aria-label="编辑">✎</button>
                 )}
               </div>
             )}
             {it.kind === 'text' && <div className="msg msg-agent md" dangerouslySetInnerHTML={{ __html: html.get(it.key)?.html ?? '' }} />}
+            {it.kind === 'text' && it.candidates && it.candidates.length > 0 && id !== null && (
+              <CandidateCards convId={id} itemKey={it.key} candidates={it.candidates} dropped={it.candidates_dropped ?? 0}
+                hasFramework={(t) => targets.pool.has(t)} saved={savedTickers}
+                onSaved={(ts) => setSavedTickers((s) => new Set([...s, ...ts]))} />
+            )}
             {it.kind === 'tool' && showTools && (
               <details className={`tool ${it.denied ? 'tool-denied' : ''}`}>
                 <summary>{toolSummary(it)}</summary>
@@ -283,7 +322,15 @@ export function ChatPage({ id, newTicker, firstMessage, options, targets, onBack
             ))}
           </Fragment>
         ))}
-        {view?.partial && <div className="msg msg-agent msg-partial">{view.partial}▌</div>}
+        {view?.partial && (() => {
+          const p = partialText(view.partial);
+          return (
+            <>
+              {p.text && <div className="msg msg-agent msg-partial">{p.text}{!p.collecting && '▌'}</div>}
+              {p.collecting && <div className="notice">正在整理候选…</div>}
+            </>
+          );
+        })()}
         {view?.approvals.map((a) => (
           <div key={a.request_id} className="approval">
             <div className="approval-title">修改 skill：{a.path.replace('frameworks/.claude/skills/', '')}</div>
@@ -325,7 +372,7 @@ export function ChatPage({ id, newTicker, firstMessage, options, targets, onBack
         {editing !== null && (
           <div className="chat-editing">编辑消息：发送后将截断此后的对话（文件改动不会撤销）<button onClick={() => setInput(cancelEdit)}>取消</button></div>
         )}
-        {id === null && options && (
+        {id === null && options && !discover && (
           <div className="model-picker">
             <select value={model} onChange={(e) => setModel(e.target.value)}>
               {options.models.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
@@ -335,12 +382,32 @@ export function ChatPage({ id, newTicker, firstMessage, options, targets, onBack
             </select>
           </div>
         )}
+        {id === null && options && discover && (
+          <>
+            {options.discover.hint && <div className="banner-muted">{options.discover.hint}</div>}
+            {discoverModel && (
+              <div className="model-picker">
+                <select value={model} onChange={(e) => pickDiscoverModel(e.target.value)}>
+                  {options.discover.models.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+                </select>
+                <select value={ctxWindow} onChange={(e) => setCtxWindow(Number(e.target.value))}>
+                  {discoverModel.windows.map((w) => <option key={w} value={w}>{formatTokens(w)}</option>)}
+                </select>
+                <select value={effort} onChange={(e) => setEffort(e.target.value)}>
+                  {discoverModel.efforts.map((x) => <option key={x} value={x}>{x}</option>)}
+                </select>
+              </div>
+            )}
+          </>
+        )}
         {view && <div className="chat-status">{stateText(view.conv.state)}{view.retry && ` · ${view.retry}`}</div>}
         <div className="chat-input-row">
           <textarea ref={inputEl} rows={1} value={text} disabled={gone} onChange={(e) => setInput((c) => typed(c, e.target.value))}
-            placeholder={id === null ? (newTicker ? `围绕 ${newTicker} 说点什么` : '想调研哪只票？') : '输入消息'} />
-          <button className="send-btn" onClick={submit} disabled={!text.trim() || sending || gone || (editing !== null && busy)}>
-            {sending ? '发送中' : '发送'}
+            placeholder={id === null ? (discover ? '想看 KOL 最近推了什么？（直接发送即可）' : newTicker ? `围绕 ${newTicker} 说点什么` : '想调研哪只票？') : '输入消息'} />
+          <button className="send-btn" onClick={submit}
+            disabled={sending || gone || (editing !== null && busy) || (discover && busy)
+              || (discover && id === null ? !discoverModel : !text.trim())}>
+            {sending ? '发送中' : discover && busy ? '等这一轮结束' : '发送'}
           </button>
           {busy && id !== null && !gone && <button className="stop-btn" onClick={() => interruptChat(id).catch(fail)} aria-label="停止">■</button>}
         </div>

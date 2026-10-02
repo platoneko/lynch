@@ -107,7 +107,7 @@ export function App() {
     const id = route.page === 'chat' ? route.id : null;
     return (
       <ChatPage key={id ?? `new:${route.page === 'chat-new' ? route.ticker : ''}`} id={id}
-        newTicker={route.page === 'chat-new' ? route.ticker : null}
+        newTicker={route.page === 'chat-new' ? route.ticker : null} newDiscover={false}
         firstMessage={firstMessage !== null && firstMessage.id === id ? firstMessage.text : null}
         options={chatOptions} targets={targets}
         onBack={() => (window.history.length > 1 ? window.history.back() : (window.location.hash = chatsHash()))}
