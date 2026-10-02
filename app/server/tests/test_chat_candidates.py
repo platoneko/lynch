@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 
+from lynch_reader.catalog import REPO_ROOT
 from lynch_reader.chat.candidates import CandidateStore, parse_candidates
-from lynch_reader.chat.grok import discover_rules
-from lynch_reader.chat.kol import KolSources
+
+SEARCH_MD = REPO_ROOT / ".agents" / "skills" / "discover-kol" / "references" / "search.md"
 
 
 def src(handle="alice", url="https://x.com/alice/status/1", **over):
@@ -68,8 +69,10 @@ def test_last_block_wins():
     assert [c["ticker"] for c in parse_candidates(text).candidates] == ["MSFT.US"]
 
 
-def test_the_example_in_grok_rules_is_a_valid_block():
-    p = parse_candidates(discover_rules(KolSources("1", ("a",), 36)))
+def test_the_example_in_the_skill_is_a_valid_block():
+    text = SEARCH_MD.read_text(encoding="utf-8")
+    assert text.splitlines()[0] == "# lynch 发现新票：搜索规则与候选格式"
+    p = parse_candidates(text)
     assert p is not None and p.dropped == 0 and p.candidates[0]["ticker"] == "0700.HK"
 
 
