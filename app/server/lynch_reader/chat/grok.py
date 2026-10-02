@@ -98,8 +98,13 @@ def prepare_workdir(workdir: Path) -> None:
     """grok reads project settings and AGENTS.md up to the git root; its own root keeps it out of lynch's."""
     if (workdir / ".git").exists():
         return
-    workdir.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "init", "-q", str(workdir)], check=True)
+    try:
+        workdir.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", "-q", str(workdir)], check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as e:
+        raise GrokSetupError(f"git init {workdir} 失败：{e.stderr.strip()[-300:]}") from e
+    except OSError as e:
+        raise GrokSetupError(f"无法创建工作目录 {workdir}：{e}") from e
 
 
 def grok_argv(cfg: GrokConfig, conv: Conversation, text: str, rules: str) -> list[str]:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import shutil
 
 import pytest
 
@@ -124,6 +126,36 @@ def test_an_exit_without_a_result_is_reported(tmp_path, text):
     assert notice["text"].startswith("Grok 进程意外退出") and state == "dormant"
 
 
+def drained_notices(q):
+    events = []
+    while not q.empty():
+        events.append(q.get_nowait())
+    return [d["text"] for event, d in events if event == "item" and d["kind"] == "notice"]
+
+
+@pytest.mark.parametrize("text", ["maxturns", "failed", "plain"])
+def test_an_error_result_is_reported_and_still_costs(tmp_path, text):
+    async def main():
+        svc, _ = make_service(tmp_path)
+        conv = await svc.create("discover", None, text, "grok-4.6", "high", 256000)
+        q = svc.subscribe(conv.id)  # safe after create: see test_an_exit_without_a_result_is_reported
+        await settled(svc, conv.id)
+        snap = svc.snapshot(conv.id)
+        await svc.shutdown()
+        return drained_notices(q), snap
+    notices, snap = asyncio.run(main())
+    assert snap["conv"]["cost_usd"] == pytest.approx(0.01)
+    if text == "plain":
+        assert notices == []  # a success result says nothing
+        return
+    [notice] = notices
+    assert not notice.startswith("Grok 进程意外退出")  # the exit after any result is normal
+    if text == "maxturns":
+        assert "40" in notice and "步数上限" in notice and "回看" in notice
+    else:
+        assert "X search backend unavailable" in notice
+
+
 def test_a_turn_ends_when_grok_exits_not_at_its_result(tmp_path):
     # A second `--resume` of the same session, or a SIGTERM, while grok is still finishing could lose the turn.
     async def main():
@@ -175,7 +207,8 @@ def test_edit_and_compact_are_refused(tmp_path):
 
 
 @pytest.mark.parametrize("model,effort,window", [("grok-secret", "high", 256000), ("grok-4.6", "max", 256000),
-                                                 ("grok-4.6", "high", 1000000), ("grok-4.6", "high", True)])
+                                                 ("grok-4.6", "high", 1000000), ("grok-4.6", "high", True),
+                                                 ("grok-4.6", "high", 256000.0)])
 def test_unknown_model_effort_or_window_is_invalid(tmp_path, model, effort, window):
     svc, _ = make_service(tmp_path)
     with pytest.raises(Invalid):
@@ -195,6 +228,54 @@ def test_session_setup_failure_is_a_conflict(tmp_path, monkeypatch):
     svc, _ = make_service(tmp_path)
     with pytest.raises(Conflict, match="无法创建 Grok 会话"):
         asyncio.run(svc.create("discover", None, "x", "grok-4.6", "high", 256000))
+
+
+@pytest.mark.parametrize("blocker", ["file", "readonly"])
+def test_an_unusable_workdir_is_a_conflict_on_create(tmp_path, blocker):
+    workdir = tmp_path / "grok-workdir"
+    if blocker == "file":
+        workdir.write_text("not a directory")  # mkdir fails: OSError
+    else:
+        if os.geteuid() == 0:
+            pytest.skip("root ignores directory permissions")
+        workdir.mkdir(mode=0o555)  # `git init` fails: CalledProcessError
+    svc, _ = make_service(tmp_path)
+    try:
+        with pytest.raises(Conflict, match="无法创建 Grok 会话"):
+            asyncio.run(svc.create("discover", None, "x", "grok-4.6", "high", 256000))
+    finally:
+        if workdir.is_dir():
+            workdir.chmod(0o755)
+    assert turns(tmp_path) == []
+
+
+def test_an_unusable_workdir_is_a_conflict_on_send(tmp_path):
+    async def main():
+        svc, _ = make_service(tmp_path)
+        conv = await svc.create("discover", None, "one", "grok-4.6", "high", 256000)
+        await settled(svc, conv.id)
+        workdir = tmp_path / "grok-workdir"
+        shutil.rmtree(workdir)
+        workdir.write_text("not a directory")
+        with pytest.raises(Conflict, match="无法启动 Grok"):
+            await svc.send(conv.id, "two")
+        snap = svc.snapshot(conv.id)
+        await svc.shutdown()
+        return snap
+    snap = asyncio.run(main())
+    assert texts(snap) == [("user", "one"), ("text", "echo: one")] and snap["conv"]["state"] == "dormant"
+
+
+def test_only_a_discover_chat_saves_candidates(tmp_path):
+    async def main():
+        svc, _ = make_service(tmp_path)
+        conv = await svc.create("research", None, "hello", "claude-opus-5-5", "medium")
+        await until(lambda: state_of(svc, conv.id) == "idle")
+        key = svc.snapshot(conv.id)["items"][-1]["key"]
+        with pytest.raises(Invalid, match="发现新票"):
+            svc.save_candidates(conv.id, key, ["0700.HK"])
+        await svc.shutdown()
+    asyncio.run(main())
 
 
 def test_save_candidates_from_the_reply(tmp_path):

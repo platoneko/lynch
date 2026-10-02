@@ -19,8 +19,8 @@ from lynch_reader.chat.approvals import (AUTO_DENY_MESSAGE, USER_DENY_MESSAGE, A
 from lynch_reader.chat.candidates import CandidateStore
 from lynch_reader.chat.config import (CHAT_EFFORTS, CHAT_MODELS, DEFAULT_EFFORT, DEFAULT_MODEL, IDLE_TIMEOUT_S,
                                       MAX_PROCESSES, LaunchConfig, launch_argv, launch_env)
-from lynch_reader.chat.grok import (DEFAULT_WINDOW, GrokConfig, GrokSetupError, discover_rules, grok_argv, grok_env,
-                                    grok_models, new_session, prepare_workdir)
+from lynch_reader.chat.grok import (DEFAULT_WINDOW, MAX_TURNS, GrokConfig, GrokSetupError, discover_rules, grok_argv,
+                                    grok_env, grok_models, new_session, prepare_workdir)
 from lynch_reader.chat.grok_log import GrokLog
 from lynch_reader.chat.index import ChatIndex, Conversation, make_title
 from lynch_reader.chat.items import (compact_item, context_tokens, framework_ticker, message_items, notice_item,
@@ -33,6 +33,19 @@ log = logging.getLogger(__name__)
 BUSY = ("running", "compacting")
 COMPACT_COMMAND = "/compact"
 KINDS = ("research", "ticker", "discover")
+
+
+def _grok_failure(result: dict) -> str | None:
+    """What to tell the user when grok's `result` line is an error subtype; None for a successful turn."""
+    if result.get("subtype") == "success" and result.get("is_error") not in (True, "True"):
+        return None
+    if result.get("subtype") == "error_max_turns":
+        return (f"Grok 达到单轮步数上限（{MAX_TURNS} 步），本轮提前结束。"
+                "可以缩小搜索范围再试：少看几位 KOL，或缩短回看时长。")
+    errors = result.get("errors")
+    detail = "；".join(map(str, errors)) if isinstance(errors, list) else str(result.get("result") or "")
+    detail = detail.strip()[:300]
+    return f"Grok 本轮出错结束：{detail}" if detail else "Grok 本轮出错结束"
 
 
 class NotFound(Exception):
@@ -174,7 +187,8 @@ class ChatService:
             raise Invalid(f"unknown Grok model {model!r}")
         if effort not in chosen.efforts:
             raise Invalid(f"unknown effort {effort!r}")
-        if isinstance(window, bool) or window not in chosen.windows:
+        # From JSON: 256000.0 equals 256000 and True equals 1, but neither is a window grok takes.
+        if type(window) is not int or window not in chosen.windows:
             raise Invalid(f"unknown context window {window!r}")
         await self._kol_sources()  # no session for a chat that could not run
         try:
@@ -292,7 +306,8 @@ class ChatService:
 
     def save_candidates(self, conv_id: str, key: object, tickers: object) -> list[str]:
         """The user's 存入候选区: only candidates Grok's own reply carries, looked up again in the transcript."""
-        self._conv(conv_id)
+        if self._conv(conv_id).kind != "discover":
+            raise Invalid("只有发现新票对话能存入候选区")
         if (not isinstance(key, str) or not isinstance(tickers, list) or not tickers
                 or not all(isinstance(t, str) for t in tickers)):
             raise Invalid("key and a list of tickers required")
@@ -379,7 +394,10 @@ class ChatService:
         grok = self._require_grok()
         rules = discover_rules(await self._kol_sources())  # read every turn: an edited KOL list applies at once
         await self._make_room()
-        prepare_workdir(grok.workdir)
+        try:
+            prepare_workdir(grok.workdir)
+        except GrokSetupError as e:
+            raise Conflict(f"无法启动 Grok：{e}") from e
         # grok never echoes the prompt: the app records and shows it itself.
         self._broadcast_entry(conv.id, self._grok_log(conv.id).user(text))
         proc = ChatProcess(grok_argv(grok, conv, text, rules), self._grok_env, grok.workdir,
@@ -515,7 +533,10 @@ class ChatService:
     def _on_result(self, conv_id: str, live: Live, msg: dict) -> None:
         conv = self._index.get(conv_id)
         if conv.kind == "discover":
-            live.result_seen = True
+            live.result_seen = True  # even an error result: grok's exit after it is the normal end of the turn
+            failure = _grok_failure(msg)
+            if failure is not None:
+                self._notice(conv_id, failure)
             cost = msg.get("total_cost_usd")
             changes = ({"cost_usd": (conv.cost_usd or 0.0) + cost}
                        if isinstance(cost, (int, float)) and not isinstance(cost, bool) else {})

@@ -13,6 +13,8 @@
         candidates  a reply ending in a lynch-candidates block
         search      an X search call and its result (is_error the string "False", as grok prints it), a reply
         linger      a reply and its result, then 1 s before exiting 0
+        maxturns    a partial reply, then an error_max_turns result (is_error true), exit 0
+        failed      an error_during_execution result carrying grok's errors list, exit 0
         anything else  "echo: <text>"
 
 Sessions live in $FAKE_GROK_SESSIONS/<id>.json ({model, window}); a turn on an unknown id fails as grok does.
@@ -118,9 +120,9 @@ def turn():
               "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": t[:3]}}})
         assistant([{"type": "text", "text": t}])
 
-    def result():
-        emit({"type": "result", "subtype": "success", "is_error": False, "total_cost_usd": 0.01, "session_id": sid,
-              "modelUsage": {"grok-4.6-build": {"costUSD": 0.01}}})
+    def result(subtype="success", **extra):
+        emit({"type": "result", "subtype": subtype, "is_error": subtype != "success", "total_cost_usd": 0.01,
+              "session_id": sid, "modelUsage": {"grok-4.6-build": {"costUSD": 0.01}}, **extra})
 
     if text == "crash":
         sys.stderr.write("boom\n")
@@ -138,6 +140,13 @@ def turn():
         return
     if text == "noresult":
         reply("half")
+        return
+    if text == "maxturns":
+        reply("searched half the KOLs")
+        result("error_max_turns", errors=["Reached maximum number of turns (40)"])
+        return
+    if text == "failed":
+        result("error_during_execution", errors=["X search backend unavailable"])
         return
     if text == "linger":  # grok finishing up after its result, before it exits
         reply("echo: linger")
