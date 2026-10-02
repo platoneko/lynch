@@ -153,6 +153,8 @@ export function editableUuids(items: ChatItem[]): Set<string> {
 const VERBS: Record<string, string> = {
   Read: '读取', Write: '写入', Edit: '修改', Grep: '搜索', Glob: '查找文件',
   WebSearch: '搜索网页', WebFetch: '抓取', Skill: '使用 skill', Bash: '运行',
+  // grok's server-side tools, named as its stream prints them
+  'X search:': '搜索 X', 'Web search:': '搜索网页', web_fetch: '抓取',
 };
 
 export function toolSummary(t: ToolItem): string {
