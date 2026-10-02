@@ -71,7 +71,8 @@ function matchesMarkets(r: TickerRow, markets: string[]): boolean {
 
 function matchesAxes(r: TickerRow, axes: string[]): boolean {
   if (axes.length === 0) return true;
-  return (r.axes ?? []).some((a) => axes.includes(a));
+  // An axis filter lists every ticker the axis touches, reference mounts included.
+  return [...(r.axes ?? []), ...(r.ref_axes ?? [])].some((a) => axes.includes(a));
 }
 
 function comparator(sort: SortKey, zoneOrder: string[], serverOrder: Map<string, number>) {

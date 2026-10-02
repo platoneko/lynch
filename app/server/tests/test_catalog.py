@@ -44,7 +44,7 @@ def test_parsed_row_is_zoned_on_the_live_price(repo, quotes):
     assert row == {
         "ticker": "AAA.US", "name": "Alpha Corp", "market": "US",
         "lynch_primary": "fast_grower", "lynch_secondary": "cyclical", "currency": "USD",
-        "L": 10.0, "M": 20.0, "H": 40.0, "option": None, "candidate": None, "axes": [], "consensus": None,
+        "L": 10.0, "M": 20.0, "H": 40.0, "option": None, "candidate": None, "axes": [], "ref_axes": [], "consensus": None,
         "band": {"price": 25.0, "session": None, "as_of": AS_OF, "zone": zone_of(25.0, 10, 20, 40),
                  "option_zone": None, "candidate_zone": None},
         "quote_error": None, "error": None,
@@ -443,6 +443,16 @@ def test_axes_and_mounts(repo, quotes):
     rows = {r["ticker"]: r for r in body["tickers"]}
     assert rows["AAA.US"]["axes"] == ["al", "cu"]
     assert rows["BBB.US"]["axes"] == []
+
+
+def test_reference_mounts_are_listed_apart(repo, quotes):
+    _axis(repo, "al", "AAA.US ｜ 参照：BBB.US；候选：CCC.US")
+    body = catalog(repo, quotes)
+    al = body["axes"][0]
+    assert (al["tickers"], al["refs"]) == (["AAA.US"], ["BBB.US"])
+    rows = {r["ticker"]: r for r in body["tickers"]}
+    assert (rows["AAA.US"]["axes"], rows["AAA.US"]["ref_axes"]) == (["al"], [])
+    assert (rows["BBB.US"]["axes"], rows["BBB.US"]["ref_axes"]) == ([], ["al"])
 
 
 def test_bad_axis_is_dropped_alone(repo, quotes, caplog):

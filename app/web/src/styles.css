@@ -70,6 +70,8 @@ button { font: inherit; color: inherit; }
 .axis-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 4px; font-size: 12px; }
 .axis-caption { color: var(--muted); }
 .axis-link { padding: 1px 8px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--accent); font-size: 12px; }
+/* A reference axis carries no consensus for this ticker, so it sits quieter than a rating one. */
+.axis-ref { border-style: dashed; color: var(--muted); }
 .axis-own { color: var(--muted); }
 .band { margin-top: 8px; }
 .band-head { display: flex; align-items: center; gap: 6px; min-width: 0; }

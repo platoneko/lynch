@@ -63,6 +63,28 @@ class LoadAxisTests(unittest.TestCase):
         self.assertEqual(a.logical_id, "_AXIS.coal")
         self.assertEqual(a.consensus, Consensus("M–H", "卖方 2027；as-of 2026-09-20"))
         self.assertTrue(a.mounts_text.startswith("挂载票："))
+        self.assertEqual(a.refs, ())
+
+    def test_refs_after_the_reference_mark(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            p = _write(Path(d), "crypto", (
+                "# _AXIS.crypto — 加密周期情景轴\n"
+                "> 轴类型：`shared_scenario_axis` | 更新：2026-09-23 | "
+                "挂载票（全档）：COIN.US ｜ 参照（**仅 L 档**）：HOOD.US · 参照（构成方）：MSFT.US\n"
+            ))
+            a = load_axis(p)
+        self.assertEqual(a.mounts, ("COIN.US",))
+        self.assertEqual(a.refs, ("HOOD.US", "MSFT.US"))
+
+    def test_refs_stop_at_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            p = _write(Path(d), "coal", (
+                "# _AXIS.coal — 煤价情景轴\n"
+                "> 轴类型：`shared_scenario_axis` | 挂载票：— ｜ 参照：`000543.SZ` · `600011.SH`；候选：`1898.HK`\n"
+            ))
+            a = load_axis(p)
+        self.assertEqual(a.mounts, ())
+        self.assertEqual(a.refs, ("000543.SZ", "600011.SH"))
 
     def test_no_consensus_line(self) -> None:
         with tempfile.TemporaryDirectory() as d:
@@ -77,6 +99,8 @@ class LoadAxisTests(unittest.TestCase):
         axes = {a.name: a for a in map(load_axis, list_axis_paths())}
         self.assertEqual(axes["rates"].kind, "rates_axis")
         self.assertIn("601600.SH", axes["fed-path-aluminium"].mounts)
+        self.assertEqual(axes["cowos-capacity"].refs, ("TSM.US",))
+        self.assertNotIn("TSM.US", axes["cowos-capacity"].mounts)
         self.assertEqual(axes["fed-path-aluminium"].label, "电解铝价差")
 
 
