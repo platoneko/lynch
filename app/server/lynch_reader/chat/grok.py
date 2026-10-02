@@ -19,7 +19,7 @@ from lynch_reader.chat.index import Conversation
 from lynch_reader.chat.kol import KolSources
 
 DEFAULT_WINDOW = 256_000
-MAX_TURNS = 60  # recalibrated against a real KOL search in Task 9
+MAX_TURNS = 40  # twice a full KOL search's turns (5 on 2026-10-02, grok 1.0.46), floor 40
 
 # grok's compatibility scanners would load other agents' settings: lynch's AGENTS.md and the broad Bash allows in
 # .claude/settings.local.json, and ~/.cursor/mcp.json, whose GitHub server carries a plaintext token. A server child
