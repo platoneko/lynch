@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Menu } from '../Menu';
 import { isBusy } from './chatModel';
 import { ConfirmSheet, type Confirm } from './ConfirmSheet';
 import { groupChats, relativeTime, type ChatGroup } from './listModel';
@@ -24,6 +25,7 @@ export function ChatsPage({ list, error, names, labels, onBack, onOpen, onNewRes
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
   const [confirm, setConfirm] = useState<Confirm | null>(null);
+  const [menu, setMenu] = useState(false);
   const view = groupChats(list?.chats ?? [], query, names);
   const searching = query.trim() !== '';
   const now = Date.now() / 1000;
@@ -55,11 +57,14 @@ export function ChatsPage({ list, error, names, labels, onBack, onOpen, onNewRes
           <button className="icon-btn" onClick={onBack} aria-label="返回">‹</button>
           <input className="home-search" type="search" placeholder="搜索标的" value={query}
             onChange={(e) => setQuery(e.target.value)} />
+          <button className="icon-btn" onClick={() => setMenu(!menu)} aria-label="新建对话">＋</button>
         </div>
-        <div className="bar-row chats-new">
-          <button className="text-btn" onClick={onNewResearch}>＋ 新票调研</button>
-          <button className="text-btn" onClick={onNewDiscover}>＋ 发现新票</button>
-        </div>
+        {menu && (
+          <Menu onClose={() => setMenu(false)} items={[
+            { label: '新票调研', onSelect: onNewResearch },
+            { label: '发现新票', onSelect: onNewDiscover },
+          ]} />
+        )}
       </header>
       <main className="chats-body">
         {error && <div className="banner-error">{error}</div>}

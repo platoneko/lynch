@@ -183,9 +183,6 @@ button { font: inherit; color: inherit; }
 .run-dot { color: var(--accent); margin-right: 4px; font-size: 10px; vertical-align: middle; }
 /* .bar is position: fixed for the doc page; here the body carries no bar-height padding, so the bar stays in flow. */
 .chats .bar-top { position: sticky; }
-/* The two "new" buttons get their own row: beside the search box they squeezed it to a sliver on a phone. */
-.chats-new { padding-top: 6px; }
-.chats-new .text-btn { flex: 1; padding: 6px 10px; }
 .chats-body { padding: 8px 16px 32px; }
 .chats-caption { margin: 12px 0 4px; color: var(--muted); font-size: 13px; font-weight: 500; }
 .chat-group { border-bottom: 1px solid var(--line); }
