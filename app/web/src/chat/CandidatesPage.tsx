@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { CandidateSourceView } from './CandidateCards';
-import { archiveDaysLeft, candidateDraft, candidateLabel, groupCandidates, STANCE_LABEL } from './candidateModel';
+import { archiveDaysLeft, candidateDraft, candidateLabel, groupCandidates, shownSources, STANCE_LABEL } from './candidateModel';
 import { ConfirmSheet, type Confirm } from './ConfirmSheet';
 import { loadDraft, saveDraft } from './drafts';
 import { relativeTime } from './listModel';
@@ -44,7 +44,7 @@ export function CandidatesPage({ list, error, hasFramework, onBack, onResearch, 
     <div key={c.ticker} className="cand-row">
       <button className="chat-row-main" onClick={() => toggle(c.ticker)}>
         <span className="chat-row-title">
-          {candidateLabel(c)} · {c.sources.map((s) => `@${s.handle} ${STANCE_LABEL[s.stance]}`).join('、')}
+          {candidateLabel(c)} · {shownSources(c.sources).map((s) => `@${s.handle} ${STANCE_LABEL[s.stance]}`).join('、')}
         </span>
         <span className="chat-row-time">
           {c.archived_at !== null
@@ -57,7 +57,7 @@ export function CandidatesPage({ list, error, hasFramework, onBack, onResearch, 
       {actions !== 'archived' && <button className="text-btn" onClick={() => onArchive(c.ticker)}>归档</button>}
       {actions === 'archived' && <button className="text-btn" onClick={() => onRestore(c.ticker)}>恢复</button>}
       {open.has(c.ticker) && (
-        <div className="cand-detail">{c.sources.map((s) => <CandidateSourceView key={s.url} source={s} />)}</div>
+        <div className="cand-detail">{shownSources(c.sources).map((s) => <CandidateSourceView key={s.url} source={s} />)}</div>
       )}
     </div>
   );

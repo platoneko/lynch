@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { saveCandidates } from './api';
-import { bjtTime, candidateLabel, defaultPicked, STANCE_LABEL } from './candidateModel';
+import { bjtTime, candidateLabel, defaultPicked, shownSources, STANCE_LABEL } from './candidateModel';
 import type { Candidate, CandidateSource } from './types';
 
 /** The candidates one Grok reply ends with. Ticking and tapping 存入候选区 is the user's consent to save them. */
@@ -50,7 +50,7 @@ export function CandidateCards({ convId, itemKey, candidates, dropped, hasFramew
               {hasFramework(c.ticker) && <span className="cand-badge">已有框架</span>}
               {saved.has(c.ticker) && <span className="cand-badge">已在候选区</span>}
             </div>
-            {c.sources.map((s) => <CandidateSourceView key={s.url} source={s} />)}
+            {shownSources(c.sources).map((s) => <CandidateSourceView key={s.url} source={s} />)}
           </div>
         </div>
       ))}

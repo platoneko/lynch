@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   archiveDaysLeft, bjtTime, candidateDraft, candidateLabel, costText, defaultPicked, discoverModelText, groupCandidates,
-  partialText,
+  partialText, shownSources,
 } from './candidateModel';
 import { toolSummary } from './chatModel';
 import type { Candidate, SavedCandidate } from './types';
@@ -48,6 +48,18 @@ describe('archiveDaysLeft', () => {
     expect(archiveDaysLeft(100, 100)).toBe(30);
     expect(archiveDaysLeft(100, 100 + day + 1)).toBe(29);
     expect(archiveDaysLeft(100, 100 + 30 * day)).toBe(0);
+  });
+});
+
+describe('shownSources', () => {
+  it('keeps each KOL\'s latest post, newest first, at most 5 KOLs', () => {
+    const at = (handle: string, day: string) => ({ ...src, handle, url: `https://x.com/${handle}/status/${day}`,
+      posted_at: `2026-10-${day}T08:00:00Z` });
+    const list = [at('alice', '01'), at('alice', '03'), at('bob', '02'), at('carol', '04'), at('dave', '05'),
+      at('erin', '06'), at('frank', '07')];
+    expect(shownSources(list).map((s) => `${s.handle}${s.posted_at.slice(8, 10)}`))
+      .toEqual(['frank07', 'erin06', 'dave05', 'carol04', 'alice03']);
+    expect(shownSources([at('bob', '02'), at('alice', '01')]).map((s) => s.handle)).toEqual(['bob', 'alice']);
   });
 });
 

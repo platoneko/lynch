@@ -1,4 +1,4 @@
-import type { Candidate, ChatSummary, SavedCandidate, Stance } from './types';
+import type { Candidate, CandidateSource, ChatSummary, SavedCandidate, Stance } from './types';
 
 export const STANCE_LABEL: Record<Stance, string> = { bullish: '看多', bearish: '看空', neutral: '中性' };
 export const DISCOVER_OPENER = '看看名单里 KOL 最近提到了哪些票';
@@ -35,6 +35,19 @@ const ARCHIVE_DAYS = 30; // server candidates.py RETENTION_S
 /** Whole days an archived ticker has left before the server deletes it. */
 export function archiveDaysLeft(archivedAt: number, now: number): number {
   return Math.max(0, Math.ceil(ARCHIVE_DAYS - (now - archivedAt) / 86400));
+}
+
+const SHOWN_KOLS = 5;
+
+/** The sources a card shows: each KOL's latest post, newest first, at most SHOWN_KOLS KOLs. All stay stored. */
+export function shownSources<S extends CandidateSource>(sources: S[]): S[] {
+  const time = (s: S) => Date.parse(s.posted_at) || 0;
+  const latest = new Map<string, S>();
+  for (const s of sources) {
+    const known = latest.get(s.handle);
+    if (!known || time(s) > time(known)) latest.set(s.handle, s);
+  }
+  return [...latest.values()].sort((a, b) => time(b) - time(a)).slice(0, SHOWN_KOLS);
 }
 
 const BJT_OFFSET_MS = 8 * 3600_000; // every time the user reads is Beijing time
