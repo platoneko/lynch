@@ -30,15 +30,17 @@ async def until(pred: Callable[[], bool], timeout: float = 5.0) -> None:
 
 
 def make_service(tmp_path: Path, **kwargs):
-    """A ChatService on the fake claude; returns it and the launch log path."""
+    """A ChatService on the fake claude and the fake grok; returns it and claude's launch log path."""
+    from lynch_reader.chat.candidates import CandidateStore
     from lynch_reader.chat.service import ChatService
     projects = tmp_path / "projects"
     projects.mkdir(exist_ok=True)
     (tmp_path / "frameworks").mkdir(exist_ok=True)
     log = tmp_path / "launches.jsonl"
     env = {**os.environ, "FAKE_CLAUDE_PROJECTS": str(projects), "FAKE_CLAUDE_LOG": str(log),
-           "ANTHROPIC_API_KEY": "must-not-leak"}
-    svc = ChatService(ChatIndex(tmp_path / "index.json"), LaunchConfig(FAKE_CMD, tmp_path), projects, env, **kwargs)
+           "ANTHROPIC_API_KEY": "must-not-leak", **fake_grok_env(tmp_path)}
+    svc = ChatService(ChatIndex(tmp_path / "index.json"), LaunchConfig(FAKE_CMD, tmp_path), projects, env,
+                      grok=grok_config(tmp_path), candidates=CandidateStore(tmp_path / "candidates.json"), **kwargs)
     return svc, log
 
 

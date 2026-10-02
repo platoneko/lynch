@@ -1,4 +1,4 @@
-"""Chats: one Claude Code process per active conversation, its state, and fan-out to the app's event streams.
+"""Chats: one Claude Code process per active conversation, or one grok process per discover turn; their state, and fan-out to the app's event streams.
 
 Everything here runs on the server's event loop; nothing blocks it except small file reads.
 """
@@ -16,18 +16,23 @@ from pathlib import Path
 from lynch_reader.chat import transcript
 from lynch_reader.chat.approvals import (AUTO_DENY_MESSAGE, USER_DENY_MESSAGE, Approval, approvable_path,
                                          new_approval)
+from lynch_reader.chat.candidates import CandidateStore
 from lynch_reader.chat.config import (CHAT_EFFORTS, CHAT_MODELS, DEFAULT_EFFORT, DEFAULT_MODEL, IDLE_TIMEOUT_S,
                                       MAX_PROCESSES, LaunchConfig, launch_argv, launch_env)
+from lynch_reader.chat.grok import (DEFAULT_WINDOW, GrokConfig, GrokSetupError, discover_rules, grok_argv, grok_env,
+                                    grok_models, new_session, prepare_workdir)
+from lynch_reader.chat.grok_log import GrokLog
 from lynch_reader.chat.index import ChatIndex, Conversation, make_title
 from lynch_reader.chat.items import (compact_item, context_tokens, framework_ticker, message_items, notice_item,
                                      retry_text)
+from lynch_reader.chat.kol import KolSources, KolUnavailable, kol_sources
 from lynch_reader.chat.process import ChatProcess
 
 log = logging.getLogger(__name__)
 
 BUSY = ("running", "compacting")
 COMPACT_COMMAND = "/compact"
-KINDS = ("research", "ticker")
+KINDS = ("research", "ticker", "discover")
 
 
 class NotFound(Exception):
@@ -59,6 +64,8 @@ class Live:
     # (resume uuid, transcript entry count) of an edit whose new process has not written yet;
     # until it does, the file's newest message is still the edited-away branch.
     pending_cut: tuple[str, int] | None = None
+    # Discover only: this turn's grok printed its `result`, so its exit is the normal end of the turn.
+    result_seen: bool = False
     # Skill edits claude is waiting on the phone to allow or deny, by control request id, in arrival order.
     # They belong to `proc`: whatever ends it (exit, stop, edit, archive) drops them.
     approvals: dict[str, Approval] = field(default_factory=dict)
@@ -71,12 +78,17 @@ class Live:
 
 class ChatService:
     def __init__(self, index: ChatIndex, launch: LaunchConfig, projects_dir: Path, base_env: Mapping[str, str], *,
+                 grok: GrokConfig | None = None, candidates: CandidateStore | None = None,
                  monotonic: Callable[[], float] = time.monotonic, wall: Callable[[], float] = time.time,
                  idle_timeout_s: float = IDLE_TIMEOUT_S, max_processes: int = MAX_PROCESSES) -> None:
         self._index = index
         self._launch = launch
         self._projects = projects_dir
         self._env = launch_env(base_env)
+        self._grok = grok
+        self._grok_env = grok_env(base_env)
+        self._grok_logs: dict[str, GrokLog] = {}
+        self.candidates = candidates
         self._now, self._wall = monotonic, wall
         self._idle_timeout_s, self._max_processes = idle_timeout_s, max_processes
         self._live: dict[str, Live] = {}
@@ -86,8 +98,12 @@ class ChatService:
     # ---- queries
 
     def options(self) -> dict:
+        models = grok_models(self._grok.home) if self._grok else []
+        discover = {"models": [m.public() for m in models], "default_model": models[0].id if models else None,
+                    "default_window": DEFAULT_WINDOW,
+                    "hint": None if models else "在终端运行 grok models 刷新 Grok 模型清单"}
         return {"models": [{"id": m, "label": label} for m, label in CHAT_MODELS], "efforts": list(CHAT_EFFORTS),
-                "default_model": DEFAULT_MODEL, "default_effort": DEFAULT_EFFORT}
+                "default_model": DEFAULT_MODEL, "default_effort": DEFAULT_EFFORT, "discover": discover}
 
     def list(self) -> dict:
         rows = [self._summary(c) for c in self._index.all() if self._visible(c)]
@@ -113,36 +129,62 @@ class ChatService:
             items.append({"kind": "notice", "key": "interrupted", "text": "上次回答被中断"})
         tokens = live.context_tokens if live.context_tokens is not None else hist.context_tokens
         return {"conv": self._summary(conv), "items": items, "partial": live.partial, "retry": live.retry,
-                "usage": self.usage, "context": {"tokens": tokens, "window": conv.context_window},
+                "usage": None if conv.kind == "discover" else self.usage,
+                "context": {"tokens": tokens, "window": conv.context_window},
                 "approvals": [a.public() for a in live.approvals.values()]}
 
     # ---- commands
 
-    async def create(self, kind: str, ticker: str | None, text: str, model: str, effort: str) -> Conversation:
+    async def create(self, kind: str, ticker: str | None, text: str, model: str, effort: str,
+                     context_window: object = None) -> Conversation:
         # The values come from a JSON body; a list or dict would break the membership tests below.
         if not all(isinstance(v, str) for v in (kind, text, model, effort)) or not isinstance(ticker, str | None):
             raise Invalid("fields must be strings")
         if kind not in KINDS:
             raise Invalid(f"unknown kind {kind!r}")
+        if not text.strip():
+            raise Invalid("empty message")
+        conv = (await self._new_discover(text, model, effort, context_window) if kind == "discover"
+                else self._new_claude(kind, ticker, text, model, effort))
+        self._index.put(conv)
+        # Visible in the list before its transcript exists. Claude titles a chat after its first reply; grok cannot.
+        self._live[conv.id] = Live(title_from=None if kind == "discover" else text)
+        await self.send(conv.id, text)
+        return conv
+
+    def _new_claude(self, kind: str, ticker: str | None, text: str, model: str, effort: str) -> Conversation:
         if kind == "ticker" and not ticker:
             raise Invalid("a ticker conversation needs a ticker")
         if model not in {m for m, _ in CHAT_MODELS}:
             raise Invalid(f"unknown model {model!r}")
         if effort not in CHAT_EFFORTS:
             raise Invalid(f"unknown effort {effort!r}")
-        if not text.strip():
-            raise Invalid("empty message")
         now = self._wall()
         # The window arrives with the first turn's result; until then, the last one seen for this model.
         seen = [c for c in self._index.all() if c.model == model and c.context_window]
         window = max(seen, key=lambda c: c.updated_at).context_window if seen else None
-        conv = Conversation(id=str(uuid.uuid4()), kind=kind, ticker=ticker if kind == "ticker" else None,
+        return Conversation(id=str(uuid.uuid4()), kind=kind, ticker=ticker if kind == "ticker" else None,
                             title=make_title(text), model=model, effort=effort, created_at=now, updated_at=now,
                             context_window=window)
-        self._index.put(conv)
-        self._live[conv.id] = Live(title_from=text)  # visible in the list before its transcript exists
-        await self.send(conv.id, text)
-        return conv
+
+    async def _new_discover(self, text: str, model: str, effort: str, window: object) -> Conversation:
+        grok = self._require_grok()
+        chosen = next((m for m in grok_models(grok.home) if m.id == model), None)
+        if chosen is None:
+            raise Invalid(f"unknown Grok model {model!r}")
+        if effort not in chosen.efforts:
+            raise Invalid(f"unknown effort {effort!r}")
+        if isinstance(window, bool) or window not in chosen.windows:
+            raise Invalid(f"unknown context window {window!r}")
+        await self._kol_sources()  # no session for a chat that could not run
+        try:
+            session = await new_session(grok, self._grok_env, model, window)
+        except (GrokSetupError, OSError) as e:
+            raise Conflict(f"无法创建 Grok 会话：{e}") from e
+        now = self._wall()
+        return Conversation(id=str(uuid.uuid4()), kind="discover", ticker=None, title=make_title(text), model=model,
+                            effort=effort, created_at=now, updated_at=now, context_window=window,
+                            grok_session=session)
 
     async def send(self, conv_id: str, text: str) -> None:
         conv = self._conv(conv_id)
@@ -151,6 +193,9 @@ class ChatService:
         live = self._live.setdefault(conv_id, Live())
         async with live.lock:
             self._check_not_archived(conv_id, live)
+            if conv.kind == "discover":
+                await self._start_grok_turn(conv, live, text)
+                return
             if text.lstrip().startswith(COMPACT_COMMAND) and live.state in BUSY:
                 raise Conflict("等这一轮结束再压缩")
             if live.proc is None or not live.proc.alive:
@@ -158,17 +203,23 @@ class ChatService:
             await self._write_user(conv_id, text)
 
     async def interrupt(self, conv_id: str) -> None:
-        self._conv(conv_id)
+        conv = self._conv(conv_id)
         live = self._live.get(conv_id)
-        if live and live.proc and live.proc.alive and live.state in BUSY:
-            try:
-                await live.proc.interrupt()
-            except (BrokenPipeError, ConnectionResetError) as e:  # it exited after the alive check
-                raise Conflict("Claude 进程已退出，原因见对话里的提示") from e
+        if not (live and live.proc and live.proc.alive and live.state in BUSY):
+            return
+        if conv.kind == "discover":
+            await self._stop_grok_turn(conv_id, live)
+            return
+        try:
+            await live.proc.interrupt()
+        except (BrokenPipeError, ConnectionResetError) as e:  # it exited after the alive check
+            raise Conflict("Claude 进程已退出，原因见对话里的提示") from e
 
     async def edit(self, conv_id: str, message_uuid: str, text: str) -> None:
         """Truncate the conversation before `message_uuid` and send `text` in its place. Files are not touched."""
         conv = self._conv(conv_id)
+        if conv.kind == "discover":
+            raise Invalid("发现新票对话不支持编辑消息")
         live = self._live.setdefault(conv_id, Live())
         async with live.lock:
             self._check_not_archived(conv_id, live)
@@ -239,6 +290,25 @@ class ChatService:
         except (BrokenPipeError, ConnectionResetError) as e:
             raise Conflict("Claude 进程已退出，原因见对话里的提示") from e
 
+    def save_candidates(self, conv_id: str, key: object, tickers: object) -> list[str]:
+        """The user's 存入候选区: only candidates Grok's own reply carries, looked up again in the transcript."""
+        self._conv(conv_id)
+        if (not isinstance(key, str) or not isinstance(tickers, list) or not tickers
+                or not all(isinstance(t, str) for t in tickers)):
+            raise Invalid("key and a list of tickers required")
+        if self.candidates is None:
+            raise Conflict("候选区未配置")
+        path = self._transcript(conv_id)
+        entries = transcript.read_entries(path) if path.exists() else []
+        items = transcript.history(transcript.current_branch(entries), entries).items
+        item = next((i for i in items if i["key"] == key and i.get("candidates")), None)
+        if item is None:
+            raise Conflict("这组候选已不在对话记录里")
+        picked = [c for c in item["candidates"] if c["ticker"] in set(tickers)]
+        if not picked:
+            raise Conflict("所选的票不在这组候选里")
+        return self.candidates.save(conv_id, picked)
+
     async def reap_idle(self) -> None:
         now = self._now()
         for conv_id, live in list(self._live.items()):
@@ -299,6 +369,44 @@ class ChatService:
         if live.state not in BUSY:
             self._set_state(conv_id, "running")
 
+    async def _start_grok_turn(self, conv: Conversation, live: Live, text: str) -> None:
+        """grok takes one message per process (`-p`): each turn is a new process resuming the conversation's
+        grok session, and it exits after its `result`. Called under the chat's lock."""
+        if live.state in BUSY:
+            raise Conflict("回答进行中，等这一轮结束或先停止")
+        if text.lstrip().startswith(COMPACT_COMMAND):
+            raise Invalid("发现新票对话不支持压缩上下文")
+        grok = self._require_grok()
+        rules = discover_rules(await self._kol_sources())  # read every turn: an edited KOL list applies at once
+        await self._make_room()
+        prepare_workdir(grok.workdir)
+        # grok never echoes the prompt: the app records and shows it itself.
+        self._broadcast_entry(conv.id, self._grok_log(conv.id).user(text))
+        proc = ChatProcess(grok_argv(grok, conv, text, rules), self._grok_env, grok.workdir,
+                           on_message=lambda msg: self._on_message(conv.id, proc, msg),
+                           on_exit=lambda p, expected, err: self._on_exit(conv.id, p, expected, err))
+        try:
+            await proc.start()
+        except OSError as e:
+            raise Conflict(f"无法启动 Grok：{e}") from e
+        live.proc, live.partial, live.result_seen, live.last_used = proc, "", False, self._now()
+        self._index.update(conv.id, updated_at=self._wall())
+        self._set_state(conv.id, "running")
+
+    async def _stop_grok_turn(self, conv_id: str, live: Live) -> None:
+        """grok has no interrupt message: the turn's process is ended, and the log marks the stop."""
+        async with live.lock:
+            if live.state not in BUSY:
+                return  # the turn ended while we waited for the lock
+            await self._stop(conv_id)
+            self._broadcast_entry(conv_id, self._grok_log(conv_id).interrupted())
+
+    async def _kol_sources(self) -> KolSources:
+        try:
+            return await kol_sources(self._require_grok().invest_root)
+        except KolUnavailable as e:
+            raise Conflict(f"没有可用的 KOL 名单：{e}") from e
+
     async def _stop(self, conv_id: str) -> None:
         live = self._live.get(conv_id)
         if live is None:
@@ -325,13 +433,16 @@ class ChatService:
         if live is None or live.proc is not proc:
             return  # replaced by an edit or already stopped
         was_busy = live.state in BUSY
+        conv = self._index.get(conv_id)
+        discover = conv is not None and conv.kind == "discover"
+        expected = expected or (discover and live.result_seen)  # grok exits by itself once its turn is done
         live.proc = None
         self._clear_approvals(conv_id, live)
         live.partial = ""
         live.pending_cut = None  # an edit whose process died unwritten is lost: the next resume sees the old tip
         self._set_state(conv_id, "dormant")
         if not expected:
-            text = "Claude 进程意外退出" + ("，本轮中断" if was_busy else "")
+            text = f"{'Grok' if discover else 'Claude'} 进程意外退出" + ("，本轮中断" if was_busy else "")
             self._notice(conv_id, f"{text}：{stderr_tail}" if stderr_tail else text)
 
     # ---- stream messages
@@ -367,6 +478,8 @@ class ChatService:
             self._broadcast(conv_id, "delta", {"text": delta["text"]})
 
     def _on_chat_message(self, conv_id: str, live: Live, msg: dict) -> None:
+        if self._is_discover(conv_id):
+            msg = self._grok_log(conv_id).message(msg)  # grok keeps no transcript the app can read
         if msg["type"] == "assistant":
             self._mark_busy(conv_id)
             tokens = context_tokens(msg["message"])
@@ -398,20 +511,32 @@ class ChatService:
             self._set_retry(conv_id, retry_text(msg))
 
     def _on_result(self, conv_id: str, live: Live, msg: dict) -> None:
-        # The result may list helper models too; the window that matters is the conversation's own model's.
-        usage = msg.get("modelUsage") or {}
-        model = self._index.get(conv_id).model
-        own = [u for name, u in usage.items() if name.startswith(model)]
-        window = (own[0] if own else next(iter(usage.values()), {})).get("contextWindow")
-        self._index.update(conv_id, updated_at=self._wall(),
-                           **({"context_window": window} if window else {}))
+        conv = self._index.get(conv_id)
+        if conv.kind == "discover":
+            live.result_seen = True
+            cost = msg.get("total_cost_usd")
+            changes = ({"cost_usd": (conv.cost_usd or 0.0) + cost}
+                       if isinstance(cost, (int, float)) and not isinstance(cost, bool) else {})
+        else:
+            changes = self._claude_window(conv, msg)
+        conv = self._index.update(conv_id, updated_at=self._wall(), **changes)
         live.partial = ""
         live.last_used = self._now()
         self._clear_approvals(conv_id, live)  # an interrupted turn whose cancel never arrived
         self._set_state(conv_id, "idle")
         self._broadcast(conv_id, "context", self._context(conv_id))
+        if "cost_usd" in changes:
+            self._broadcast(conv_id, "conv", self._summary(conv))
         if live.title_from is not None:
             self._spawn_task(self._request_title(conv_id, live))
+
+    @staticmethod
+    def _claude_window(conv: Conversation, msg: dict) -> dict:
+        # The result may list helper models too; the window that matters is the conversation's own model's.
+        usage = msg.get("modelUsage") or {}
+        own = [u for name, u in usage.items() if name.startswith(conv.model)]
+        window = (own[0] if own else next(iter(usage.values()), {})).get("contextWindow")
+        return {"context_window": window} if window else {}
 
     async def _request_title(self, conv_id: str, live: Live) -> None:
         text, live.title_from = live.title_from, None
@@ -474,7 +599,8 @@ class ChatService:
                       "seven_day": (windows.get("seven_day") or {}).get("utilization"),
                       "status": info.get("status"), "resets_at": info.get("resetsAt")}
         for cid in self._live:
-            self._broadcast(cid, "usage", self.usage)
+            if not self._is_discover(cid):  # Claude's subscription windows say nothing about Grok
+                self._broadcast(cid, "usage", self.usage)
         if info.get("isUsingOverage"):
             self._notice(conv_id, "检测到超额计费（usage credits），已停止本轮")
             self._spawn_task(self.interrupt(conv_id))
@@ -540,7 +666,27 @@ class ChatService:
         live = self._live.get(conv.id)
         return {**asdict(conv), "state": live.state if live else "dormant"}
 
+    def _is_discover(self, conv_id: str) -> bool:
+        conv = self._index.get(conv_id)
+        return conv is not None and conv.kind == "discover"
+
+    def _require_grok(self) -> GrokConfig:
+        if self._grok is None:
+            raise Invalid("Grok 未配置")
+        return self._grok
+
+    def _grok_log(self, conv_id: str) -> GrokLog:
+        if conv_id not in self._grok_logs:
+            self._grok_logs[conv_id] = GrokLog(self._transcript(conv_id))
+        return self._grok_logs[conv_id]
+
+    def _broadcast_entry(self, conv_id: str, entry: dict) -> None:
+        for item in message_items(entry):
+            self._broadcast(conv_id, "item", item)
+
     def _transcript(self, conv_id: str) -> Path:
+        if self._is_discover(conv_id):
+            return self._require_grok().logs / f"{conv_id}.jsonl"
         return self._projects / f"{conv_id}.jsonl"
 
     def _visible(self, conv: Conversation) -> bool:
