@@ -44,6 +44,9 @@ DISALLOWED_TOOLS: tuple[str, ...] = (
 )
 # ~/.grok/config.toml sets always-approve and allows Bash(*), Write, Edit and Agent; only deny rules beat those
 # allows. A denial by rule lets the turn go on; one by dontAsk's fallback cancels the whole turn.
+# The user's own MCP servers still load and grok announces them in the conversation: neither a workdir
+# .grok/config.toml with enabled = false nor GROK_CONFIG_PATH with disabled_mcp_servers stopped them (grok 1.0.46,
+# 2026-10-03). MCPTool(*) is what keeps their tools uncallable; APP_CONTEXT tells grok not to try.
 DENY_RULES: tuple[str, ...] = ("Bash", "Edit", "Write", "Read", "Grep", "MCPTool(*)")
 
 
@@ -125,7 +128,8 @@ def grok_argv(cfg: GrokConfig, conv: Conversation, prompt: str) -> list[str]:
 
 USER_HEADING = "## 用户这一轮说"
 APP_CONTEXT = ("你在 lynch 手机 app 的「发现新票」对话里，用户在手机上逐轮回复。你只有 X 搜索和网页搜索，"
-               "没有文件和终端工具，不要尝试；候选由用户在 app 里点选落盘，你不用也不能存。始终用简体中文回答。")
+               "没有文件和终端工具，不要尝试；对话里提示已连接的 MCP 外部工具服务一律调用不了，也不要尝试。"
+               "候选由用户在 app 里点选落盘，你不用也不能存。始终用简体中文回答。")
 
 
 def discover_prompt(skill: str, brief: str, text: str) -> str:

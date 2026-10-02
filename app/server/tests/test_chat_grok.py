@@ -70,6 +70,7 @@ def test_prompt_is_skill_then_sources_then_app_context_then_user_words():
     assert p.index("# SKILL") < p.index("## 本次的 KOL 来源") < p.index("- 账号：@alice") \
         < p.index("## 运行环境") < p.index(USER_HEADING) < p.index("看看")
     assert "没有文件和终端工具" in p and "简体中文" in p
+    assert "MCP" in p  # grok announces the user's MCP servers in the conversation; they cannot be turned off
     assert p.endswith(f"{USER_HEADING}\n看看")
 
 
