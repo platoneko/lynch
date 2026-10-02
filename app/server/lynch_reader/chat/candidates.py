@@ -22,6 +22,7 @@ TICKER = re.compile(r"^[A-Z0-9]+\.(US|HK|SH|SZ|SG)$")
 # HK and A-share codes are bare numbers: without a name the reader cannot tell which company it is.
 NAME_REQUIRED = ("HK", "SH", "SZ")
 STANCES = ("bullish", "bearish", "neutral")
+WORTH_RESEARCH = ("bullish", "neutral")  # a bearish view is not worth a research chat: it never becomes a candidate
 POST_URL = re.compile(r"^https://(?:x|twitter)\.com/[^/\s]+/status/(\d+)")
 SOURCE_FIELDS = ("handle", "stance", "reason", "quote", "url", "posted_at")
 CANDIDATES_FILE = REPO_ROOT / "output" / "candidates" / "candidates.json"
@@ -57,6 +58,9 @@ def parse_candidates(text: str) -> Parsed | None:
         if candidate is None:
             dropped += 1
             continue
+        candidate["sources"] = [s for s in candidate["sources"] if s["stance"] in WORTH_RESEARCH]
+        if not candidate["sources"]:
+            continue  # only bearish views: well formed, just not wanted
         known = merged.setdefault(candidate["ticker"], {**candidate, "sources": []})
         known["name"] = known["name"] or candidate["name"]
         seen = {post_id(s["url"]) for s in known["sources"]}

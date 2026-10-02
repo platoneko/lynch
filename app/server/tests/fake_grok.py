@@ -40,8 +40,8 @@ CANDIDATES = """KOL 最近提到两只票。
 {"candidates": [
  {"ticker": "0700.HK", "name": "腾讯控股", "sources": [{"handle": "alice", "stance": "bullish", "reason": "游戏回暖",
   "quote": "Tencent looks cheap", "url": "https://x.com/alice/status/1", "posted_at": "2026-10-01T08:00:00Z"}]},
- {"ticker": "AXTI.US", "name": "AXT Inc", "sources": [{"handle": "bob", "stance": "bearish", "reason": "估值过高",
-  "quote": "AXTI is stretched", "url": "https://x.com/bob/status/2", "posted_at": "2026-10-01T09:00:00Z"}]}
+ {"ticker": "AXTI.US", "name": "AXT Inc", "sources": [{"handle": "bob", "stance": "neutral", "reason": "值得关注",
+  "quote": "AXTI is one to watch", "url": "https://x.com/bob/status/2", "posted_at": "2026-10-01T09:00:00Z"}]}
 ]}
 ```"""
 

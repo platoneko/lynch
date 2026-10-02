@@ -17,7 +17,7 @@ REPLY = """两只票。
 {"candidates": [
  {"ticker": "0700.HK", "name": "腾讯控股", "sources": [{"handle": "alice", "stance": "bullish", "reason": "r",
   "quote": "q", "url": "https://x.com/alice/status/1", "posted_at": "2026-10-01T08:00:00Z"}]},
- {"ticker": "AXTI.US", "name": "AXT Inc", "sources": [{"handle": "bob", "stance": "bearish", "reason": "r",
+ {"ticker": "AXTI.US", "name": "AXT Inc", "sources": [{"handle": "bob", "stance": "bullish", "reason": "r",
   "quote": "q", "url": "https://x.com/bob/status/2", "posted_at": "2026-10-01T09:00:00Z"}]}
 ]}
 ```"""

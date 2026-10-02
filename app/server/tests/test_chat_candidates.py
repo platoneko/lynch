@@ -217,3 +217,13 @@ def test_saving_the_same_post_again_by_another_url_adds_nothing(tmp_path):
     store.save("conv1", [cand()])
     store.save("conv2", [cand("AXTI.US", "", src(url="https://twitter.com/alice/status/1?s=20"))])
     assert [s["url"] for s in store.all()[0]["sources"]] == ["https://x.com/alice/status/1"]
+
+
+def test_bearish_views_are_left_out_without_counting_as_bad_format():
+    bear = src(handle="bob", url="https://x.com/bob/status/2", stance="bearish")
+    calm = src(handle="carol", url="https://x.com/carol/status/3", stance="neutral")
+    p = parse_candidates(block({"ticker": "AXTI.US", "name": "", "sources": [src(), bear, calm]},
+                               {"ticker": "MSFT.US", "name": "Microsoft", "sources": [bear]}))
+    [c] = p.candidates
+    assert c["ticker"] == "AXTI.US" and [s["handle"] for s in c["sources"]] == ["alice", "carol"]
+    assert p.dropped == 0
