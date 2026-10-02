@@ -7,7 +7,7 @@ import logging
 import os
 import re
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -26,7 +26,11 @@ WORTH_RESEARCH = ("bullish", "neutral")  # a bearish view is not worth a researc
 POST_URL = re.compile(r"^https://(?:x|twitter)\.com/[^/\s]+/status/(\d+)")
 SOURCE_FIELDS = ("handle", "stance", "reason", "quote", "url", "posted_at")
 CANDIDATES_FILE = REPO_ROOT / "output" / "candidates" / "candidates.json"
-RETENTION_S = 30 * 86400  # how long an archived ticker, and a source not among the shown ones, is kept
+DAY_S = 86400
+ARCHIVE_RETENTION_S = 30 * DAY_S  # how long an archived ticker is kept
+# How long a source not among the shown ones is kept. Both writers (server, `just candidates-save`) read this one
+# variable, so set it where both run.
+SOURCE_DAYS_ENV, DEFAULT_SOURCE_DAYS = "LYNCH_CANDIDATE_SOURCE_DAYS", 7
 SHOWN_KOLS = 5  # a candidate shows each KOL's latest post, for this many KOLs; the web's shownSources matches it
 
 
@@ -99,6 +103,16 @@ def _source(s: object) -> dict | None:
     return out
 
 
+def configured_source_days(environ: Mapping[str, str] = os.environ) -> int:
+    """Days a source not among the shown ones is kept: SOURCE_DAYS_ENV when set, a whole number of days ≥ 1."""
+    raw = environ.get(SOURCE_DAYS_ENV)
+    if raw is None:
+        return DEFAULT_SOURCE_DAYS
+    if not raw.isdigit() or int(raw) < 1:
+        raise ValueError(f"{SOURCE_DAYS_ENV} must be a whole number of days ≥ 1, got {raw!r}")
+    return int(raw)
+
+
 def shown_sources(sources: list[dict]) -> list[dict]:
     """Each KOL's latest post, newest first, for at most SHOWN_KOLS KOLs: what a card shows, and never recycled."""
     latest: dict[str, dict] = {}
@@ -130,20 +144,21 @@ class CandidateStore:
     candidates.lock. Reads take no lock: the file is only ever replaced whole. Whether a ticker has landed is not
     stored: its framework file says so.
 
-    Retention is lazy. A ticker archived for RETENTION_S is hidden at once and leaves the file with the next write.
-    A ticker's sources saved over RETENTION_S ago go only when that ticker is saved again, and never the shown ones
-    (shown_sources).
+    Retention is lazy. A ticker archived for ARCHIVE_RETENTION_S is hidden at once and leaves the file with the next
+    write. A ticker's sources saved over source_days ago go only when that ticker is saved again, and never the shown
+    ones (shown_sources).
     """
 
-    def __init__(self, path: Path, wall: Callable[[], float] = time.time) -> None:
+    def __init__(self, path: Path, wall: Callable[[], float] = time.time, source_days: int | None = None) -> None:
         self._path, self._wall = path, wall
+        self._source_ttl_s = (source_days or configured_source_days()) * DAY_S
 
     def all(self) -> list[dict]:
         return sorted(self._live(self._wall()).values(), key=lambda r: r["updated_at"], reverse=True)
 
     def save(self, conv_id: str, picked: list[dict]) -> list[str]:
         """Adds checked candidates (parse_candidates' shape). A ticker saved again gains the new sources, drops those
-        saved more than RETENTION_S ago that it no longer shows, and leaves the archive: the user picked it again."""
+        saved more than source_days ago that it no longer shows, and leaves the archive: the user picked it again."""
         with self._locked():
             now = self._wall()
             rows = self._live(now)
@@ -156,7 +171,7 @@ class CandidateStore:
                                    for s in c["sources"] if post_id(s["url"]) not in seen]
                 shown = {post_id(s["url"]) for s in shown_sources(row["sources"])}
                 row["sources"] = [s for s in row["sources"]
-                                  if post_id(s["url"]) in shown or now - s.get("saved_at", now) < RETENTION_S]
+                                  if post_id(s["url"]) in shown or now - s.get("saved_at", now) < self._source_ttl_s]
                 row.update(updated_at=now, archived_at=None)
             self._write(rows)
         return [c["ticker"] for c in picked]
@@ -179,9 +194,9 @@ class CandidateStore:
         return True
 
     def _live(self, now: float) -> dict[str, dict]:
-        """The rows, without those archived more than RETENTION_S ago."""
+        """The rows, without those archived more than ARCHIVE_RETENTION_S ago."""
         return {t: r for t, r in self._read().items()
-                if r["archived_at"] is None or now - r["archived_at"] < RETENTION_S}
+                if r["archived_at"] is None or now - r["archived_at"] < ARCHIVE_RETENTION_S}
 
     def _read(self) -> dict[str, dict]:
         if not self._path.exists():

@@ -30,7 +30,7 @@ export function groupCandidates(list: SavedCandidate[], hasFramework: (t: string
   return g;
 }
 
-const ARCHIVE_DAYS = 30; // server candidates.py RETENTION_S
+const ARCHIVE_DAYS = 30; // server candidates.py ARCHIVE_RETENTION_S
 
 /** Whole days an archived ticker has left before the server deletes it. */
 export function archiveDaysLeft(archivedAt: number, now: number): number {
