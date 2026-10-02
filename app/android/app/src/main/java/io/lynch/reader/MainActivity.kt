@@ -172,6 +172,7 @@ class MainActivity : Activity() {
         retryButton = Button(this).apply { text = "重试"; setOnClickListener { retry() } }
         openTailfwdButton = Button(this).apply {
             text = "打开 tailfwd"
+            isAllCaps = false // the app's name is lower-case; the platform button style would shout it
             setOnClickListener { tailfwdLaunch()?.let { startActivity(it) } }
         }
         portInput = EditText(this).apply {
