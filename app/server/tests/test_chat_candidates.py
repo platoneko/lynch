@@ -95,7 +95,7 @@ def test_save_then_reload(tmp_path):
     store = CandidateStore(tmp_path / "c" / "candidates.json", clock)
     assert store.save("conv1", [cand()]) == ["AXTI.US"]
     [row] = CandidateStore(tmp_path / "c" / "candidates.json").all()
-    assert row["ticker"] == "AXTI.US" and row["name"] == "AXT Inc" and row["dismissed"] is False
+    assert row["ticker"] == "AXTI.US" and row["name"] == "AXT Inc" and row["archived_at"] is None
     assert row["first_saved_at"] == row["updated_at"] == 100.0
     assert row["sources"] == [{**src(), "saved_at": 100.0, "conv_id": "conv1"}]
 
@@ -111,13 +111,61 @@ def test_saving_twice_merges_sources_without_duplicates(tmp_path):
     assert row["name"] == "AXT Inc" and (row["first_saved_at"], row["updated_at"]) == (100.0, 200.0)
 
 
-def test_dismissed_ticker_saved_again_comes_back(tmp_path):
+def test_archive_and_restore(tmp_path):
+    clock = Clock()
+    store = CandidateStore(tmp_path / "candidates.json", clock)
+    store.save("conv1", [cand()])
+    clock.t = 150.0
+    assert store.archive("AXTI.US") is True and store.all()[0]["archived_at"] == 150.0
+    assert store.restore("AXTI.US") is True and store.all()[0]["archived_at"] is None
+    assert store.archive("NOPE.US") is False and store.restore("NOPE.US") is False
+
+
+def test_an_archived_ticker_saved_again_returns_to_todo(tmp_path):
     store = CandidateStore(tmp_path / "candidates.json", Clock())
     store.save("conv1", [cand()])
-    assert store.dismiss("AXTI.US") is True and store.all()[0]["dismissed"] is True
+    store.archive("AXTI.US")
+    store.save("conv2", [cand("AXTI.US", "", src(handle="bob", url="https://x.com/bob/status/2"))])
+    [row] = store.all()
+    assert row["archived_at"] is None and [s["handle"] for s in row["sources"]] == ["alice", "bob"]
+
+
+DAY = 86400.0
+
+
+def test_an_archived_ticker_is_gone_after_30_days(tmp_path):
+    path = tmp_path / "candidates.json"
+    clock = Clock()
+    store = CandidateStore(path, clock)
     store.save("conv1", [cand()])
-    assert store.all()[0]["dismissed"] is False
-    assert store.dismiss("NOPE.US") is False
+    store.archive("AXTI.US")
+    clock.t += 30 * DAY - 1
+    assert [r["ticker"] for r in store.all()] == ["AXTI.US"]
+    clock.t += 1
+    assert store.all() == []  # hidden at once
+    assert "AXTI.US" in path.read_text(encoding="utf-8")  # removed from the file on the next write
+    store.save("conv1", [cand("MSFT.US", "Microsoft")])
+    assert "AXTI.US" not in path.read_text(encoding="utf-8")
+
+
+def test_saving_again_drops_that_tickers_sources_older_than_30_days(tmp_path):
+    clock = Clock()
+    store = CandidateStore(tmp_path / "candidates.json", clock)
+    store.save("conv1", [cand(), cand("MSFT.US", "Microsoft")])
+    clock.t += 31 * DAY
+    assert [len(r["sources"]) for r in store.all()] == [1, 1]  # lazy: nothing goes until that ticker is saved again
+    store.save("conv2", [cand("AXTI.US", "", src(handle="bob", url="https://x.com/bob/status/2"))])
+    rows = {r["ticker"]: r for r in store.all()}
+    assert [s["handle"] for s in rows["AXTI.US"]["sources"]] == ["bob"]
+    assert [s["handle"] for s in rows["MSFT.US"]["sources"]] == ["alice"]  # not saved again: untouched
+
+
+def test_a_row_dismissed_before_archiving_existed_reads_as_archived(tmp_path):
+    path = tmp_path / "candidates.json"
+    path.write_text(json.dumps([{"ticker": "OLD.US", "name": "", "sources": [], "first_saved_at": 1.0,
+                                 "updated_at": 5.0, "dismissed": True}]), encoding="utf-8")
+    [row] = CandidateStore(path, Clock()).all()
+    assert row["archived_at"] == 5.0 and "dismissed" not in row
 
 
 def test_newest_first_and_malformed_rows_skipped(tmp_path):
@@ -137,8 +185,8 @@ def test_two_stores_on_one_file_keep_each_others_rows(tmp_path):
     script.save("terminal", [cand("MSFT.US", "Microsoft")])
     server.save("conv1", [cand("AXTI.US")])  # the server's next save must not drop the script's row
     assert sorted(r["ticker"] for r in server.all()) == ["AAPL.US", "AXTI.US", "MSFT.US"]
-    assert script.dismiss("AAPL.US") is True
-    assert {r["ticker"]: r["dismissed"] for r in server.all()}["AAPL.US"] is True
+    assert script.archive("AAPL.US") is True
+    assert {r["ticker"]: r["archived_at"] for r in server.all()}["AAPL.US"] is not None
 
 
 def test_save_waits_for_another_writers_lock(tmp_path):

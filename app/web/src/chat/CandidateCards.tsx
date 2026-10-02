@@ -10,7 +10,7 @@ export function CandidateCards({ convId, itemKey, candidates, dropped, hasFramew
   candidates: Candidate[];
   dropped: number;
   hasFramework: (ticker: string) => boolean;
-  saved: ReadonlySet<string>; // tickers already in the candidate list (not dismissed)
+  saved: ReadonlySet<string>; // tickers already in the candidate list (not archived)
   onSaved: (tickers: string[]) => void;
 }) {
   const [picked, setPicked] = useState(() => defaultPicked(candidates, hasFramework, saved));

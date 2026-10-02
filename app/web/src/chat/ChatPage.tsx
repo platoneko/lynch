@@ -105,7 +105,7 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
   useEffect(() => {
     if (id === null || !discover) return;
     fetchCandidates().then(
-      (l) => setSavedTickers(new Set(l.filter((c) => !c.dismissed).map((c) => c.ticker))),
+      (l) => setSavedTickers(new Set(l.filter((c) => c.archived_at === null).map((c) => c.ticker))),
       () => setSavedTickers(new Set()), // no candidate list to compare against: still show the cards
     );
   }, [id, discover]);

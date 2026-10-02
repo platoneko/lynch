@@ -56,8 +56,12 @@ export async function fetchCandidates(): Promise<SavedCandidate[]> {
   return ((await (await get('/api/candidates')).json()) as { candidates: SavedCandidate[] }).candidates;
 }
 
-export async function dismissCandidate(ticker: string): Promise<void> {
-  await post(`/api/candidates/${encodeURIComponent(ticker)}/dismiss`);
+export async function archiveCandidate(ticker: string): Promise<void> {
+  await post(`/api/candidates/${encodeURIComponent(ticker)}/archive`);
+}
+
+export async function restoreCandidate(ticker: string): Promise<void> {
+  await post(`/api/candidates/${encodeURIComponent(ticker)}/restore`);
 }
 
 const EVENTS = ['delta', 'item', 'tool_result', 'state', 'retry', 'usage', 'context', 'conv', 'approval', 'approval_done'];

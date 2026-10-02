@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { fetchAxis, fetchCatalog, fetchFramework } from './api';
-import { archiveChat, archiveTicker, dismissCandidate, fetchCandidates, fetchChatOptions, fetchChats } from './chat/api';
+import {
+  archiveCandidate, archiveChat, archiveTicker, fetchCandidates, fetchChatOptions, fetchChats, restoreCandidate,
+} from './chat/api';
 import { groupCandidates } from './chat/candidateModel';
 import { CandidatesPage } from './chat/CandidatesPage';
 import { ChatPage } from './chat/ChatPage';
@@ -149,7 +151,8 @@ export function App() {
       <CandidatesPage list={candidates} error={candidateError} hasFramework={(t) => pool.has(t)}
         onBack={() => (window.history.length > 1 ? window.history.back() : (window.location.hash = chatsHash()))}
         onResearch={() => { window.location.hash = newChatHash(null); }}
-        onDismiss={(t) => dismissCandidate(t).then(loadCandidates, (e: unknown) => setCandidateError(String(e instanceof Error ? e.message : e)))}
+        onArchive={(t) => archiveCandidate(t).then(loadCandidates, (e: unknown) => setCandidateError(String(e instanceof Error ? e.message : e)))}
+        onRestore={(t) => restoreCandidate(t).then(loadCandidates, (e: unknown) => setCandidateError(String(e instanceof Error ? e.message : e)))}
         onOpenDoc={(t) => { window.location.hash = docHash(t); }} />
     );
   }

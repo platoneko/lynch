@@ -21,13 +21,20 @@ export function defaultPicked(cands: Candidate[], hasFramework: (t: string) => b
 export interface CandidateGroups {
   todo: SavedCandidate[];
   landed: SavedCandidate[]; // its framework exists now
-  dismissed: SavedCandidate[];
+  archived: SavedCandidate[]; // put away by the user, landed or not
 }
 
 export function groupCandidates(list: SavedCandidate[], hasFramework: (t: string) => boolean): CandidateGroups {
-  const g: CandidateGroups = { todo: [], landed: [], dismissed: [] };
-  for (const c of list) (hasFramework(c.ticker) ? g.landed : c.dismissed ? g.dismissed : g.todo).push(c);
+  const g: CandidateGroups = { todo: [], landed: [], archived: [] };
+  for (const c of list) (c.archived_at !== null ? g.archived : hasFramework(c.ticker) ? g.landed : g.todo).push(c);
   return g;
+}
+
+const ARCHIVE_DAYS = 30; // server candidates.py RETENTION_S
+
+/** Whole days an archived ticker has left before the server deletes it. */
+export function archiveDaysLeft(archivedAt: number, now: number): number {
+  return Math.max(0, Math.ceil(ARCHIVE_DAYS - (now - archivedAt) / 86400));
 }
 
 /** The opening of a new-ticker research chat started from the candidate list; the user edits it before sending. */

@@ -194,7 +194,7 @@ def test_answer_an_approval(repo, tmp_path, quotes):
     assert f.read_text() == "beta\n"
 
 
-def test_discover_create_save_list_and_dismiss(repo, tmp_path, quotes):
+def test_discover_create_save_list_archive_and_restore(repo, tmp_path, quotes):
     c, svc = client(repo, tmp_path, quotes)
     with c:
         assert c.get("/api/chats/options").json()["discover"]["default_model"] == "grok-4.6"
@@ -212,7 +212,10 @@ def test_discover_create_save_list_and_dismiss(repo, tmp_path, quotes):
         assert r.json() == {"saved": ["AXTI.US"]}
         assert c.post(f"/api/chats/{conv_id}/candidates", json={"key": "nope", "tickers": ["AXTI.US"]}).status_code == 409
         assert [x["ticker"] for x in c.get("/api/candidates").json()["candidates"]] == ["AXTI.US"]
-        assert c.post("/api/candidates/AXTI.US/dismiss", json={}).status_code == 204
-        assert c.get("/api/candidates").json()["candidates"][0]["dismissed"] is True
-        assert c.post("/api/candidates/NOPE.US/dismiss", json={}).status_code == 400
-        assert c.post("/api/candidates/AXTI.US/dismiss", data="x").status_code == 415  # the CSRF guard holds
+        assert c.post("/api/candidates/AXTI.US/archive", json={}).status_code == 204
+        assert c.get("/api/candidates").json()["candidates"][0]["archived_at"] is not None
+        assert c.post("/api/candidates/AXTI.US/restore", json={}).status_code == 204
+        assert c.get("/api/candidates").json()["candidates"][0]["archived_at"] is None
+        assert c.post("/api/candidates/NOPE.US/archive", json={}).status_code == 400
+        assert c.post("/api/candidates/NOPE.US/restore", json={}).status_code == 400
+        assert c.post("/api/candidates/AXTI.US/archive", data="x").status_code == 415  # the CSRF guard holds

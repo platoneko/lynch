@@ -25,6 +25,7 @@ STANCES = ("bullish", "bearish", "neutral")
 POST_URL = re.compile(r"^https://(?:x|twitter)\.com/[^/\s]+/status/(\d+)")
 SOURCE_FIELDS = ("handle", "stance", "reason", "quote", "url", "posted_at")
 CANDIDATES_FILE = REPO_ROOT / "output" / "candidates" / "candidates.json"
+RETENTION_S = 30 * 86400  # how long an archived ticker, and a source not saved again, is kept
 
 
 @dataclass(frozen=True)
@@ -110,43 +111,60 @@ def _is_iso_time(s: str) -> bool:
 class CandidateStore:
     """output/candidates/candidates.json, one row per ticker.
 
-    Two writers share it: the server (存入候选区, 划掉) and `just candidates-save` from a terminal session. So
+    Two writers share it: the server (存入候选区, 归档, 恢复) and `just candidates-save` from a terminal session. So
     every call reads the file, and each change is a read-modify-write under an exclusive flock on
     candidates.lock. Reads take no lock: the file is only ever replaced whole. Whether a ticker has landed is not
     stored: its framework file says so.
+
+    Retention is lazy. A ticker archived for RETENTION_S is hidden at once and leaves the file with the next write.
+    A ticker's sources older than RETENTION_S go only when that ticker is saved again.
     """
 
     def __init__(self, path: Path, wall: Callable[[], float] = time.time) -> None:
         self._path, self._wall = path, wall
 
     def all(self) -> list[dict]:
-        return sorted(self._read().values(), key=lambda r: r["updated_at"], reverse=True)
+        return sorted(self._live(self._wall()).values(), key=lambda r: r["updated_at"], reverse=True)
 
     def save(self, conv_id: str, picked: list[dict]) -> list[str]:
-        """Adds checked candidates (parse_candidates' shape). A ticker saved again gains its new sources and
-        leaves the dismissed group: the user picked it again."""
+        """Adds checked candidates (parse_candidates' shape). A ticker saved again drops its sources saved more than
+        RETENTION_S ago, gains the new ones, and leaves the archive: the user picked it again."""
         with self._locked():
-            rows = self._read()
             now = self._wall()
+            rows = self._live(now)
             for c in picked:
                 row = rows.setdefault(c["ticker"], {"ticker": c["ticker"], "name": "", "sources": [],
-                                                    "first_saved_at": now, "updated_at": now, "dismissed": False})
+                                                    "first_saved_at": now, "updated_at": now, "archived_at": None})
                 row["name"] = c["name"] or row["name"]
+                row["sources"] = [s for s in row["sources"] if now - s.get("saved_at", now) < RETENTION_S]
                 seen = {post_id(s["url"]) for s in row["sources"]}
                 row["sources"] += [{**s, "saved_at": now, "conv_id": conv_id}
                                    for s in c["sources"] if post_id(s["url"]) not in seen]
-                row.update(updated_at=now, dismissed=False)
+                row.update(updated_at=now, archived_at=None)
             self._write(rows)
         return [c["ticker"] for c in picked]
 
-    def dismiss(self, ticker: str) -> bool:
+    def archive(self, ticker: str) -> bool:
+        return self._set_archived(ticker, archived=True)
+
+    def restore(self, ticker: str) -> bool:
+        return self._set_archived(ticker, archived=False)
+
+    def _set_archived(self, ticker: str, archived: bool) -> bool:
         with self._locked():
-            rows = self._read()
-            if ticker not in rows:
+            now = self._wall()
+            rows = self._live(now)
+            row = rows.get(ticker)
+            if row is None:
                 return False
-            rows[ticker]["dismissed"] = True
+            row["archived_at"] = (row["archived_at"] or now) if archived else None
             self._write(rows)
         return True
+
+    def _live(self, now: float) -> dict[str, dict]:
+        """The rows, without those archived more than RETENTION_S ago."""
+        return {t: r for t, r in self._read().items()
+                if r["archived_at"] is None or now - r["archived_at"] < RETENTION_S}
 
     def _read(self) -> dict[str, dict]:
         if not self._path.exists():
@@ -154,6 +172,9 @@ class CandidateStore:
         rows = {}
         for row in json.loads(self._path.read_text(encoding="utf-8")):
             if isinstance(row, dict) and isinstance(row.get("ticker"), str) and isinstance(row.get("sources"), list):
+                if row.pop("dismissed", False):  # 划掉, before 归档 replaced it
+                    row.setdefault("archived_at", row.get("updated_at"))
+                row.setdefault("archived_at", None)
                 rows[row["ticker"]] = row
             else:  # one bad row must not take the whole list down
                 log.warning("skipping malformed candidate row: %r", row)

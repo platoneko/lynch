@@ -143,5 +143,5 @@ export interface SavedCandidate extends Candidate {
   sources: (CandidateSource & { saved_at: number; conv_id: string })[];
   first_saved_at: number;
   updated_at: number;
-  dismissed: boolean;
+  archived_at: number | null; // seconds since the epoch; deleted 30 days later
 }

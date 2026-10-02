@@ -146,8 +146,13 @@ def chat_routes(service: ChatService, frameworks_dir: Path) -> list[Route]:
     async def list_candidates(request: Request) -> Response:
         return JSONResponse({"candidates": service.candidates.all()})
 
-    async def dismiss_candidate(request: Request) -> Response:
-        if not service.candidates.dismiss(request.path_params["ticker"]):
+    async def archive_candidate(request: Request) -> Response:
+        if not service.candidates.archive(request.path_params["ticker"]):
+            raise Invalid("候选区没有这只票")
+        return Response(status_code=204)
+
+    async def restore_candidate(request: Request) -> Response:
+        if not service.candidates.restore(request.path_params["ticker"]):
             raise Invalid("候选区没有这只票")
         return Response(status_code=204)
 
@@ -168,7 +173,8 @@ def chat_routes(service: ChatService, frameworks_dir: Path) -> list[Route]:
     if service.candidates is not None:
         routes += [
             Route("/api/candidates", _guarded(list_candidates), methods=["GET"]),
-            Route("/api/candidates/{ticker}/dismiss", _guarded(dismiss_candidate), methods=["POST"]),
+            Route("/api/candidates/{ticker}/archive", _guarded(archive_candidate), methods=["POST"]),
+            Route("/api/candidates/{ticker}/restore", _guarded(restore_candidate), methods=["POST"]),
         ]
     return routes
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  candidateDraft, candidateLabel, costText, defaultPicked, discoverModelText, groupCandidates, partialText,
+  archiveDaysLeft, candidateDraft, candidateLabel, costText, defaultPicked, discoverModelText, groupCandidates,
+  partialText,
 } from './candidateModel';
 import { toolSummary } from './chatModel';
 import type { Candidate, SavedCandidate } from './types';
@@ -10,8 +11,8 @@ const src = { handle: 'alice', stance: 'bullish' as const, reason: '游戏回暖
 const hk: Candidate = { ticker: '0700.HK', name: '腾讯控股', sources: [src] };
 const us: Candidate = { ticker: 'AXTI.US', name: 'AXT Inc', sources: [src] };
 const bare: Candidate = { ticker: 'AXTI.US', name: '', sources: [src] };
-const saved = (c: Candidate, dismissed = false): SavedCandidate => ({
-  ...c, sources: c.sources.map((s) => ({ ...s, saved_at: 1, conv_id: 'c' })), first_saved_at: 1, updated_at: 1, dismissed,
+const saved = (c: Candidate, archived_at: number | null = null): SavedCandidate => ({
+  ...c, sources: c.sources.map((s) => ({ ...s, saved_at: 1, conv_id: 'c' })), first_saved_at: 1, updated_at: 1, archived_at,
 });
 
 describe('candidateLabel', () => {
@@ -32,9 +33,21 @@ describe('defaultPicked', () => {
 });
 
 describe('groupCandidates', () => {
-  it('puts landed first, then dismissed, else to-do', () => {
-    const g = groupCandidates([saved(hk), saved(us, true), saved({ ...us, ticker: 'MSFT.US' }, true)], (t) => t === 'MSFT.US');
-    expect([g.todo, g.landed, g.dismissed].map((l) => l.map((c) => c.ticker))).toEqual([['0700.HK'], ['MSFT.US'], ['AXTI.US']]);
+  it('puts archived first, then landed, else to-do', () => {
+    const msft = { ...us, ticker: 'MSFT.US' };
+    const nvda = { ...us, ticker: 'NVDA.US' };
+    const g = groupCandidates([saved(hk), saved(us, 5), saved(msft), saved(nvda, 5)], (t) => t === 'MSFT.US' || t === 'NVDA.US');
+    expect([g.todo, g.landed, g.archived].map((l) => l.map((c) => c.ticker)))
+      .toEqual([['0700.HK'], ['MSFT.US'], ['AXTI.US', 'NVDA.US']]);
+  });
+});
+
+describe('archiveDaysLeft', () => {
+  it('counts down from 30 days, rounding up, never below 0', () => {
+    const day = 86400;
+    expect(archiveDaysLeft(100, 100)).toBe(30);
+    expect(archiveDaysLeft(100, 100 + day + 1)).toBe(29);
+    expect(archiveDaysLeft(100, 100 + 30 * day)).toBe(0);
   });
 });
 
