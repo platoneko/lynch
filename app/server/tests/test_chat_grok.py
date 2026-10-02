@@ -78,3 +78,44 @@ def test_workdir_is_its_own_git_root(tmp_path):
     prepare_workdir(wd)  # idempotent
     top = subprocess.run(["git", "-C", str(wd), "rev-parse", "--show-toplevel"], capture_output=True, text=True)
     assert top.stdout.strip() == str(wd.resolve())
+
+
+import asyncio
+import os
+
+import pytest
+
+from lynch_reader.chat.grok import GrokSetupError, new_session
+from tests.chat_helpers import fake_grok_env, grok_config, grok_launches, grok_session_file
+
+
+def setup_env(tmp_path, **extra):
+    return grok_env({**os.environ, **fake_grok_env(tmp_path), **extra})
+
+
+def test_new_session_sets_model_and_window_over_acp(tmp_path):
+    cfg = grok_config(tmp_path)
+    sid = asyncio.run(new_session(cfg, setup_env(tmp_path), "grok-4.6", 500000))
+    assert grok_session_file(tmp_path, sid) == {"model": "grok-4.6", "window": 500000, "cwd": str(cfg.workdir)}
+    [launch] = grok_launches(tmp_path)
+    assert launch["argv"] == ["agent", "stdio"] and launch["cwd"] == str(cfg.workdir)
+    assert launch["grok_env"]["GROK_SANDBOX"] == "read-only"  # the same profile every later turn resumes under
+    assert (cfg.workdir / ".git").is_dir()
+
+
+def test_new_session_reports_an_acp_error(tmp_path):
+    env = setup_env(tmp_path, FAKE_GROK_ACP_FAIL="session/set_model")
+    with pytest.raises(GrokSetupError, match="session/set_model"):
+        asyncio.run(new_session(grok_config(tmp_path), env, "grok-4.6", 500000))
+
+
+def test_new_session_reports_grok_exiting(tmp_path):
+    env = setup_env(tmp_path, FAKE_GROK_ACP_EXIT="1")
+    with pytest.raises(GrokSetupError, match="not logged in"):
+        asyncio.run(new_session(grok_config(tmp_path), env, "grok-4.6", 256000))
+
+
+def test_new_session_times_out(tmp_path):
+    env = setup_env(tmp_path, FAKE_GROK_ACP_HANG="1")
+    with pytest.raises(GrokSetupError, match="没有响应"):
+        asyncio.run(new_session(grok_config(tmp_path), env, "grok-4.6", 256000, timeout_s=0.5))

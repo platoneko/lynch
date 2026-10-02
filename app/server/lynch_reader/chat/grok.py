@@ -5,9 +5,13 @@ guards them. Run it after every grok upgrade.
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import os
+import signal
 import subprocess
 from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -143,3 +147,90 @@ def discover_rules(kol: KolSources) -> str:
         "- 同一只票被多位 KOL 提到，合并成一条，sources 里列多个出处。",
         "- 每个出处都要有原帖链接和发帖时间（UTC，ISO 8601）。",
     ])
+
+
+ACP_TIMEOUT_S = 30.0
+ACP_LINE_LIMIT = 16 * 1024 * 1024
+ACP_EXIT_GRACE_S = 5.0
+
+
+class GrokSetupError(Exception):
+    pass
+
+
+async def new_session(cfg: GrokConfig, env: Mapping[str, str], model: str, window: int, *,
+                      timeout_s: float = ACP_TIMEOUT_S) -> str:
+    """A fresh grok session on `model` with `window` tokens of context; returns grok's session id.
+
+    Headless `-p` has no way to pick the context window; ACP (`grok agent stdio`) does, and grok keeps the choice
+    in the session for every later `--resume` (spec §1). The handshake calls no model, so it costs nothing.
+    """
+    prepare_workdir(cfg.workdir)
+    proc = await asyncio.create_subprocess_exec(
+        *cfg.grok_cmd, "agent", "stdio", cwd=cfg.workdir, env=dict(env),
+        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        start_new_session=True, limit=ACP_LINE_LIMIT)
+    try:
+        return await asyncio.wait_for(_handshake(_Acp(proc), cfg.workdir, model, window), timeout_s)
+    except TimeoutError as e:
+        raise GrokSetupError(f"grok 在 {timeout_s:g} 秒内没有响应") from e
+    finally:
+        await _end(proc)
+
+
+async def _handshake(acp: "_Acp", workdir: Path, model: str, window: int) -> str:
+    # This client offers grok no files and no terminal.
+    await acp.call("initialize", {"protocolVersion": 1, "clientCapabilities": {
+        "fs": {"readTextFile": False, "writeTextFile": False}, "terminal": False}})
+    session = (await acp.call("session/new", {"cwd": str(workdir), "mcpServers": []})).get("sessionId")
+    if not isinstance(session, str):
+        raise GrokSetupError("session/new 没有返回会话 id")
+    await acp.call("session/set_model", {"sessionId": session, "modelId": model, "_meta": {"contextWindow": window}})
+    await acp.call("session/close", {"sessionId": session})  # grok writes the session out before answering
+    return session
+
+
+class _Acp:
+    """JSON-RPC 2.0 over grok's stdio, one call at a time."""
+
+    def __init__(self, proc: asyncio.subprocess.Process) -> None:
+        self._proc = proc
+        self._last_id = 0
+
+    async def call(self, method: str, params: dict) -> dict:
+        self._last_id += 1
+        rid = self._last_id
+        await self._send({"jsonrpc": "2.0", "id": rid, "method": method, "params": params})
+        while True:
+            line = await self._proc.stdout.readline()
+            if not line:
+                err = (await self._proc.stderr.read()).decode(errors="replace").strip()
+                raise GrokSetupError(f"grok 提前退出：{err[-300:] or '没有输出'}")
+            try:
+                msg = json.loads(line)
+            except ValueError:
+                continue
+            if "method" in msg and "id" in msg:  # grok asking its client for something this client does not offer
+                await self._send({"jsonrpc": "2.0", "id": msg["id"],
+                                  "error": {"code": -32601, "message": "not supported"}})
+                continue
+            if msg.get("id") != rid:
+                continue  # a notification
+            if "error" in msg:
+                raise GrokSetupError(f"{method}：{(msg['error'] or {}).get('message')}")
+            return msg.get("result") or {}
+
+    async def _send(self, obj: dict) -> None:
+        self._proc.stdin.write((json.dumps(obj) + "\n").encode())
+        await self._proc.stdin.drain()
+
+
+async def _end(proc: asyncio.subprocess.Process) -> None:
+    """Lets grok exit on end of input, then ends whatever it left in its process group (MCP servers)."""
+    if not proc.stdin.is_closing():
+        proc.stdin.close()
+    with suppress(TimeoutError):
+        await asyncio.wait_for(proc.wait(), ACP_EXIT_GRACE_S)
+    with suppress(ProcessLookupError):
+        os.killpg(proc.pid, signal.SIGKILL)
+    await proc.wait()

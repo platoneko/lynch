@@ -9,6 +9,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from lynch_reader.chat.config import LaunchConfig
+from lynch_reader.chat.grok import GrokConfig
 from lynch_reader.chat.index import ChatIndex, Conversation
 
 FAKE = Path(__file__).with_name("fake_claude.py")
@@ -84,3 +85,30 @@ def write_models_cache(home: Path) -> None:
               "grok-plain": model("grok-plain", supports_backend_search=False)}
     (home / ".grok").mkdir(parents=True, exist_ok=True)
     (home / ".grok" / "models_cache.json").write_text(json.dumps({"models": models}), encoding="utf-8")
+
+
+FAKE_GROK = Path(__file__).with_name("fake_grok.py")
+FAKE_GROK_CMD = (sys.executable, str(FAKE_GROK))
+
+
+def grok_config(tmp_path: Path) -> GrokConfig:
+    """A GrokConfig on the fake grok, with a model cache and an invest holding a KOL list."""
+    home = tmp_path / "home"
+    write_models_cache(home)
+    invest = tmp_path / "invest"
+    if not invest.exists():
+        write_invest(invest)
+    return GrokConfig(FAKE_GROK_CMD, tmp_path / "grok-workdir", home, tmp_path / "grok-logs", invest)
+
+
+def fake_grok_env(tmp_path: Path) -> dict[str, str]:
+    return {"FAKE_GROK_SESSIONS": str(tmp_path / "grok-sessions"), "FAKE_GROK_LOG": str(tmp_path / "grok-launches.jsonl")}
+
+
+def grok_launches(tmp_path: Path) -> list[dict]:
+    log = tmp_path / "grok-launches.jsonl"
+    return [json.loads(l) for l in log.read_text().splitlines()] if log.exists() else []
+
+
+def grok_session_file(tmp_path: Path, sid: str) -> dict:
+    return json.loads((tmp_path / "grok-sessions" / f"{sid}.json").read_text())
