@@ -2,9 +2,16 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import re
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 BLOCK = re.compile(r"```lynch-candidates[^\n]*\n(.*?)```", re.S)
 TICKER = re.compile(r"^[A-Z0-9]+\.(US|HK|SH|SZ|SG)$")
@@ -87,3 +94,52 @@ def _is_iso_time(s: str) -> bool:
     except ValueError:
         return False
     return True
+
+
+class CandidateStore:
+    """output/candidates/candidates.json, one row per ticker.
+
+    Single writer: only the server's event loop touches it, so no lock. Written only when the user taps
+    存入候选区 (spec §3f). Whether a ticker has landed is not stored: its framework file says so.
+    """
+
+    def __init__(self, path: Path, wall: Callable[[], float] = time.time) -> None:
+        self._path, self._wall = path, wall
+        self._rows: dict[str, dict] = {}
+        if path.exists():
+            for row in json.loads(path.read_text(encoding="utf-8")):
+                if isinstance(row, dict) and isinstance(row.get("ticker"), str) and isinstance(row.get("sources"), list):
+                    self._rows[row["ticker"]] = row
+                else:  # one bad row must not take the whole list down
+                    log.warning("skipping malformed candidate row: %r", row)
+
+    def all(self) -> list[dict]:
+        return sorted(self._rows.values(), key=lambda r: r["updated_at"], reverse=True)
+
+    def save(self, conv_id: str, picked: list[dict]) -> list[str]:
+        """Adds checked candidates (parse_candidates' shape). A ticker saved again gains its new sources and
+        leaves the dismissed group: the user picked it again."""
+        now = self._wall()
+        for c in picked:
+            row = self._rows.setdefault(c["ticker"], {"ticker": c["ticker"], "name": "", "sources": [],
+                                                      "first_saved_at": now, "updated_at": now, "dismissed": False})
+            row["name"] = c["name"] or row["name"]
+            urls = {s["url"] for s in row["sources"]}
+            row["sources"] += [{**s, "saved_at": now, "conv_id": conv_id} for s in c["sources"] if s["url"] not in urls]
+            row.update(updated_at=now, dismissed=False)
+        self._save()
+        return [c["ticker"] for c in picked]
+
+    def dismiss(self, ticker: str) -> bool:
+        row = self._rows.get(ticker)
+        if row is None:
+            return False
+        row["dismissed"] = True
+        self._save()
+        return True
+
+    def _save(self) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self._path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(list(self._rows.values()), ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(tmp, self._path)  # a crash mid-write must not leave a torn list

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from lynch_reader.chat.candidates import parse_candidates
+from lynch_reader.chat.candidates import CandidateStore, parse_candidates
 from lynch_reader.chat.grok import discover_rules
 from lynch_reader.chat.kol import KolSources
 
@@ -71,3 +71,55 @@ def test_last_block_wins():
 def test_the_example_in_grok_rules_is_a_valid_block():
     p = parse_candidates(discover_rules(KolSources("1", ("a",), 36)))
     assert p is not None and p.dropped == 0 and p.candidates[0]["ticker"] == "0700.HK"
+
+
+class Clock:
+    def __init__(self):
+        self.t = 100.0
+
+    def __call__(self):
+        return self.t
+
+
+def cand(ticker="AXTI.US", name="AXT Inc", *sources):
+    return {"ticker": ticker, "name": name, "sources": list(sources) or [src()]}
+
+
+def test_save_then_reload(tmp_path):
+    clock = Clock()
+    store = CandidateStore(tmp_path / "c" / "candidates.json", clock)
+    assert store.save("conv1", [cand()]) == ["AXTI.US"]
+    [row] = CandidateStore(tmp_path / "c" / "candidates.json").all()
+    assert row["ticker"] == "AXTI.US" and row["name"] == "AXT Inc" and row["dismissed"] is False
+    assert row["first_saved_at"] == row["updated_at"] == 100.0
+    assert row["sources"] == [{**src(), "saved_at": 100.0, "conv_id": "conv1"}]
+
+
+def test_saving_twice_merges_sources_without_duplicates(tmp_path):
+    clock = Clock()
+    store = CandidateStore(tmp_path / "candidates.json", clock)
+    store.save("conv1", [cand()])
+    clock.t = 200.0
+    store.save("conv2", [cand("AXTI.US", "", src(), src(handle="bob", url="https://x.com/bob/status/2"))])
+    [row] = store.all()
+    assert [s["handle"] for s in row["sources"]] == ["alice", "bob"]
+    assert row["name"] == "AXT Inc" and (row["first_saved_at"], row["updated_at"]) == (100.0, 200.0)
+
+
+def test_dismissed_ticker_saved_again_comes_back(tmp_path):
+    store = CandidateStore(tmp_path / "candidates.json", Clock())
+    store.save("conv1", [cand()])
+    assert store.dismiss("AXTI.US") is True and store.all()[0]["dismissed"] is True
+    store.save("conv1", [cand()])
+    assert store.all()[0]["dismissed"] is False
+    assert store.dismiss("NOPE.US") is False
+
+
+def test_newest_first_and_malformed_rows_skipped(tmp_path):
+    path = tmp_path / "candidates.json"
+    path.write_text(json.dumps([{"ticker": 5}, {"ticker": "OLD.US", "name": "", "sources": [], "first_saved_at": 1.0,
+                                                 "updated_at": 1.0, "dismissed": False}]), encoding="utf-8")
+    clock = Clock()
+    store = CandidateStore(path, clock)
+    store.save("c", [cand("NEW.US", "")])
+    assert [r["ticker"] for r in store.all()] == ["NEW.US", "OLD.US"]
