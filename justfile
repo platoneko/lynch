@@ -338,6 +338,16 @@ app-revoke id:
     @(cd app/server && uv sync --quiet)
     @PYTHONPATH=app/server app/server/.venv/bin/python -m lynch_reader.auth revoke {{quote(id)}}
 
+[doc('发现新票：读 invest 的 KOL 列表、账号与回看时长（skill discover-kol 用）')]
+kol-sources:
+    @(cd app/server && uv sync --quiet)
+    @PYTHONPATH=app/server app/server/.venv/bin/python .agents/skills/discover-kol/scripts/kol_sources.py
+
+[doc('发现新票：把回答文件里点名的候选存进候选区，如 just candidates-save _local/tmp/discover.md AXTI.US 0700.HK')]
+candidates-save file +tickers:
+    @(cd app/server && uv sync --quiet)
+    @PYTHONPATH=app/server app/server/.venv/bin/python .agents/skills/discover-kol/scripts/save_candidates.py {{quote(file)}} {{tickers}}
+
 [doc('构建手机阅读 app 的 debug APK')]
 app-apk:
     app/android/build-apk.sh

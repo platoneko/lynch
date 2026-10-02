@@ -16,7 +16,9 @@ from lynch_reader.catalog import REPO_ROOT
 
 READ_TIMEOUT_S = 10.0
 DEFAULT_LOOKBACK_HOURS = 36  # invest's own fallback when [fetch.tweets] sets none (scripts/fetch-tweets.py)
-INVEST_ROOT = REPO_ROOT.parent / "invest"  # invest is checked out next to lynch
+# invest is checked out next to the main lynch checkout. frameworks/ (a real dir there, a symlink in a worktree)
+# always lives in that checkout, so it finds the place from a worktree too.
+INVEST_ROOT = (REPO_ROOT / "frameworks").resolve().parent.parent / "invest"
 
 _READ = """\
 import json, sys
