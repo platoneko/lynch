@@ -52,7 +52,8 @@ class AxisMeta:
     title: str  # the title after the dash
     label: str  # short name for chips and cards
     kind: str  # `shared_scenario_axis` | `rates_axis`
-    mounts: tuple[str, ...]
+    mounts: tuple[str, ...]  # rating mounts (定档): the axis tiers set the ticker's L/M/H
+    refs: tuple[str, ...]  # reference mounts (参照): cite or check the axis; its consensus is not theirs
     mounts_text: str  # the 挂载票 segment as written, for _INDEX.md
     consensus: Consensus | None
 
@@ -99,22 +100,30 @@ def load_axis(path: Path) -> AxisMeta:
     header = header_block(md)
     kind_m = next((m for m in map(_AXIS_KIND.search, header) if m), None)
     mounts_text = next((s[s.find("挂载票"):].strip() for s in header if "挂载票" in s), "")
+    mounts, refs = _mounted_tickers(mounts_text)
     return AxisMeta(
         name=path.stem,
         logical_id=logical_id,
         title=title,
         label=_short_label(title),
         kind=kind_m.group(1) if kind_m else "",
-        mounts=_mounted_tickers(mounts_text),
+        mounts=mounts,
+        refs=refs,
         mounts_text=mounts_text,
         consensus=header_consensus(md),
     )
 
 
-def _mounted_tickers(mounts_text: str) -> tuple[str, ...]:
+def _mounted_tickers(mounts_text: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """(rating mounts, reference mounts): `挂载票：<定档> ｜ 参照：<参照>`（contracts.md「定档 / 参照挂载」）."""
     # Candidates (`_AXIS.coal-price`「候选：…」) are not mounted yet.
     mounted = mounts_text.split("候选", 1)[0]
-    return tuple(dict.fromkeys(_TICKER.findall(mounted)))
+    rating, _, ref = mounted.partition("参照")
+    return _tickers(rating), _tickers(ref)
+
+
+def _tickers(text: str) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(_TICKER.findall(text)))
 
 
 def _short_label(title: str) -> str:

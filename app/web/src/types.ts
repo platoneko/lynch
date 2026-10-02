@@ -47,7 +47,8 @@ export interface AxisInfo {
   label: string; // short name for chips and cards
   title: string;
   consensus: Consensus | null;
-  tickers: string[]; // mounted tickers
+  tickers: string[]; // rating mounts: the axis tiers set their L/M/H, so its consensus is theirs
+  refs: string[]; // reference mounts: they cite or check the axis, its consensus is not theirs
 }
 
 /** One pool member; when `error` is set only `ticker` is filled. */
@@ -63,7 +64,8 @@ export interface TickerRow {
   H: number | null;
   option: OptionBand | null;
   candidate: Candidate | null;
-  axes: string[] | null; // names of the scenario axes it is mounted on
+  axes: string[] | null; // names of the scenario axes that set its L/M/H (rating mounts)
+  ref_axes: string[] | null; // names of the scenario axes it only cites or checks (reference mounts)
   consensus: Consensus | null; // its own header line, shown only when it has no axis
   band: Band | null;
   quote_error: string | null; // why `band` is null for this row alone

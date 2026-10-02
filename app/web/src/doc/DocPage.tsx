@@ -206,17 +206,20 @@ export function TickerDocHead({ ticker, row, targets, axes, zoneLabel, onOpenAxi
   );
 }
 
-/** An axis's head: where consensus sits on it, and the tickers mounted on it. */
+/**
+ * An axis's head: where consensus sits on it, the tickers whose tiers it sets (定档), and
+ * the tickers that only cite or check it (参照) — the consensus speaks for the first group only.
+ */
 export function AxisDocHead({ axis, pool }: { axis: AxisInfo | undefined; pool: ReadonlySet<string> }) {
   if (!axis) return null;
   const { consensus } = axis;
+  const tickerLinks = (tickers: string[]) =>
+    tickers.map((t) => (pool.has(t) ? <a key={t} href={docHash(t)}>{t}</a> : <span key={t}>{t}</span>));
   return (
     <div className="axis-head">
       <p><span className="tag tag-axis">{consensusText(consensus)}</span>{consensus?.note && <span className="axis-note">{consensus.note}</span>}</p>
-      <p className="axis-mounts">
-        挂载票：
-        {axis.tickers.map((t) => (pool.has(t) ? <a key={t} href={docHash(t)}>{t}</a> : <span key={t}>{t}</span>))}
-      </p>
+      {axis.tickers.length > 0 && <p className="axis-mounts">定档：{tickerLinks(axis.tickers)}</p>}
+      {axis.refs.length > 0 && <p className="axis-mounts">参照：{tickerLinks(axis.refs)}</p>}
     </div>
   );
 }

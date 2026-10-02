@@ -7,7 +7,7 @@ const ZONES = ['deep_discount', 'conservative', 'neutral', 'optimistic', 'stretc
 function row(ticker: string, over: Partial<TickerRow> = {}): TickerRow {
   return {
     ticker, name: `${ticker} name`, market: 'US', lynch_primary: 'stalwart', lynch_secondary: null,
-    currency: 'USD', L: 10, M: 20, H: 40, option: null, candidate: null, axes: [], consensus: null,
+    currency: 'USD', L: 10, M: 20, H: 40, option: null, candidate: null, axes: [], ref_axes: [], consensus: null,
     band: { price: 25, session: null, as_of: '2026-09-26T09:03:00+08:00', zone: 'neutral', option_zone: null, candidate_zone: null },
     quote_error: null, error: null, ...over,
   };
@@ -48,6 +48,12 @@ describe('filters', () => {
     const rows = [row('A.US', { axes: ['al', 'cu'] }), row('B.US', { axes: ['li'] }), row('C.US'),
       row('D.US', { axes: null })];
     const f = { ...DEFAULT_FILTER, sort: 'ticker' as const, axes: ['cu', 'li'] };
+    expect(tickers(applyFilter(rows, f, ZONES))).toEqual(['A.US', 'B.US']);
+  });
+  it('axis filter also keeps tickers that only reference the axis', () => {
+    const rows = [row('A.US', { axes: ['cu'] }), row('B.US', { ref_axes: ['cu'] }), row('C.US', { ref_axes: ['al'] }),
+      row('D.US', { ref_axes: null })];
+    const f = { ...DEFAULT_FILTER, sort: 'ticker' as const, axes: ['cu'] };
     expect(tickers(applyFilter(rows, f, ZONES))).toEqual(['A.US', 'B.US']);
   });
   it('market filter is multi-select and drops rows with an unknown market', () => {

@@ -39,7 +39,7 @@ log = logging.getLogger("lynch_reader")
 
 ROW_KEYS = (
     "ticker", "name", "market", "lynch_primary", "lynch_secondary", "currency",
-    "L", "M", "H", "option", "candidate", "axes", "consensus", "band", "quote_error", "error",
+    "L", "M", "H", "option", "candidate", "axes", "ref_axes", "consensus", "band", "quote_error", "error",
 )
 # Only scenario axes sit on cards and filters; the rates axis mounts every USD ticker
 # and gives sensitivity readings, never anchors (AGENTS.md「r_f 读数行」).
@@ -143,6 +143,7 @@ def catalog(frameworks_dir: Path, quotes: QuoteCache, refresh: bool = False) -> 
     axes = _scenario_axes(frameworks_dir)
     for row, meta in priced:
         row["axes"] = [a.name for a in axes if meta.ticker in a.mounts]
+        row["ref_axes"] = [a.name for a in axes if meta.ticker in a.refs]
 
     # Step 2: one quote batch for every parsed row. When the whole call fails the list
     # still loads with every band empty; an old snapshot is never shown in its place.
@@ -199,7 +200,7 @@ def _scenario_axes(frameworks_dir: Path) -> list[AxisMeta]:
 
 def _axis_json(a: AxisMeta) -> dict[str, Any]:
     return {"name": a.name, "label": a.label, "title": a.title,
-            "consensus": _consensus_json(a.consensus), "tickers": list(a.mounts)}
+            "consensus": _consensus_json(a.consensus), "tickers": list(a.mounts), "refs": list(a.refs)}
 
 
 def _consensus_json(c: Consensus | None) -> dict[str, str] | None:

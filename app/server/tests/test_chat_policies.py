@@ -267,7 +267,8 @@ def test_research_conversation_attaches_to_the_ticker_it_lands(tmp_path):
         await until(lambda: state_of(svc, conv.id) == "idle")
         assert svc.snapshot(conv.id)["conv"]["ticker"] is None
         await svc.send(conv.id, "write frameworks/NEW.US.md")
-        attached = await next_event(q, "conv")
+        # The first reply's title may still land after `ready`, as a conv event without a ticker.
+        attached = await next_event(q, "conv", lambda d: d["ticker"] is not None)
         await svc.send(conv.id, "write frameworks/OTHER.US.md")
         await until(lambda: state_of(svc, conv.id) == "idle")
         final = svc.snapshot(conv.id)["conv"]["ticker"]
