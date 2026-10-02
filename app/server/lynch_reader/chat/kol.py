@@ -9,10 +9,14 @@ import asyncio
 import json
 import sys
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+
+from lynch_reader.catalog import REPO_ROOT
 
 READ_TIMEOUT_S = 10.0
 DEFAULT_LOOKBACK_HOURS = 36  # invest's own fallback when [fetch.tweets] sets none (scripts/fetch-tweets.py)
+INVEST_ROOT = REPO_ROOT.parent / "invest"  # invest is checked out next to lynch
 
 _READ = """\
 import json, sys
@@ -64,3 +68,18 @@ async def kol_sources(invest_root: Path, python: str = sys.executable) -> KolSou
     if sources.list_id is None and not sources.handles:
         raise KolUnavailable("invest 的 KOL 名单为空（config/kol_handles.toml 里 list_id 和 handles 都没填）")
     return sources
+
+
+def kol_brief(kol: KolSources, now: datetime) -> str:
+    """The KOL sources as the search rules expect them: what to search and from which UTC date on.
+
+    The app sends it to Grok every turn and `just kol-sources` prints it, so both read the same words.
+    """
+    start = (now.astimezone(UTC) - timedelta(hours=kol.lookback_hours)).date().isoformat()
+    lines = []
+    if kol.list_id:
+        lines.append(f"- X 列表：{kol.list_id}（https://x.com/i/lists/{kol.list_id}，搜索写 list:{kol.list_id}）")
+    if kol.handles:
+        lines.append("- 账号：" + "、".join(f"@{h}" for h in kol.handles) + "（搜索写 from:<账号>）")
+    lines.append(f"- 回看：最近 {kol.lookback_hours} 小时，起始日期 {start}（UTC，搜索写 since:{start}）")
+    return "\n".join(lines)

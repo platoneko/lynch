@@ -28,6 +28,7 @@ from lynch_reader.chat.candidates import CandidateStore
 from lynch_reader.chat.config import LaunchConfig
 from lynch_reader.chat.grok import GrokConfig
 from lynch_reader.chat.index import ChatIndex
+from lynch_reader.chat.kol import INVEST_ROOT
 from lynch_reader.chat.routes import chat_lifespan, chat_routes
 from lynch_reader.chat.service import ChatService
 from lynch_reader.chat.transcript import projects_dir_for
@@ -98,7 +99,7 @@ def main(argv: list[str] | None = None) -> None:
         projects_dir_for(REPO_ROOT, Path.home()),
         dict(os.environ),
         grok=GrokConfig((shutil.which("grok") or "grok",), workdir=output / "chat" / "grok-workdir",
-                        home=Path.home(), logs=output / "chat" / "grok", invest_root=REPO_ROOT.parent / "invest"),
+                        home=Path.home(), logs=output / "chat" / "grok", invest_root=INVEST_ROOT),
         candidates=CandidateStore(output / "candidates" / "candidates.json"),
     )
     # An open chat stream never ends by itself: without a graceful-shutdown timeout, SIGTERM waits on it

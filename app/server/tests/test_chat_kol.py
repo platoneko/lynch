@@ -38,3 +38,29 @@ def test_loader_failure_is_reported(tmp_path):
     root = write_invest(tmp_path / "invest", broken=True)
     with pytest.raises(KolUnavailable, match="bad policies.toml"):
         asyncio.run(kol_sources(root))
+
+
+from datetime import UTC, datetime, timedelta, timezone
+
+from lynch_reader.chat.kol import kol_brief
+
+NOW = datetime(2026, 10, 3, 1, 0, tzinfo=UTC)
+
+
+def test_brief_names_list_handles_window_and_start_date():
+    brief = kol_brief(KolSources("123", ("alice", "bob"), 36), NOW)
+    assert brief.splitlines() == [
+        "- X 列表：123（https://x.com/i/lists/123，搜索写 list:123）",
+        "- 账号：@alice、@bob（搜索写 from:<账号>）",
+        "- 回看：最近 36 小时，起始日期 2026-10-01（UTC，搜索写 since:2026-10-01）",
+    ]
+
+
+def test_brief_leaves_out_what_is_not_configured():
+    assert "X 列表" not in kol_brief(KolSources(None, ("alice",), 36), NOW)
+    assert "账号" not in kol_brief(KolSources("123", (), 48), NOW)
+
+
+def test_brief_start_date_is_utc():
+    east8 = datetime(2026, 10, 3, 9, 0, tzinfo=timezone(timedelta(hours=8)))  # 01:00 UTC
+    assert "起始日期 2026-10-01" in kol_brief(KolSources("1", (), 36), east8)
