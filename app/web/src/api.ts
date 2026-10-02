@@ -56,3 +56,12 @@ export async function fetchFramework(ticker: string): Promise<string> {
 export async function fetchAxis(name: string): Promise<string> {
   return (await get(`/api/axes/${encodeURIComponent(name)}`)).text();
 }
+
+/** Hide the ticker from the home list; its document and eval script stay. */
+export async function archiveFramework(ticker: string): Promise<void> {
+  await post(`/api/frameworks/${encodeURIComponent(ticker)}/archive`);
+}
+
+export async function restoreFramework(ticker: string): Promise<void> {
+  await post(`/api/frameworks/${encodeURIComponent(ticker)}/restore`);
+}

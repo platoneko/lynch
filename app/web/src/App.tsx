@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { fetchAxis, fetchCatalog, fetchFramework } from './api';
+import { archiveFramework, fetchAxis, fetchCatalog, fetchFramework, restoreFramework } from './api';
 import {
   archiveCandidate, archiveChat, archiveTicker, fetchCandidates, fetchChatOptions, fetchChats, restoreCandidate,
 } from './chat/api';
@@ -10,6 +10,7 @@ import { ChatSheetButton } from './chat/ChatSheet';
 import { ChatsPage } from './chat/ChatsPage';
 import { tickerLabel } from './chat/listModel';
 import type { ChatList, ChatOptions, SavedCandidate } from './chat/types';
+import { ArchiveButton } from './doc/ArchiveButton';
 import { AxisDocHead, DocPage, TickerDocHead } from './doc/DocPage';
 import { HomePage } from './home/HomePage';
 import { DEFAULT_FILTER, type HomeFilter } from './home/listModel';
@@ -159,16 +160,21 @@ export function App() {
   if (route.page === 'doc') {
     const labels = zoneLabels(catalog);
     const { ticker } = route;
+    const row = catalog.tickers.find((t) => t.ticker === ticker);
     // From a doc, an axis opens by hash alone: back returns to the doc, not the list.
     const head = (
-      <TickerDocHead ticker={ticker} row={catalog.tickers.find((t) => t.ticker === ticker)} targets={targets}
+      <TickerDocHead ticker={ticker} row={row} targets={targets}
         axes={axes} zoneLabel={(id) => labels.get(id) ?? id} onOpenAxis={(name) => { window.location.hash = axisHash(name); }} />
     );
     return (
       <DocPage key={`doc:${ticker}`} load={() => fetchFramework(ticker)} targets={targets} head={head} onBack={goBack}
-        barExtra={<ChatSheetButton ticker={ticker} chats={chatList?.chats ?? []}
-          onOpen={(id) => { window.location.hash = chatHash(id); }}
-          onNew={() => { window.location.hash = newChatHash(ticker); }} />} />
+        barExtra={<>
+          {row && <ArchiveButton ticker={ticker} archived={row.archived}
+            onToggle={() => (row.archived ? restoreFramework(ticker) : archiveFramework(ticker)).then(() => load(false))} />}
+          <ChatSheetButton ticker={ticker} chats={chatList?.chats ?? []}
+            onOpen={(id) => { window.location.hash = chatHash(id); }}
+            onNew={() => { window.location.hash = newChatHash(ticker); }} />
+        </>} />
     );
   }
   if (route.page === 'axis') {

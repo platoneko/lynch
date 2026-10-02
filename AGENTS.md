@@ -47,6 +47,7 @@ python3 -m unittest discover -s eval/lib -t . -p 'test_*.py'
 - 「发现新票」对话走 **Grok**（`grok` 命令行，本机 grok.com 登录）：每轮起一个 `grok -p` 子进程，只能用 X 搜索和网页搜索——在独立空目录 `output/chat/grok-workdir/` 运行、关掉 Claude / Cursor 兼容加载、显式 deny 终端与读写文件与外部插件工具。启动参数与隔离清单的唯一真源是 `app/server/lynch_reader/chat/grok.py`；升级 grok 后跑 `(cd app/server && LYNCH_LIVE_GROK=1 uv run pytest tests/test_chat_grok_live.py -q -s)`。
 - 发现新票的搜索规则与候选格式只在 skill `.agents/skills/discover-kol/`（`references/search.md`）：app 每轮把它、当场读出的 KOL 名单和用户原话拼成一条消息发给 Grok（`grok --rules` 对经 ACP 建、再 `-p --resume` 的会话不生效，所以不用它）；对话记录只存用户原话。只按 invest 配置的 X 列表搜（`list_id`，经 invest 自己的加载函数 `../invest/scripts/load_kol_handles.py` 每轮现读，lynch 不复制；成员由用户在 X 上维护，invest 的账号清单不用）。回看范围由用户新建对话时选（最近 1 / 2 / 3 / 7 天，默认 2 天），不用 invest 的回看时长。终端里用 grok 开会话时同一个 skill 自动可用（`just kol-sources`、`just candidates-save`）。
 - Grok 对话记录由服务端写在 `output/chat/grok/<id>.jsonl`（Claude 记录同格式）；上下文长度在新建时经 ACP 选定。
+- 框架归档：在 app 文档页顶栏点「归档 / 恢复」，归档清单只存 `output/archive/frameworks.json`（服务端唯一写者），只影响 app 首页——默认隐藏已归档标的，勾「展示归档」才显示；框架文档、每票演算脚本、日报、`just check` 都不受影响，也不写 `frameworks/`。
 - 候选区 `output/candidates/candidates.json`：新候选只在用户明确选择时进入——app 里点「存入候选区」（只存 Grok 原话里出现过的候选），终端里经 `just candidates-save` 点名（只存给定回答文件候选块里的票）；待看和已入库的票都能手动「归档」、在已归档里「恢复」；归档满 30 天的票从文件删除，已归档的票再次存入则回到待看；每只票显示 5 个不同 KOL 各自最新的一条来源，这几条永不回收，其余存入超过 7 天的来源只在这只票再次存入时回收（天数可用环境变量 `LYNCH_CANDIDATE_SOURCE_DAYS` 改，服务端和 `just candidates-save` 都读它；展开卡片可看全部来源）；来源按 X 帖子编号去重；看空的观点不进候选。服务端与脚本共用 `CandidateStore`，加文件锁读改写。不写 invest。新建发现新票默认 grok-4.5、500k。
 
 ## 密钥与本地

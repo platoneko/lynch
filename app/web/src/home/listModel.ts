@@ -34,17 +34,25 @@ export interface HomeFilter {
   markets: string[];
   axes: string[];
   sort: SortKey;
+  showArchived: boolean;
 }
 
-export const DEFAULT_FILTER: HomeFilter = { query: '', zones: [], classes: [], markets: [], axes: [], sort: 'zone' };
+export const DEFAULT_FILTER: HomeFilter = {
+  query: '', zones: [], classes: [], markets: [], axes: [], sort: 'zone', showArchived: false,
+};
 
 export function applyFilter(rows: TickerRow[], f: HomeFilter, zoneOrder: string[]): TickerRow[] {
   const serverOrder = new Map(rows.map((r, i) => [r.ticker, i]));
   const kept = rows.filter(
-    (r) => matchesQuery(r, f.query) && matchesZones(r, f.zones) && matchesClasses(r, f.classes)
+    (r) => inArchiveScope(r, f) && matchesQuery(r, f.query) && matchesZones(r, f.zones) && matchesClasses(r, f.classes)
       && matchesMarkets(r, f.markets) && matchesAxes(r, f.axes),
   );
   return kept.sort(comparator(f.sort, zoneOrder, serverOrder));
+}
+
+/** Archived rows are out of the list, and out of its total, unless the user asks to see them. */
+export function inArchiveScope(r: TickerRow, f: HomeFilter): boolean {
+  return f.showArchived || !r.archived;
 }
 
 function matchesQuery(r: TickerRow, query: string): boolean {

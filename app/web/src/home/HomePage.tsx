@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { Catalog } from '../types';
-import { applyFilter, latestAsOf, quoteTimeText, type HomeFilter, type SortKey } from './listModel';
+import { applyFilter, inArchiveScope, latestAsOf, quoteTimeText, type HomeFilter, type SortKey } from './listModel';
 import { TickerCard } from './TickerCard';
 
 const SORTS: { id: SortKey; label: string }[] = [
@@ -29,6 +29,8 @@ export function HomePage({ catalog, filter, onFilter, onOpen, onOpenAxis, onRefr
   const zoneOrder = catalog.zones.map((z) => z.id);
   const labels = new Map([...catalog.zones, ...catalog.lynch_classes].map((x) => [x.id, x.label]));
   const rows = applyFilter(catalog.tickers, filter, zoneOrder);
+  const total = catalog.tickers.filter((r) => inArchiveScope(r, filter)).length;
+  const archivedCount = catalog.tickers.filter((r) => r.archived).length;
   const asOf = latestAsOf(catalog.tickers);
   const toggle = (list: string[], id: string) => (list.includes(id) ? list.filter((x) => x !== id) : [...list, id]);
   const axes = new Map(catalog.axes.map((a) => [a.name, a]));
@@ -97,7 +99,12 @@ export function HomePage({ catalog, filter, onFilter, onOpen, onOpenAxis, onRefr
           <select value={filter.sort} onChange={(e) => onFilter({ ...filter, sort: e.target.value as SortKey })}>
             {SORTS.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
           </select>
-          <span>{rows.length} / {catalog.tickers.length}</span>
+          <label className="archive-toggle">
+            <input type="checkbox" checked={filter.showArchived}
+              onChange={(e) => onFilter({ ...filter, showArchived: e.target.checked })} />
+            展示归档{archivedCount > 0 ? ` ${archivedCount}` : ''}
+          </label>
+          <span>{rows.length} / {total}</span>
         </div>
       </header>
       {catalog.quote_error && <p className="banner-muted">{catalog.quote_error}</p>}

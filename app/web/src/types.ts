@@ -70,6 +70,7 @@ export interface TickerRow {
   band: Band | null;
   quote_error: string | null; // why `band` is null for this row alone
   error: string | null;
+  archived: boolean; // put away from the list in the app; its document and eval script stay
 }
 
 export interface Catalog {

@@ -6,6 +6,7 @@ import pytest
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+from lynch_reader.archive import FrameworkArchive
 from lynch_reader.auth.store import DeviceStore
 from lynch_reader.web import create_app
 from tests.chat_helpers import make_service
@@ -24,7 +25,7 @@ def app_parts(repo, tmp_path, quotes):
     (dist / "assets" / "app.js").write_text("1", encoding="utf-8")
     svc, _ = make_service(tmp_path)
     devices, cookies = paired_devices(tmp_path)
-    return create_app(repo, dist, quotes, devices, chat=svc), devices, cookies
+    return create_app(repo, dist, quotes, devices, FrameworkArchive(tmp_path / "archive.json"), chat=svc), devices, cookies
 
 
 def anon(app) -> TestClient:
@@ -161,7 +162,7 @@ def test_every_pairing_failure_reads_the_same(app_parts):
 
 def test_expired_code_reads_the_same(repo, tmp_path, quotes, clock):
     devices = DeviceStore(tmp_path / "auth" / "devices.json", clock=clock)
-    app = create_app(repo, tmp_path / "no-dist", quotes, devices)
+    app = create_app(repo, tmp_path / "no-dist", quotes, devices, FrameworkArchive(tmp_path / "archive.json"))
     code = devices.create_pairing("x")
     clock.now += 600
     r = anon(app).post("/api/pair", json={"code": code})

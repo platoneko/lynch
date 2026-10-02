@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from starlette.testclient import TestClient
 
+from lynch_reader.archive import FrameworkArchive
 from lynch_reader.catalog import QUOTE_REFRESH_MAX_AGE_S, QuoteCache
 from lynch_reader.web import create_app
 from tests.conftest import FakeFetch, paired_devices
@@ -13,7 +14,8 @@ def client(repo, tmp_path, quotes, with_dist=True):
         dist.mkdir()
         (dist / "index.html").write_text("<!doctype html><title>lynch</title>", encoding="utf-8")
     devices, cookies = paired_devices(tmp_path)
-    return TestClient(create_app(repo, dist, quotes, devices), cookies=cookies)
+    archive = FrameworkArchive(tmp_path / "archive" / "frameworks.json")
+    return TestClient(create_app(repo, dist, quotes, devices, archive), cookies=cookies)
 
 
 def test_tickers_json(repo, tmp_path, quotes):
@@ -105,3 +107,49 @@ def test_unknown_axis_is_404(repo, tmp_path, quotes):
     c = client(repo, tmp_path, quotes)
     assert c.get("/api/axes/nope").status_code == 404
     assert c.get("/api/axes/..%2FAAA.US").status_code == 404
+
+
+def archived_flags(c) -> dict[str, bool]:
+    return {t["ticker"]: t["archived"] for t in c.get("/api/tickers").json()["tickers"]}
+
+
+def test_archive_marks_the_row_and_keeps_its_document(repo, tmp_path, quotes):
+    c = client(repo, tmp_path, quotes)
+    assert archived_flags(c) == {"AAA.US": False, "BBB.US": False, "0001.HK": False}
+    assert c.post("/api/frameworks/AAA.US/archive", json={}).status_code == 204
+    assert archived_flags(c) == {"AAA.US": True, "BBB.US": False, "0001.HK": False}
+    assert c.get("/api/frameworks/AAA.US").status_code == 200
+    # Still priced: the list shows archived rows when asked for.
+    row = next(t for t in c.get("/api/tickers").json()["tickers"] if t["ticker"] == "AAA.US")
+    assert row["band"]["price"] == 25.0
+
+
+def test_archive_survives_a_restart_and_restore_undoes_it(repo, tmp_path, quotes):
+    client(repo, tmp_path, quotes, with_dist=False).post("/api/frameworks/AAA.US/archive", json={})
+    c = client(repo, tmp_path, quotes, with_dist=False)  # a fresh store on the same file
+    assert archived_flags(c)["AAA.US"] is True
+    assert c.post("/api/frameworks/AAA.US/restore", json={}).status_code == 204
+    assert archived_flags(c)["AAA.US"] is False
+
+
+def test_archive_twice_and_restore_unarchived_are_no_ops(repo, tmp_path, quotes):
+    c = client(repo, tmp_path, quotes)
+    for _ in range(2):
+        assert c.post("/api/frameworks/AAA.US/archive", json={}).status_code == 204
+    assert c.post("/api/frameworks/BBB.US/restore", json={}).status_code == 204
+    assert archived_flags(c) == {"AAA.US": True, "BBB.US": False, "0001.HK": False}
+
+
+def test_archive_only_takes_pool_members(repo, tmp_path, quotes):
+    c = client(repo, tmp_path, quotes)
+    for path in ("/api/frameworks/NOPE.US/archive", "/api/frameworks/_TEMPLATE/archive",
+                 "/api/frameworks/NOPE.US/restore"):
+        assert c.post(path, json={}).status_code == 400, path
+    assert not (tmp_path / "archive" / "frameworks.json").exists()
+
+
+def test_archive_refuses_a_non_json_post(repo, tmp_path, quotes):
+    # CSRF guard: a cross-site form post must not archive anything.
+    c = client(repo, tmp_path, quotes)
+    assert c.post("/api/frameworks/AAA.US/archive", content=b"", headers={"Content-Type": "text/plain"}).status_code == 415
+    assert archived_flags(c)["AAA.US"] is False

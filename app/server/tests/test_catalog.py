@@ -37,6 +37,13 @@ def test_pool_order_and_template_excluded(repo, quotes):
     assert [r["ticker"] for r in catalog(repo, quotes)["tickers"]] == ["AAA.US", "BBB.US", "0001.HK"]
 
 
+def test_archived_rows_are_marked_not_dropped(repo, quotes):
+    rows = {r["ticker"]: r for r in catalog(repo, quotes, archived={"AAA.US", "0001.HK", "GONE.US"})["tickers"]}
+    assert {t: r["archived"] for t, r in rows.items()} == {"AAA.US": True, "BBB.US": False, "0001.HK": True}
+    assert rows["AAA.US"]["band"]["price"] == 25.0
+    assert rows["0001.HK"]["error"]  # a broken framework can be put away too
+
+
 def test_parsed_row_is_zoned_on_the_live_price(repo, quotes):
     out = catalog(repo, quotes)
     assert out["quote_error"] is None
@@ -47,7 +54,7 @@ def test_parsed_row_is_zoned_on_the_live_price(repo, quotes):
         "L": 10.0, "M": 20.0, "H": 40.0, "option": None, "candidate": None, "axes": [], "ref_axes": [], "consensus": None,
         "band": {"price": 25.0, "session": None, "as_of": AS_OF, "zone": zone_of(25.0, 10, 20, 40),
                  "option_zone": None, "candidate_zone": None},
-        "quote_error": None, "error": None,
+        "quote_error": None, "error": None, "archived": False,
     }
 
 

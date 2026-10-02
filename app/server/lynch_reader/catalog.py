@@ -8,7 +8,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Set
 from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
@@ -39,7 +39,7 @@ log = logging.getLogger("lynch_reader")
 
 ROW_KEYS = (
     "ticker", "name", "market", "lynch_primary", "lynch_secondary", "currency",
-    "L", "M", "H", "option", "candidate", "axes", "ref_axes", "consensus", "band", "quote_error", "error",
+    "L", "M", "H", "option", "candidate", "axes", "ref_axes", "consensus", "band", "quote_error", "error", "archived",
 )
 # Only scenario axes sit on cards and filters; the rates axis mounts every USD ticker
 # and gives sensitivity readings, never anchors (AGENTS.md「r_f 读数行」).
@@ -136,9 +136,13 @@ class QuoteCache:
         return self._batch
 
 
-def catalog(frameworks_dir: Path, quotes: QuoteCache, refresh: bool = False) -> dict[str, Any]:
-    # Step 1: framework header fields; a bad file costs only its own row.
+def catalog(frameworks_dir: Path, quotes: QuoteCache, refresh: bool = False,
+            archived: Set[str] = frozenset()) -> dict[str, Any]:
+    # Step 1: framework header fields; a bad file costs only its own row. Archived rows stay in the
+    # list, quotes included: the web hides them unless asked to show them.
     parsed = [_ticker_row(p) for p in list_framework_paths(frameworks_dir)]
+    for row, _ in parsed:
+        row["archived"] = row["ticker"] in archived
     priced = [(row, meta) for row, meta in parsed if meta is not None]
     axes = _scenario_axes(frameworks_dir)
     for row, meta in priced:

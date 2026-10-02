@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TickerRow, ZoneId } from '../types';
-import { applyFilter, consensusText, DEFAULT_FILTER, extraBands, latestAsOf, lynchClasses, quoteTimeText } from './listModel';
+import { applyFilter, consensusText, DEFAULT_FILTER, extraBands, inArchiveScope, latestAsOf, lynchClasses, quoteTimeText } from './listModel';
 
 const ZONES = ['deep_discount', 'conservative', 'neutral', 'optimistic', 'stretched'];
 
@@ -9,7 +9,7 @@ function row(ticker: string, over: Partial<TickerRow> = {}): TickerRow {
     ticker, name: `${ticker} name`, market: 'US', lynch_primary: 'stalwart', lynch_secondary: null,
     currency: 'USD', L: 10, M: 20, H: 40, option: null, candidate: null, axes: [], ref_axes: [], consensus: null,
     band: { price: 25, session: null, as_of: '2026-09-26T09:03:00+08:00', zone: 'neutral', option_zone: null, candidate_zone: null },
-    quote_error: null, error: null, ...over,
+    quote_error: null, error: null, archived: false, ...over,
   };
 }
 const withZone = (t: string, zone: ZoneId | null) =>
@@ -61,6 +61,21 @@ describe('filters', () => {
       row('X.XX', { market: null })];
     const f = { ...DEFAULT_FILTER, sort: 'ticker' as const, markets: ['A', 'HK'] };
     expect(tickers(applyFilter(rows, f, ZONES))).toEqual(['0700.HK', '601899.SH']);
+  });
+});
+
+describe('archive', () => {
+  const rows = [row('A.US'), row('B.US', { archived: true }), row('C.US', { archived: true, error: 'boom', band: null })];
+  it('hides archived rows by default', () => {
+    expect(tickers(applyFilter(rows, DEFAULT_FILTER, ZONES))).toEqual(['A.US']);
+  });
+  it('shows them when asked, under the other filters', () => {
+    expect(tickers(applyFilter(rows, { ...DEFAULT_FILTER, showArchived: true }, ZONES))).toEqual(['A.US', 'B.US', 'C.US']);
+    expect(tickers(applyFilter(rows, { ...DEFAULT_FILTER, showArchived: true, query: 'b.' }, ZONES))).toEqual(['B.US']);
+  });
+  it('scopes the list total the same way', () => {
+    expect(rows.filter((r) => inArchiveScope(r, DEFAULT_FILTER)).length).toBe(1);
+    expect(rows.filter((r) => inArchiveScope(r, { ...DEFAULT_FILTER, showArchived: true })).length).toBe(3);
   });
 });
 

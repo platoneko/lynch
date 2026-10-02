@@ -3,7 +3,7 @@
 Only paired devices get in (lynch_reader.auth): a one-time code from `just app-pair` buys a long-lived cookie.
 Chats run Claude Code subprocesses that may write frameworks/ under a tool whitelist and the sediment-framework
 skill, and read-only grok subprocesses that search X (AGENTS.md「app 对话」). The server itself writes only
-output/chat/ and output/candidates/.
+output/chat/, output/candidates/ and output/archive/.
 """
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
+from lynch_reader.archive import ARCHIVE_FILE, FrameworkArchive
 from lynch_reader.auth.gate import DeviceAuth, pair_routes
 from lynch_reader.auth.store import DEVICES_FILE, DeviceStore
 from lynch_reader.catalog import FRAMEWORKS_DIR, REPO_ROOT, QuoteCache, axis_path_in, catalog, framework_path
@@ -29,8 +30,8 @@ from lynch_reader.chat.config import LaunchConfig
 from lynch_reader.chat.grok import GrokConfig
 from lynch_reader.chat.index import ChatIndex
 from lynch_reader.chat.kol import INVEST_ROOT
-from lynch_reader.chat.routes import chat_lifespan, chat_routes
-from lynch_reader.chat.service import ChatService
+from lynch_reader.chat.routes import _guarded, chat_lifespan, chat_routes
+from lynch_reader.chat.service import ChatService, Invalid
 from lynch_reader.chat.transcript import projects_dir_for
 
 WEB_DIST = REPO_ROOT / "app" / "web" / "dist"
@@ -55,16 +56,28 @@ class WebDist(StaticFiles):
 
 
 def create_app(frameworks_dir: Path, web_dist: Path, quotes: QuoteCache, devices: DeviceStore,
-               chat: ChatService | None = None) -> Starlette:
+               archive: FrameworkArchive, chat: ChatService | None = None) -> Starlette:
     def tickers(request: Request) -> Response:
         refresh = request.query_params.get("refresh") == "1"
-        return JSONResponse(catalog(frameworks_dir, quotes, refresh))
+        return JSONResponse(catalog(frameworks_dir, quotes, refresh, archive.tickers()))
 
     def framework(request: Request) -> Response:
         path = framework_path(request.path_params["ticker"], frameworks_dir)
         if path is None:
             return PlainTextResponse("unknown ticker", status_code=404)
         return Response(path.read_text(encoding="utf-8"), media_type="text/markdown; charset=utf-8")
+
+    def set_archived(archived: bool):
+        async def run(request: Request) -> Response:
+            ticker = request.path_params["ticker"]
+            if framework_path(ticker, frameworks_dir) is None:
+                raise Invalid("没有这只票的框架")
+            if archived:
+                archive.archive(ticker)
+            else:
+                archive.restore(ticker)
+            return Response(status_code=204)
+        return _guarded(run)  # its CSRF guard: a cross-site form must not archive anything
 
     def axis(request: Request) -> Response:
         path = axis_path_in(request.path_params["name"], frameworks_dir)
@@ -76,6 +89,8 @@ def create_app(frameworks_dir: Path, web_dist: Path, quotes: QuoteCache, devices
         *pair_routes(devices),
         Route("/api/tickers", tickers),
         Route("/api/frameworks/{ticker}", framework),
+        Route("/api/frameworks/{ticker}/archive", set_archived(True), methods=["POST"]),
+        Route("/api/frameworks/{ticker}/restore", set_archived(False), methods=["POST"]),
         Route("/api/axes/{name}", axis),
     ]
     if chat is not None:
@@ -105,7 +120,8 @@ def main(argv: list[str] | None = None) -> None:
     )
     # An open chat stream never ends by itself: without a graceful-shutdown timeout, SIGTERM waits on it
     # forever and the lifespan shutdown that stops the claude processes never runs.
-    uvicorn.run(create_app(FRAMEWORKS_DIR, WEB_DIST, QuoteCache(), DeviceStore(DEVICES_FILE), chat=chat),
+    uvicorn.run(create_app(FRAMEWORKS_DIR, WEB_DIST, QuoteCache(), DeviceStore(DEVICES_FILE),
+                           FrameworkArchive(ARCHIVE_FILE), chat=chat),
                 host=args.host, port=args.port, timeout_graceful_shutdown=5)
 
 

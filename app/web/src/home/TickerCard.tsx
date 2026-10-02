@@ -20,6 +20,7 @@ export function TickerCard({ row, label, axes, onOpen, onOpenAxis }: {
       <div className="card-line1">
         <span className="card-ticker">{row.ticker}</span>
         <span className="card-name">{row.name ?? ''}</span>
+        {row.archived && <span className="tag tag-archived">已归档</span>}
         {row.band && (
           <span className="card-price">
             {row.band.session && <span className="card-session">{SESSION_CN[row.band.session]}</span>}
