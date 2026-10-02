@@ -53,7 +53,9 @@ export function CandidatesPage({ list, error, hasFramework, onBack, onResearch, 
       </button>
       {actions === 'todo' && <button className="text-btn" onClick={() => research(c)}>调研</button>}
       {actions === 'landed' && <button className="text-btn" onClick={() => onOpenDoc(c.ticker)}>文档</button>}
-      {actions !== 'archived' && <button className="text-btn" onClick={() => onArchive(c.ticker)}>归档</button>}
+      {actions !== 'archived' && (
+        <button className="x-btn" aria-label={`归档 ${candidateLabel(c)}`} onClick={() => onArchive(c.ticker)}>×</button>
+      )}
       {actions === 'archived' && <button className="text-btn" onClick={() => onRestore(c.ticker)}>恢复</button>}
       {open.has(c.ticker) && (
         <div className="cand-detail"><SourceList sources={c.sources} /></div>
@@ -63,7 +65,7 @@ export function CandidatesPage({ list, error, hasFramework, onBack, onResearch, 
   const folded = (key: string, title: string, rows: SavedCandidate[], actions: 'landed' | 'archived') =>
     rows.length > 0 && (
       <section>
-        <button className="chat-group-toggle" onClick={() => toggle(key)}>
+        <button className="chat-group-toggle cand-fold" onClick={() => toggle(key)}>
           {open.has(key) ? '▾' : '▸'} {title} · {rows.length}
         </button>
         {open.has(key) && rows.map((c) => row(c, actions))}
