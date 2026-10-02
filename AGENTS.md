@@ -45,9 +45,9 @@ python3 -m unittest discover -s eval/lib -t . -p 'test_*.py'
 - 白名单外的调用由服务端代答（`--permission-prompt-tool stdio`）：只有改 `frameworks/.claude/skills/sediment-framework/` 的 Edit / Write 推到手机逐处审批（看 diff 点允许 / 拒绝），其余一律拒绝。规则与 diff 在 `app/server/lynch_reader/chat/approvals.py`。
 - app 对话的行情走 `longbridge` 命令行（和 `eval/lib`、日报共用它的登录），禁用清单拦下单、账户、登录与升级等非查询子命令（CLI 日后新增的子命令要补进清单）；登录过期时在终端 `longbridge auth login`。
 - 「发现新票」对话走 **Grok**（`grok` 命令行，本机 grok.com 登录）：每轮起一个 `grok -p` 子进程，只能用 X 搜索和网页搜索——在独立空目录 `output/chat/grok-workdir/` 运行、关掉 Claude / Cursor 兼容加载、显式 deny 终端与读写文件与外部插件工具。启动参数与隔离清单的唯一真源是 `app/server/lynch_reader/chat/grok.py`；升级 grok 后跑 `(cd app/server && LYNCH_LIVE_GROK=1 uv run pytest tests/test_chat_grok_live.py -q -s)`。
-- Grok 读的 KOL 名单与回看时长来自 invest 自己的加载函数（`../invest/scripts/load_kol_handles.py`、`load_policies.py`），每轮现读；lynch 不复制名单。
+- 发现新票的搜索规则与候选格式只在 skill `.agents/skills/discover-kol/`（`references/search.md`）：app 每轮把它、当场读出的 KOL 名单和用户原话拼成一条消息发给 Grok（`grok --rules` 对经 ACP 建、再 `-p --resume` 的会话不生效，所以不用它）；对话记录只存用户原话。KOL 名单与回看时长来自 invest 自己的加载函数（`../invest/scripts/load_kol_handles.py`、`load_policies.py`），每轮现读；lynch 不复制名单。终端里用 grok 开会话时同一个 skill 自动可用（`just kol-sources`、`just candidates-save`）。
 - Grok 对话记录由服务端写在 `output/chat/grok/<id>.jsonl`（Claude 记录同格式）；上下文长度在新建时经 ACP 选定。
-- 候选区 `output/candidates/candidates.json` 由服务端维护：新候选只在用户点「存入候选区」时进入（「划掉」只改已有候选的状态），且只存 Grok 原话里出现过的候选；不写 invest。
+- 候选区 `output/candidates/candidates.json`：新候选只在用户明确选择时进入——app 里点「存入候选区」（只存 Grok 原话里出现过的候选），终端里经 `just candidates-save` 点名（只存给定回答文件候选块里的票）；「划掉」只改已有候选的状态。服务端与脚本共用 `CandidateStore`，加文件锁读改写。不写 invest。新建发现新票默认 grok-4.5、500k。
 
 ## 密钥与本地
 

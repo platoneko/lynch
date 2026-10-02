@@ -2,7 +2,8 @@
 
 Guards what spec §1 found by experiment and grok does not document: X search survives the isolation while the
 terminal and files do not, and the ACP-made session keeps a 500k window across a resume. Run it after every grok
-upgrade. Needs a logged-in `grok` (grok.com) and ../invest with a KOL list. Spends a few cents of Grok usage;
+upgrade. It also checks that the skill sent in the message reaches the model and that invest's X list is
+searchable. Needs a logged-in `grok` (grok.com) and ../invest with a KOL list. Spends a few cents of Grok usage;
 leaves session directories under ~/.grok/sessions/ for the pytest tmp paths.
 """
 from __future__ import annotations
@@ -99,6 +100,11 @@ def test_isolation_keeps_x_search_and_blocks_the_rest(tmp_path):
     assert not any("hcnyl" in s for s in seen), "terminal ran: `echo lynch | rev` output leaked"
     assert not any(socket.gethostname() in s for s in seen), "file read ran: the hostname leaked"
 
+    # The skill reached the model: grok's own record of the conversation carries its title line
+    history = (session_dir(cfg, session) / "chat_history.jsonl").read_text(encoding="utf-8")
+    assert any(SKILL_TITLE in json.dumps(json.loads(l), ensure_ascii=False) for l in history.splitlines()), \
+        "the skill never reached grok"
+
 
 def test_a_resumed_session_keeps_a_500k_window(tmp_path):
     cfg = config(tmp_path)
@@ -106,6 +112,19 @@ def test_a_resumed_session_keeps_a_500k_window(tmp_path):
                                                       "Reply with the single word ok."), window=500000))
     assert lines[-1]["type"] == "result" and lines[-1]["subtype"] == "success"
     assert context_window(cfg, session) == 500000
+
+
+def test_the_kol_list_is_searchable(tmp_path):
+    cfg = config(tmp_path)
+    kol = asyncio.run(kol_sources(cfg.invest_root))
+    if not kol.list_id:
+        pytest.skip("invest has no X list configured")
+    _, lines = asyncio.run(run_turn(cfg, prompt(kol, f"只做一次 X 搜索：list:{kol.list_id}，mode Latest，limit 10。"
+                                                     "然后只回答返回了几条。不要做别的搜索。")))
+    results = tool_results(lines)
+    x_searches = [results.get(u["id"]) for u in tool_uses(lines) if u["name"].startswith("X search")]
+    assert any(r and not r["is_error"] and r["output"].strip() for r in x_searches), \
+        "list search returned nothing: is the X list still public?"
 
 
 @pytest.mark.skipif(os.environ.get("LYNCH_LIVE_GROK_KOL") != "1", reason="full KOL search, opt-in")
