@@ -156,3 +156,16 @@ def test_save_waits_for_another_writers_lock(tmp_path):
 
 def test_a_missing_file_is_an_empty_list(tmp_path):
     assert CandidateStore(tmp_path / "nope" / "candidates.json").all() == []
+
+
+def test_one_post_under_two_url_forms_is_one_source():
+    other_form = src(url="https://twitter.com/alice/status/1?s=20")
+    p = parse_candidates(block({"ticker": "AXTI.US", "name": "", "sources": [src(), other_form]}))
+    assert [s["url"] for s in p.candidates[0]["sources"]] == ["https://x.com/alice/status/1"]
+
+
+def test_saving_the_same_post_again_by_another_url_adds_nothing(tmp_path):
+    store = CandidateStore(tmp_path / "candidates.json", Clock())
+    store.save("conv1", [cand()])
+    store.save("conv2", [cand("AXTI.US", "", src(url="https://twitter.com/alice/status/1?s=20"))])
+    assert [s["url"] for s in store.all()[0]["sources"]] == ["https://x.com/alice/status/1"]

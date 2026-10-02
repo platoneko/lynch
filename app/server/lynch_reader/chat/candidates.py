@@ -22,7 +22,7 @@ TICKER = re.compile(r"^[A-Z0-9]+\.(US|HK|SH|SZ|SG)$")
 # HK and A-share codes are bare numbers: without a name the reader cannot tell which company it is.
 NAME_REQUIRED = ("HK", "SH", "SZ")
 STANCES = ("bullish", "bearish", "neutral")
-POST_URL = re.compile(r"^https://(?:x|twitter)\.com/[^/\s]+/status/\d+")
+POST_URL = re.compile(r"^https://(?:x|twitter)\.com/[^/\s]+/status/(\d+)")
 SOURCE_FIELDS = ("handle", "stance", "reason", "quote", "url", "posted_at")
 CANDIDATES_FILE = REPO_ROOT / "output" / "candidates" / "candidates.json"
 
@@ -58,10 +58,10 @@ def parse_candidates(text: str) -> Parsed | None:
             continue
         known = merged.setdefault(candidate["ticker"], {**candidate, "sources": []})
         known["name"] = known["name"] or candidate["name"]
-        urls = {s["url"] for s in known["sources"]}
+        seen = {post_id(s["url"]) for s in known["sources"]}
         for source in candidate["sources"]:  # a post repeated inside one entry counts once too
-            if source["url"] not in urls:
-                urls.add(source["url"])
+            if post_id(source["url"]) not in seen:
+                seen.add(post_id(source["url"]))
                 known["sources"].append(source)
     return Parsed((text[:block.start()] + text[block.end():]).strip(), list(merged.values()), dropped)
 
@@ -91,6 +91,12 @@ def _source(s: object) -> dict | None:
     if out["stance"] not in STANCES or not POST_URL.match(out["url"]) or not _is_iso_time(out["posted_at"]):
         return None
     return out
+
+
+def post_id(url: str) -> str:
+    """The X post a link points at: one post may come as x.com or twitter.com, with or without a query."""
+    m = POST_URL.match(url)
+    return m.group(1) if m else url  # a stored row written by hand may hold another link
 
 
 def _is_iso_time(s: str) -> bool:
@@ -126,9 +132,9 @@ class CandidateStore:
                 row = rows.setdefault(c["ticker"], {"ticker": c["ticker"], "name": "", "sources": [],
                                                     "first_saved_at": now, "updated_at": now, "dismissed": False})
                 row["name"] = c["name"] or row["name"]
-                urls = {s["url"] for s in row["sources"]}
+                seen = {post_id(s["url"]) for s in row["sources"]}
                 row["sources"] += [{**s, "saved_at": now, "conv_id": conv_id}
-                                   for s in c["sources"] if s["url"] not in urls]
+                                   for s in c["sources"] if post_id(s["url"]) not in seen]
                 row.update(updated_at=now, dismissed=False)
             self._write(rows)
         return [c["ticker"] for c in picked]
