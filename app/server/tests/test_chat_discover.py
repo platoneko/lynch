@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shutil
 
@@ -23,11 +24,25 @@ async def settled(svc, conv_id):
     await until(lambda: state_of(svc, conv_id) == "dormant" and not svc.snapshot(conv_id)["partial"])
 
 
-def test_options_list_search_capable_grok_models(tmp_path):
+def test_options_default_to_grok_45_with_500k(tmp_path):
     svc, _ = make_service(tmp_path)
+    cache = tmp_path / "home" / ".grok" / "models_cache.json"
+    models = json.loads(cache.read_text())["models"]
+    models["grok-4.5"] = {"info": {**models["grok-4.6"]["info"], "id": "grok-4.5", "name": "Grok 4.5"}}
+    cache.write_text(json.dumps({"models": models}))
     d = svc.options()["discover"]
-    assert [m["id"] for m in d["models"]] == ["grok-4.6"]
-    assert (d["default_model"], d["default_window"], d["hint"]) == ("grok-4.6", 256000, None)
+    assert (d["default_model"], d["default_window"], d["hint"]) == ("grok-4.5", 500000, None)
+
+
+def test_options_fall_back_to_the_first_model_and_its_first_window(tmp_path):
+    svc, _ = make_service(tmp_path)  # the cache holds grok-4.6 only, with 256k and 500k
+    d = svc.options()["discover"]
+    assert (d["default_model"], d["default_window"]) == ("grok-4.6", 500000)
+    cache = tmp_path / "home" / ".grok" / "models_cache.json"
+    models = json.loads(cache.read_text())["models"]
+    models["grok-4.6"]["info"]["context_windows"] = [256000]
+    cache.write_text(json.dumps({"models": models}))
+    assert svc.options()["discover"]["default_window"] == 256000
 
 
 def test_create_makes_a_session_then_runs_a_turn(tmp_path):
@@ -46,8 +61,9 @@ def test_create_makes_a_session_then_runs_a_turn(tmp_path):
     assert snap["conv"]["kind"] == "discover" and snap["conv"]["title"] == "看看"
     [turn] = turns(tmp_path)
     argv = turn["argv"]
-    assert argv[argv.index("--resume") + 1] == conv.grok_session and "--single=看看" in argv
-    assert "@alice" in argv[argv.index("--rules") + 1]
+    prompt = next(a.split("=", 1)[1] for a in argv if a.startswith("--single="))
+    assert argv[argv.index("--resume") + 1] == conv.grok_session
+    assert "SKILL-BODY" in prompt and "@alice" in prompt and prompt.endswith("## 用户这一轮说\n看看")
     assert turn["cwd"] == str(tmp_path / "grok-workdir")
     assert turn["grok_env"]["GROK_SANDBOX"] == "read-only"
     assert not [i for i in snap["items"] if i["kind"] == "notice"]  # a normal exit says nothing
@@ -59,6 +75,7 @@ def test_each_turn_rereads_the_kol_list_and_adds_up_the_cost(tmp_path):
         conv = await svc.create("discover", None, "one", "grok-4.6", "high", 256000)
         await settled(svc, conv.id)
         write_invest(tmp_path / "invest", handles=("carol",))
+        (tmp_path / "search.md").write_text("# lynch 发现新票：搜索规则与候选格式\n\nEDITED\n", encoding="utf-8")
         await svc.send(conv.id, "two")
         await settled(svc, conv.id)
         snap = svc.snapshot(conv.id)
@@ -67,9 +84,38 @@ def test_each_turn_rereads_the_kol_list_and_adds_up_the_cost(tmp_path):
     conv, snap = asyncio.run(main())
     first, second = turns(tmp_path)
     assert second["argv"][second["argv"].index("--resume") + 1] == conv.grok_session
-    assert "@carol" in second["argv"][second["argv"].index("--rules") + 1]
+    second_prompt = next(a for a in second["argv"] if a.startswith("--single="))
+    assert "@carol" in second_prompt and "EDITED" in second_prompt and "SKILL-BODY" not in second_prompt
     assert snap["conv"]["cost_usd"] == pytest.approx(0.02)
     assert texts(snap)[-2:] == [("user", "two"), ("text", "echo: two")]
+
+
+def test_a_missing_skill_means_no_session_and_no_chat(tmp_path):
+    async def main():
+        svc, _ = make_service(tmp_path)
+        (tmp_path / "search.md").unlink()
+        with pytest.raises(Conflict, match="找不到发现新票的 skill"):
+            await svc.create("discover", None, "看看", "grok-4.6", "high", 256000)
+        rows = svc.list()["chats"]
+        await svc.shutdown()
+        return rows
+    assert asyncio.run(main()) == []
+    assert grok_launches(tmp_path) == []  # not even the ACP handshake ran
+
+
+def test_a_skill_removed_mid_chat_refuses_the_turn(tmp_path):
+    async def main():
+        svc, _ = make_service(tmp_path)
+        conv = await svc.create("discover", None, "one", "grok-4.6", "high", 256000)
+        await settled(svc, conv.id)
+        (tmp_path / "search.md").unlink()
+        with pytest.raises(Conflict, match="找不到发现新票的 skill"):
+            await svc.send(conv.id, "two")
+        snap = svc.snapshot(conv.id)
+        await svc.shutdown()
+        return snap
+    snap = asyncio.run(main())
+    assert len(turns(tmp_path)) == 1 and ("user", "two") not in texts(snap)
 
 
 def test_restart_resumes_the_same_grok_session(tmp_path):

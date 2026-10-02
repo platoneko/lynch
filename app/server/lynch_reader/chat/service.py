@@ -10,7 +10,7 @@ import time
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from lynch_reader.chat import transcript
@@ -19,13 +19,13 @@ from lynch_reader.chat.approvals import (AUTO_DENY_MESSAGE, USER_DENY_MESSAGE, A
 from lynch_reader.chat.candidates import CandidateStore
 from lynch_reader.chat.config import (CHAT_EFFORTS, CHAT_MODELS, DEFAULT_EFFORT, DEFAULT_MODEL, IDLE_TIMEOUT_S,
                                       MAX_PROCESSES, LaunchConfig, launch_argv, launch_env)
-from lynch_reader.chat.grok import (DEFAULT_WINDOW, MAX_TURNS, GrokConfig, GrokSetupError, discover_rules, grok_argv,
-                                    grok_env, grok_models, new_session, prepare_workdir)
+from lynch_reader.chat.grok import (DEFAULT_GROK_MODEL, DEFAULT_WINDOW, MAX_TURNS, GrokConfig, GrokSetupError,
+                                    discover_prompt, grok_argv, grok_env, grok_models, new_session, prepare_workdir)
 from lynch_reader.chat.grok_log import GrokLog
 from lynch_reader.chat.index import ChatIndex, Conversation, make_title
 from lynch_reader.chat.items import (compact_item, context_tokens, framework_ticker, message_items, notice_item,
                                      retry_text)
-from lynch_reader.chat.kol import KolSources, KolUnavailable, kol_sources
+from lynch_reader.chat.kol import KolSources, KolUnavailable, kol_brief, kol_sources
 from lynch_reader.chat.process import ChatProcess
 
 log = logging.getLogger(__name__)
@@ -112,8 +112,10 @@ class ChatService:
 
     def options(self) -> dict:
         models = grok_models(self._grok.home) if self._grok else []
-        discover = {"models": [m.public() for m in models], "default_model": models[0].id if models else None,
-                    "default_window": DEFAULT_WINDOW,
+        default = next((m for m in models if m.id == DEFAULT_GROK_MODEL), models[0] if models else None)
+        discover = {"models": [m.public() for m in models], "default_model": default.id if default else None,
+                    "default_window": (DEFAULT_WINDOW if default is None or DEFAULT_WINDOW in default.windows
+                                       else default.windows[0]),
                     "hint": None if models else "在终端运行 grok models 刷新 Grok 模型清单"}
         return {"models": [{"id": m, "label": label} for m, label in CHAT_MODELS], "efforts": list(CHAT_EFFORTS),
                 "default_model": DEFAULT_MODEL, "default_effort": DEFAULT_EFFORT, "discover": discover}
@@ -190,7 +192,8 @@ class ChatService:
         # From JSON: 256000.0 equals 256000 and True equals 1, but neither is a window grok takes.
         if type(window) is not int or window not in chosen.windows:
             raise Invalid(f"unknown context window {window!r}")
-        await self._kol_sources()  # no session for a chat that could not run
+        self._discover_skill()  # no session for a chat that could not run
+        await self._kol_sources()  # likewise
         try:
             session = await new_session(grok, self._grok_env, model, window)
         except (GrokSetupError, OSError) as e:
@@ -392,7 +395,9 @@ class ChatService:
         if text.lstrip().startswith(COMPACT_COMMAND):
             raise Invalid("发现新票对话不支持压缩上下文")
         grok = self._require_grok()
-        rules = discover_rules(await self._kol_sources())  # read every turn: an edited KOL list applies at once
+        skill = self._discover_skill()  # both read every turn: an edit applies at once
+        kol = await self._kol_sources()
+        prompt = discover_prompt(skill, kol_brief(kol, datetime.fromtimestamp(self._wall(), UTC)), text)
         await self._make_room()
         try:
             prepare_workdir(grok.workdir)
@@ -400,7 +405,7 @@ class ChatService:
             raise Conflict(f"无法启动 Grok：{e}") from e
         # grok never echoes the prompt: the app records and shows it itself.
         self._broadcast_entry(conv.id, self._grok_log(conv.id).user(text))
-        proc = ChatProcess(grok_argv(grok, conv, text, rules), self._grok_env, grok.workdir,
+        proc = ChatProcess(grok_argv(grok, conv, prompt), self._grok_env, grok.workdir,
                            on_message=lambda msg: self._on_message(conv.id, proc, msg),
                            on_exit=lambda p, expected, err: self._on_exit(conv.id, p, expected, err))
         try:
@@ -420,6 +425,13 @@ class ChatService:
             await self._stop(conv_id)
             if not answered:
                 self._broadcast_entry(conv_id, self._grok_log(conv_id).interrupted())
+
+    def _discover_skill(self) -> str:
+        path = self._require_grok().skill
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError as e:
+            raise Conflict(f"找不到发现新票的 skill：{path}") from e
 
     async def _kol_sources(self) -> KolSources:
         try:

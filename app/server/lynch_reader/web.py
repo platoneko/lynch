@@ -99,7 +99,8 @@ def main(argv: list[str] | None = None) -> None:
         projects_dir_for(REPO_ROOT, Path.home()),
         dict(os.environ),
         grok=GrokConfig((shutil.which("grok") or "grok",), workdir=output / "chat" / "grok-workdir",
-                        home=Path.home(), logs=output / "chat" / "grok", invest_root=INVEST_ROOT),
+                        home=Path.home(), logs=output / "chat" / "grok", invest_root=INVEST_ROOT,
+                        skill=REPO_ROOT / ".agents" / "skills" / "discover-kol" / "references" / "search.md"),
         candidates=CandidateStore(CANDIDATES_FILE),
     )
     # An open chat stream never ends by itself: without a graceful-shutdown timeout, SIGTERM waits on it

@@ -16,6 +16,7 @@
         maxturns    a partial reply, then an error_max_turns result (is_error true), exit 0
         failed      an error_during_execution result carrying grok's errors list, exit 0
         anything else  "echo: <text>"
+      The behaviour keys off the text after the last "## 用户这一轮说" heading (the user's words).
 
 Sessions live in $FAKE_GROK_SESSIONS/<id>.json ({model, window}); a turn on an unknown id fails as grok does.
 Every launch is appended to $FAKE_GROK_LOG: argv, env names, and the GROK_* values.
@@ -95,7 +96,8 @@ def arg(name):
 
 
 def turn():
-    text = next(a.split("=", 1)[1] for a in sys.argv if a.startswith("--single="))
+    prompt = next(a.split("=", 1)[1] for a in sys.argv if a.startswith("--single="))
+    text = prompt.rsplit("## 用户这一轮说\n", 1)[-1].strip()  # the app's message ends with the user's words
     sid = arg("--resume")
     if not sid or not os.path.exists(session_path(sid)):
         sys.stderr.write(f"session not found: {sid}\n")

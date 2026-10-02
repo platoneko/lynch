@@ -1,4 +1,4 @@
-"""How the app launches Grok for a discover chat: models, isolation, argv, environment and appended rules.
+"""How the app launches Grok for a discover chat: models, isolation, argv, environment and the message each turn sends.
 
 Flags and tool names were verified against grok 1.0.46 on 2026-10-02 (spec §1); tests/test_chat_grok_live.py
 guards them. Run it after every grok upgrade.
@@ -16,9 +16,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from lynch_reader.chat.index import Conversation
-from lynch_reader.chat.kol import KolSources
 
-DEFAULT_WINDOW = 256_000
+DEFAULT_GROK_MODEL = "grok-4.5"  # the user's choice for new discover chats (2026-10-03)
+DEFAULT_WINDOW = 500_000
 MAX_TURNS = 40  # twice a full KOL search's turns (5 on 2026-10-02, grok 1.0.46), floor 40
 
 # grok's compatibility scanners would load other agents' settings: lynch's AGENTS.md and the broad Bash allows in
@@ -54,6 +54,7 @@ class GrokConfig:
     home: Path  # holds ~/.grok/models_cache.json
     logs: Path  # the app's own discover transcripts (chat/grok_log.py)
     invest_root: Path  # where the KOL list comes from (chat/kol.py)
+    skill: Path  # .agents/skills/discover-kol/references/search.md, sent whole every turn (discover_prompt)
 
 
 @dataclass(frozen=True)
@@ -107,14 +108,13 @@ def prepare_workdir(workdir: Path) -> None:
         raise GrokSetupError(f"无法创建工作目录 {workdir}：{e}") from e
 
 
-def grok_argv(cfg: GrokConfig, conv: Conversation, text: str, rules: str) -> list[str]:
-    """One turn: grok answers `text` in the conversation's session and exits after its `result` line."""
+def grok_argv(cfg: GrokConfig, conv: Conversation, prompt: str) -> list[str]:
+    """One turn: grok answers `prompt` in the conversation's session and exits after its `result` line."""
     return [
         *cfg.grok_cmd, "--no-auto-update",
-        f"--single={text}",  # `=`: a message starting with "-" is the prompt, not a flag
+        f"--single={prompt}",  # `=`: a message starting with "-" is the prompt, not a flag
         "--resume", conv.grok_session,
         "--model", conv.model, "--reasoning-effort", conv.effort,
-        "--rules", rules,
         "--disallowed-tools", ",".join(DISALLOWED_TOOLS), "--no-subagents",
         "--permission-mode", "dontAsk",
         *(arg for rule in DENY_RULES for arg in ("--deny", rule)),
@@ -123,35 +123,20 @@ def grok_argv(cfg: GrokConfig, conv: Conversation, text: str, rules: str) -> lis
     ]
 
 
-def discover_rules(kol: KolSources) -> str:
-    """Appended to grok's own system prompt (`--rules`); built every turn so a changed KOL list applies at once."""
-    sources = []
-    if kol.list_id:
-        sources.append(f"X 列表 {kol.list_id}（x.com/i/lists/{kol.list_id}，搜索时写 list:{kol.list_id}）")
-    if kol.handles:
-        sources.append("账号 " + "、".join(f"@{h}" for h in kol.handles))
-    return "\n".join([
-        "你在 lynch 手机 app 的「发现新票」对话里工作；用户在手机上逐轮回复。始终用简体中文回答。",
-        f"任务：用 X 搜索工具查看下列 KOL 最近 {kol.lookback_hours} 小时的帖子，找出他们提到的股票，"
-        f"尤其是新提出的观点。KOL 来源：{'；'.join(sources)}。",
-        "搜索规则：",
-        "- 只看主帖，跳过回复别人的帖子。",
-        "- X 搜索每次最多 10 条，要翻页，直到没有新帖或已超出回看窗口。",
-        "- 列表和逐个账号（from:<handle>）两路都要搜：只搜列表会漏帖。",
-        "- 用户可以改回看时长、只看某几位 KOL、追问某条帖子；照做。",
-        "- 你只有 X 搜索和网页搜索；没有文件和终端工具，不要尝试。",
-        "输出：先讲发现。末尾附恰好一个候选块；没有候选就不附。候选块格式：",
-        "```lynch-candidates",
-        '{"candidates": [{"ticker": "0700.HK", "name": "腾讯控股", "sources": [{"handle": "someone", '
-        '"stance": "bullish", "reason": "一句话中文理由", "quote": "帖子原文摘录，保留原语言", '
-        '"url": "https://x.com/someone/status/123", "posted_at": "2026-10-01T08:00:00Z"}]}]}',
-        "```",
-        "- ticker 写成 代码.市场，市场是 US、HK、SH、SZ、SG 之一，例如 AXTI.US、0700.HK、600519.SH。",
-        "- name 必填：港股和 A 股写中文简称，其他市场写公司英文名。",
-        "- stance 是 bullish、bearish 或 neutral。",
-        "- 同一只票被多位 KOL 提到，合并成一条，sources 里列多个出处。",
-        "- 每个出处都要有原帖链接和发帖时间（UTC，ISO 8601）。",
-    ])
+USER_HEADING = "## 用户这一轮说"
+APP_CONTEXT = ("你在 lynch 手机 app 的「发现新票」对话里，用户在手机上逐轮回复。你只有 X 搜索和网页搜索，"
+               "没有文件和终端工具，不要尝试；候选由用户在 app 里点选落盘，你不用也不能存。始终用简体中文回答。")
+
+
+def discover_prompt(skill: str, brief: str, text: str) -> str:
+    """The whole message a discover turn sends grok: the skill's search rules, this turn's KOL sources, where it
+    runs, then the user's words.
+
+    `--rules` never reaches the model on a session made over ACP and resumed with -p (spec §1), so the rules ride
+    in the message. Every turn, not just the first: grok's auto-compaction may summarise an early turn away.
+    """
+    return "\n\n".join([skill.strip(), f"## 本次的 KOL 来源\n{brief}", f"## 运行环境\n{APP_CONTEXT}",
+                        f"{USER_HEADING}\n{text}"])
 
 
 ACP_TIMEOUT_S = 30.0

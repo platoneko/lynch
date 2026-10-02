@@ -94,13 +94,16 @@ FAKE_GROK_CMD = (sys.executable, str(FAKE_GROK))
 
 
 def grok_config(tmp_path: Path) -> GrokConfig:
-    """A GrokConfig on the fake grok, with a model cache and an invest holding a KOL list."""
+    """A GrokConfig on the fake grok, with a model cache, an invest holding a KOL list, and a skill file."""
     home = tmp_path / "home"
     write_models_cache(home)
     invest = tmp_path / "invest"
     if not invest.exists():
         write_invest(invest)
-    return GrokConfig(FAKE_GROK_CMD, tmp_path / "grok-workdir", home, tmp_path / "grok-logs", invest)
+    skill = tmp_path / "search.md"
+    if not skill.exists():
+        skill.write_text("# lynch 发现新票：搜索规则与候选格式\n\nSKILL-BODY\n", encoding="utf-8")
+    return GrokConfig(FAKE_GROK_CMD, tmp_path / "grok-workdir", home, tmp_path / "grok-logs", invest, skill)
 
 
 def fake_grok_env(tmp_path: Path) -> dict[str, str]:

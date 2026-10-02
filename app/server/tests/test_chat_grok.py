@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import subprocess
 
-from lynch_reader.chat.grok import (DENY_RULES, ISOLATION_ENV, GrokConfig, discover_rules, grok_argv, grok_env,
-                                    grok_models, prepare_workdir)
-from lynch_reader.chat.kol import KolSources
+from lynch_reader.chat.grok import (DENY_RULES, ISOLATION_ENV, USER_HEADING, GrokConfig, discover_prompt, grok_argv,
+                                    grok_env, grok_models, prepare_workdir)
 from tests.chat_helpers import conv, write_models_cache
 
 
 def cfg(tmp_path):
-    return GrokConfig(("grok",), tmp_path / "wd", tmp_path / "home", tmp_path / "logs", tmp_path / "invest")
+    return GrokConfig(("grok",), tmp_path / "wd", tmp_path / "home", tmp_path / "logs", tmp_path / "invest",
+                      tmp_path / "search.md")
 
 
 def discover_conv():
@@ -17,24 +17,24 @@ def discover_conv():
                 grok_session="g-1")
 
 
-def test_argv_resumes_the_session_with_model_effort_and_rules(tmp_path):
-    argv = grok_argv(cfg(tmp_path), discover_conv(), "看看", "RULES")
-    assert argv[0] == "grok" and "--single=看看" in argv
+def test_argv_resumes_the_session_with_model_and_effort(tmp_path):
+    argv = grok_argv(cfg(tmp_path), discover_conv(), "PROMPT")
+    assert argv[0] == "grok" and "--single=PROMPT" in argv
     assert argv[argv.index("--resume") + 1] == "g-1"
     assert argv[argv.index("--model") + 1] == "grok-4.6"
     assert argv[argv.index("--reasoning-effort") + 1] == "high"
-    assert argv[argv.index("--rules") + 1] == "RULES"
+    assert "--rules" not in argv  # grok drops it on a resumed ACP session: the skill travels in the message
     assert argv[argv.index("--output-format") + 1] == "streaming-messages-json"
     assert "--include-partial-messages" in argv
 
 
 def test_a_message_starting_with_a_dash_stays_the_prompt(tmp_path):
-    argv = grok_argv(cfg(tmp_path), discover_conv(), "- 只看 alice", "R")
+    argv = grok_argv(cfg(tmp_path), discover_conv(), "- 只看 alice")
     assert "--single=- 只看 alice" in argv and "- 只看 alice" not in argv
 
 
 def test_argv_isolates_grok_to_search_only(tmp_path):
-    argv = grok_argv(cfg(tmp_path), discover_conv(), "x", "R")
+    argv = grok_argv(cfg(tmp_path), discover_conv(), "x")
     denied = [argv[i + 1] for i, a in enumerate(argv) if a == "--deny"]
     assert denied == list(DENY_RULES) and "MCPTool(*)" in denied and "Bash" in denied
     off = argv[argv.index("--disallowed-tools") + 1].split(",")
@@ -65,11 +65,12 @@ def test_models_are_empty_without_a_readable_cache(tmp_path):
     assert grok_models(tmp_path) == []
 
 
-def test_rules_name_the_sources_window_and_block():
-    rules = discover_rules(KolSources("123", ("alice", "bob"), 48))
-    assert "x.com/i/lists/123" in rules and "@alice" in rules and "@bob" in rules and "48 小时" in rules
-    assert "```lynch-candidates" in rules and "中文简称" in rules
-    assert "x.com/i/lists" not in discover_rules(KolSources(None, ("alice",), 36))
+def test_prompt_is_skill_then_sources_then_app_context_then_user_words():
+    p = discover_prompt("# SKILL\nrules", "- 账号：@alice", "看看")
+    assert p.index("# SKILL") < p.index("## 本次的 KOL 来源") < p.index("- 账号：@alice") \
+        < p.index("## 运行环境") < p.index(USER_HEADING) < p.index("看看")
+    assert "没有文件和终端工具" in p and "简体中文" in p
+    assert p.endswith(f"{USER_HEADING}\n看看")
 
 
 def test_workdir_is_its_own_git_root(tmp_path):
