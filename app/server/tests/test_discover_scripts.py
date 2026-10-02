@@ -33,13 +33,13 @@ def test_kol_sources_prints_the_brief(tmp_path):
     invest = write_invest(tmp_path / "invest", list_id="123", handles=("alice",), hours=48)
     p = run("kol_sources.py", "--invest", str(invest))
     assert p.returncode == 0, p.stderr
-    assert "list:123" in p.stdout and "@alice" in p.stdout and "最近 48 小时" in p.stdout
+    assert "list:123" in p.stdout and "@alice" not in p.stdout and "最近 48 小时" in p.stdout
 
 
 def test_kol_sources_fails_on_an_empty_list(tmp_path):
     invest = write_invest(tmp_path / "invest", list_id=None, handles=())
     p = run("kol_sources.py", "--invest", str(invest))
-    assert p.returncode == 1 and "为空" in p.stderr and p.stdout == ""
+    assert p.returncode == 1 and "没有 X 列表" in p.stderr and p.stdout == ""
 
 
 def save(tmp_path: Path, text: str, *tickers: str) -> subprocess.CompletedProcess:

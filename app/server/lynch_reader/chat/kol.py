@@ -1,4 +1,5 @@
-"""The KOL sources invest tracks on X, read through invest's own loaders (spec §3c).
+"""The KOL source invest tracks on X, read through invest's own loaders (spec §3c): its X List, whose members
+the user keeps on X, and how far back to look. invest's handle list is not used: discover searches the List only.
 
 invest decides which config wins (its gitignored override over the checked-in template) and how far back to
 look; calling its loaders keeps those rules in invest alone.
@@ -26,8 +27,7 @@ sys.path.insert(0, sys.argv[1])
 import load_kol_handles
 from load_policies import POLICIES
 tweets = (POLICIES.get("fetch") or {}).get("tweets") or {}
-print(json.dumps({"list_id": load_kol_handles.load_list_id(), "handles": load_kol_handles.load_handles(),
-                  "lookback_hours": tweets.get("lookback_hours")}))
+print(json.dumps({"list_id": load_kol_handles.load_list_id(), "lookback_hours": tweets.get("lookback_hours")}))
 """
 
 
@@ -37,8 +37,7 @@ class KolUnavailable(Exception):
 
 @dataclass(frozen=True)
 class KolSources:
-    list_id: str | None  # an X List id
-    handles: tuple[str, ...]  # without "@"
+    list_id: str  # an X List id
     lookback_hours: int
 
 
@@ -66,22 +65,22 @@ async def kol_sources(invest_root: Path, python: str = sys.executable) -> KolSou
     hours = data.get("lookback_hours")
     if not isinstance(hours, int) or isinstance(hours, bool) or hours <= 0:
         hours = DEFAULT_LOOKBACK_HOURS
-    sources = KolSources(data.get("list_id") or None, tuple(data.get("handles") or ()), hours)
-    if sources.list_id is None and not sources.handles:
-        raise KolUnavailable("invest 的 KOL 名单为空（config/kol_handles.toml 里 list_id 和 handles 都没填）")
-    return sources
+    list_id = data.get("list_id")
+    if not isinstance(list_id, str) or not list_id.strip():
+        raise KolUnavailable("invest 的 KOL 配置里没有 X 列表（config/kol_handles.toml 的 list_id）")
+    return KolSources(list_id.strip(), hours)
 
 
 def kol_brief(kol: KolSources, now: datetime) -> str:
-    """The KOL sources as the search rules expect them: what to search and from which UTC date on.
+    """The KOL source as the search rules expect it: which List, and the exact UTC moment the lookback starts.
 
-    The app sends it to Grok every turn and `just kol-sources` prints it, so both read the same words.
+    X's `since:` filters by date only, so the start moment is spelled out: posts before it do not count and paging
+    stops there. The app sends this to Grok every turn and `just kol-sources` prints it, so both read the same words.
     """
-    start = (now.astimezone(UTC) - timedelta(hours=kol.lookback_hours)).date().isoformat()
-    lines = []
-    if kol.list_id:
-        lines.append(f"- X 列表：{kol.list_id}（https://x.com/i/lists/{kol.list_id}，搜索写 list:{kol.list_id}）")
-    if kol.handles:
-        lines.append("- 账号：" + "、".join(f"@{h}" for h in kol.handles) + "（搜索写 from:<账号>）")
-    lines.append(f"- 回看：最近 {kol.lookback_hours} 小时，起始日期 {start}（UTC，搜索写 since:{start}）")
-    return "\n".join(lines)
+    start = now.astimezone(UTC) - timedelta(hours=kol.lookback_hours)
+    moment, day = start.strftime("%Y-%m-%d %H:%M UTC"), start.date().isoformat()
+    return "\n".join([
+        f"- X 列表：{kol.list_id}（https://x.com/i/lists/{kol.list_id}，搜索写 list:{kol.list_id}）",
+        f"- 回看范围：最近 {kol.lookback_hours} 小时，即 {moment} 之后发的帖子；搜索写 since:{day}"
+        f"（since 只按日期过滤，早于 {moment} 的帖子不算，翻到这里就停）",
+    ])

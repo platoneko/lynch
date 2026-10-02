@@ -338,7 +338,7 @@ app-revoke id:
     @(cd app/server && uv sync --quiet)
     @PYTHONPATH=app/server app/server/.venv/bin/python -m lynch_reader.auth revoke {{quote(id)}}
 
-[doc('发现新票：读 invest 的 KOL 列表、账号与回看时长（skill discover-kol 用）')]
+[doc('发现新票：读 invest 的 KOL 的 X 列表与回看范围（skill discover-kol 用）')]
 kol-sources:
     @(cd app/server && uv sync --quiet)
     @PYTHONPATH=app/server app/server/.venv/bin/python .agents/skills/discover-kol/scripts/kol_sources.py

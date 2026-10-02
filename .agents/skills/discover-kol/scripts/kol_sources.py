@@ -1,4 +1,4 @@
-"""Prints the KOL sources a discover search covers: invest's X list, handles and lookback (`just kol-sources`)."""
+"""Prints what a discover search covers: invest's X List and the lookback window (`just kol-sources`)."""
 from __future__ import annotations
 
 import argparse

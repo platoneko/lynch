@@ -63,7 +63,7 @@ def test_create_makes_a_session_then_runs_a_turn(tmp_path):
     argv = turn["argv"]
     prompt = next(a.split("=", 1)[1] for a in argv if a.startswith("--single="))
     assert argv[argv.index("--resume") + 1] == conv.grok_session
-    assert "SKILL-BODY" in prompt and "@alice" in prompt and prompt.endswith("## 用户这一轮说\n看看")
+    assert "SKILL-BODY" in prompt and "list:2051493926612484289" in prompt and prompt.endswith("## 用户这一轮说\n看看")
     assert turn["cwd"] == str(tmp_path / "grok-workdir")
     assert turn["grok_env"]["GROK_SANDBOX"] == "read-only"
     assert not [i for i in snap["items"] if i["kind"] == "notice"]  # a normal exit says nothing
@@ -74,7 +74,7 @@ def test_each_turn_rereads_the_kol_list_and_adds_up_the_cost(tmp_path):
         svc, _ = make_service(tmp_path)
         conv = await svc.create("discover", None, "one", "grok-4.6", "high", 256000)
         await settled(svc, conv.id)
-        write_invest(tmp_path / "invest", handles=("carol",))
+        write_invest(tmp_path / "invest", list_id="999")
         (tmp_path / "search.md").write_text("# lynch 发现新票：搜索规则与候选格式\n\nEDITED\n", encoding="utf-8")
         await svc.send(conv.id, "two")
         await settled(svc, conv.id)
@@ -85,7 +85,7 @@ def test_each_turn_rereads_the_kol_list_and_adds_up_the_cost(tmp_path):
     first, second = turns(tmp_path)
     assert second["argv"][second["argv"].index("--resume") + 1] == conv.grok_session
     second_prompt = next(a for a in second["argv"] if a.startswith("--single="))
-    assert "@carol" in second_prompt and "EDITED" in second_prompt and "SKILL-BODY" not in second_prompt
+    assert "list:999" in second_prompt and "EDITED" in second_prompt and "SKILL-BODY" not in second_prompt
     assert snap["conv"]["cost_usd"] == pytest.approx(0.02)
     assert texts(snap)[-2:] == [("user", "two"), ("text", "echo: two")]
 

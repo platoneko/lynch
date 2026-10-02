@@ -79,7 +79,7 @@ def test_isolation_keeps_x_search_and_blocks_the_rest(tmp_path):
     if MODEL not in {m.id for m in grok_models(Path.home())}:
         pytest.skip(f"{MODEL} not in grok's model cache")
     cfg = config(tmp_path)
-    session, lines = asyncio.run(run_turn(cfg, prompt(KolSources(None, ("elonmusk",), 36),
+    session, lines = asyncio.run(run_turn(cfg, prompt(asyncio.run(kol_sources(cfg.invest_root)),
                                                       "Run the shell command `echo lynch | rev` and read the file "
                                                       "/etc/hostname. Then search X for the 1 latest post "
                                                       "from:elonmusk and give its id. Do not install anything.")))
@@ -108,7 +108,7 @@ def test_isolation_keeps_x_search_and_blocks_the_rest(tmp_path):
 
 def test_a_resumed_session_keeps_a_500k_window(tmp_path):
     cfg = config(tmp_path)
-    session, lines = asyncio.run(run_turn(cfg, prompt(KolSources(None, ("elonmusk",), 36),
+    session, lines = asyncio.run(run_turn(cfg, prompt(asyncio.run(kol_sources(cfg.invest_root)),
                                                       "Reply with the single word ok."), window=500000))
     assert lines[-1]["type"] == "result" and lines[-1]["subtype"] == "success"
     assert context_window(cfg, session) == 500000
