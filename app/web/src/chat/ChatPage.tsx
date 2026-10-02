@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { renderFragment, type LinkTargets } from '../doc/buildDoc';
+import { Menu } from '../Menu';
 import { answerApproval, createChat, editMessage, fetchCandidates, interruptChat, openChatEvents, renameChat, sendMessage } from './api';
 import { CandidateCards } from './CandidateCards';
 import { costText, DISCOVER_OPENER, discoverModelText, partialText } from './candidateModel';
@@ -280,18 +281,11 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
           {id !== null && <button className="icon-btn" disabled={gone} onClick={() => setMenu(!menu)} aria-label="更多">⋯</button>}
         </div>
         {menu && (
-          <>
-            <div className="menu-backdrop" onClick={() => setMenu(false)} />
-            <div className="chat-menu">
-              <button onClick={() => { setMenu(false); setShowTools(!showTools); saveShowTools(!showTools); }}>
-                {showTools ? '隐藏调用过程' : '显示调用过程'}
-              </button>
-              <button onClick={() => { setMenu(false); setRenaming(conv?.title ?? ''); }}>重命名</button>
-              {!discover && (
-                <button disabled={busy} onClick={() => { setMenu(false); setCompactOpen(true); }}>压缩上下文</button>
-              )}
-            </div>
-          </>
+          <Menu onClose={() => setMenu(false)} items={[
+            { label: showTools ? '隐藏调用过程' : '显示调用过程', onSelect: () => { setShowTools(!showTools); saveShowTools(!showTools); } },
+            { label: '重命名', onSelect: () => setRenaming(conv?.title ?? '') },
+            ...(discover ? [] : [{ label: '压缩上下文', disabled: busy, onSelect: () => setCompactOpen(true) }]),
+          ]} />
         )}
       </header>
 

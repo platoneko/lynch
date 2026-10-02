@@ -44,7 +44,9 @@ button { font: inherit; color: inherit; }
 
 /* Home */
 .home-top { position: sticky; top: 0; z-index: 2; background: var(--bg); padding: 10px 16px 6px; border-bottom: 1px solid var(--line); }
-.home-search-row { display: flex; gap: 8px; }
+.home-search-row { position: relative; display: flex; gap: 8px; }
+/* Hung from the search row, not the header: the filter rows below would push it far from its button. */
+.home-search-row .menu { top: calc(100% + 4px); right: 0; }
 .home-search, .bar-search { flex: 1; min-width: 0; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--text); font-size: 16px; }
 .quote-time { align-self: center; color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .icon-btn { width: 40px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
@@ -54,7 +56,6 @@ button { font: inherit; color: inherit; }
 .home-meta { display: flex; justify-content: space-between; align-items: center; padding-top: 8px; color: var(--muted); font-size: 13px; }
 .home-meta select { font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 2px 6px; }
 .home-meta .chips { padding-top: 0; }
-.archive-toggle { display: flex; align-items: center; gap: 4px; }
 /* The axis chips unfold as a wrapped block: a dozen of them would scroll far off the side. */
 .chips-wrap { flex-wrap: wrap; overflow-x: visible; }
 .cards { padding: 10px 16px; display: flex; flex-direction: column; gap: 10px; }
@@ -177,16 +178,16 @@ button { font: inherit; color: inherit; }
 .md .katex-display { overflow-x: auto; overflow-y: hidden; }
 /* ---- chats */
 .text-btn { flex: none; padding: 0 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--text); font-size: 14px; white-space: nowrap; }
-.chat-entry { position: relative; }
+.has-badge { position: relative; }
 .badge { position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent); color: #fff; font-size: 11px; line-height: 18px; text-align: center; }
 .run-dot { color: var(--accent); margin-right: 4px; font-size: 10px; vertical-align: middle; }
 /* .bar is position: fixed for the doc page; here the body carries no bar-height padding, so the bar stays in flow. */
 .chats .bar-top { position: sticky; }
-.chats-body { padding: 8px 16px 32px; }
-.chats-caption { margin: 12px 0 4px; color: var(--muted); font-size: 13px; font-weight: 500; }
 /* The two "new" buttons get their own row: beside the search box they squeezed it to a sliver on a phone. */
 .chats-new { padding-top: 6px; }
 .chats-new .text-btn { flex: 1; padding: 6px 10px; }
+.chats-body { padding: 8px 16px 32px; }
+.chats-caption { margin: 12px 0 4px; color: var(--muted); font-size: 13px; font-weight: 500; }
 .chat-group { border-bottom: 1px solid var(--line); }
 .chat-group-head, .chat-row { display: flex; align-items: center; gap: 6px; }
 .chat-group-toggle, .chat-row-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 10px 0; border: 0; background: none; color: var(--text); font-size: 15px; text-align: left; }
@@ -206,9 +207,9 @@ button { font: inherit; color: inherit; }
 .chat-ticker { padding: 0; border: 0; background: none; color: var(--accent); font-size: 11px; }
 .ctx-warn { color: var(--zone-stretched); }
 .menu-backdrop { position: fixed; inset: 0; }
-.chat-menu { position: absolute; top: calc(100% - 2px); right: 16px; display: flex; flex-direction: column; min-width: 140px; padding: 4px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); box-shadow: 0 6px 20px rgb(0 0 0 / 0.25); }
-.chat-menu button { padding: 10px 12px; border: none; border-radius: 6px; background: transparent; color: var(--text); text-align: left; font-size: 14px; }
-.chat-menu button:disabled { color: var(--muted); }
+.menu { position: absolute; top: calc(100% - 2px); right: 16px; display: flex; flex-direction: column; min-width: 140px; padding: 4px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); box-shadow: 0 6px 20px rgb(0 0 0 / 0.25); }
+.menu button { padding: 10px 12px; border: none; border-radius: 6px; background: transparent; color: var(--text); text-align: left; font-size: 14px; }
+.menu button:disabled { color: var(--muted); }
 .msg { margin: 10px 0; }
 .msg-user { display: flex; flex-direction: column; align-items: flex-end; }
 /* Codex-style: the user's turn is a quiet grey block in body type, not an accent-coloured bubble */

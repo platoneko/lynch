@@ -186,7 +186,7 @@ export function App() {
     <>
       {error && <div className="banner-error" onClick={reload}>刷新失败：{error}（点此重试）</div>}
       <HomePage catalog={catalog} filter={filter} onFilter={setFilter} onOpen={openDoc} onOpenAxis={openAxis}
-        onRefresh={reload} refreshing={loading}
+        onRefreshQuotes={reload} onRefreshFrameworks={() => load(false)} refreshing={loading}
         chatCount={chatList?.running_count ?? 0} onOpenChats={() => openFromHome(chatsHash())} />
     </>
   );

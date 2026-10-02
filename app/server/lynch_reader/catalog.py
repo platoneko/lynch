@@ -48,7 +48,7 @@ SCENARIO_AXIS = "shared_scenario_axis"
 # Quotes are reused up to this age: it bounds Longbridge CLI calls. Past it they are
 # still reused while no market in the pool has traded since (market_hours.py).
 QUOTE_MAX_AGE_S = 300.0
-# The refresh button is mainly for re-reading frameworks; its quotes need only be this fresh.
+# 刷新股价 asks for quotes this fresh; a shorter bound would only add CLI calls on repeated taps.
 QUOTE_REFRESH_MAX_AGE_S = 60.0
 # During an outage each call can take the whole timeout; requests in this window share one failure.
 QUOTE_BACKOFF_S = 5.0

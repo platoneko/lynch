@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Menu } from '../Menu';
 import type { Catalog } from '../types';
 import { applyFilter, inArchiveScope, latestAsOf, quoteTimeText, type HomeFilter, type SortKey } from './listModel';
 import { TickerCard } from './TickerCard';
@@ -15,13 +16,15 @@ const MARKETS: { id: string; label: string }[] = [
   { id: 'US', label: '美股' },
 ];
 
-export function HomePage({ catalog, filter, onFilter, onOpen, onOpenAxis, onRefresh, refreshing, chatCount, onOpenChats }: {
+export function HomePage({ catalog, filter, onFilter, onOpen, onOpenAxis, onRefreshQuotes, onRefreshFrameworks,
+  refreshing, chatCount, onOpenChats }: {
   catalog: Catalog;
   filter: HomeFilter;
   onFilter: (f: HomeFilter) => void;
   onOpen: (ticker: string) => void;
   onOpenAxis: (name: string) => void;
-  onRefresh: () => void;
+  onRefreshQuotes: () => void;
+  onRefreshFrameworks: () => void; // re-reads the frameworks; quotes are reused while still fresh
   refreshing: boolean;
   chatCount: number;
   onOpenChats: () => void;
@@ -36,6 +39,7 @@ export function HomePage({ catalog, filter, onFilter, onOpen, onOpenAxis, onRefr
   const axes = new Map(catalog.axes.map((a) => [a.name, a]));
   // A dozen axis chips would crowd the header; they stay folded behind one toggle.
   const [axesOpen, setAxesOpen] = useState(false);
+  const [menu, setMenu] = useState(false);
 
   return (
     <div className="home">
@@ -48,13 +52,22 @@ export function HomePage({ catalog, filter, onFilter, onOpen, onOpenAxis, onRefr
             value={filter.query}
             onChange={(e) => onFilter({ ...filter, query: e.target.value })}
           />
-          <span className="quote-time">{quoteTimeText(asOf)}</span>
-          <button className="icon-btn" onClick={onRefresh} disabled={refreshing} aria-label="刷新">
-            {refreshing ? '…' : '⟳'}
+          <span className="quote-time">{refreshing ? '刷新中…' : quoteTimeText(asOf)}</span>
+          {/* The badge stays on the button so running chats show without opening the menu. */}
+          <button className="icon-btn has-badge" onClick={() => setMenu(!menu)} aria-label="更多">
+            ⋯{chatCount > 0 && <span className="badge">{chatCount}</span>}
           </button>
-          <button className="text-btn chat-entry" onClick={onOpenChats}>
-            对话{chatCount > 0 && <span className="badge">{chatCount}</span>}
-          </button>
+          {menu && (
+            <Menu onClose={() => setMenu(false)} items={[
+              { label: chatCount > 0 ? `对话 · ${chatCount} 个运行中` : '对话', onSelect: onOpenChats },
+              { label: '刷新股价', disabled: refreshing, onSelect: onRefreshQuotes },
+              { label: '刷新估值', disabled: refreshing, onSelect: onRefreshFrameworks },
+              {
+                label: filter.showArchived ? '隐藏归档' : `展示归档${archivedCount > 0 ? `（${archivedCount}）` : ''}`,
+                onSelect: () => onFilter({ ...filter, showArchived: !filter.showArchived }),
+              },
+            ]} />
+          )}
         </div>
         <div className="chips">
           {catalog.zones.map((z) => (
@@ -99,11 +112,6 @@ export function HomePage({ catalog, filter, onFilter, onOpen, onOpenAxis, onRefr
           <select value={filter.sort} onChange={(e) => onFilter({ ...filter, sort: e.target.value as SortKey })}>
             {SORTS.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
           </select>
-          <label className="archive-toggle">
-            <input type="checkbox" checked={filter.showArchived}
-              onChange={(e) => onFilter({ ...filter, showArchived: e.target.checked })} />
-            展示归档{archivedCount > 0 ? ` ${archivedCount}` : ''}
-          </label>
           <span>{rows.length} / {total}</span>
         </div>
       </header>
