@@ -131,9 +131,7 @@ export function DocPage({ load: fetchSource, targets, head, onBack, barExtra }: 
         {query === null ? (
           <div className="bar-row">
             <button className="icon-btn" onClick={onBack} aria-label="返回">‹</button>
-            <button className="bar-jump" disabled={up === null} onClick={() => up !== null && jump(up)}>
-              ↑ {up !== null ? label(up) : '已到开头'}
-            </button>
+            <span className="bar-title">{current >= 0 ? label(current) : ''}</span>
             <button className="icon-btn" onClick={() => search('')} aria-label="搜索本文">🔍</button>
             {barExtra}
           </div>
@@ -171,10 +169,16 @@ export function DocPage({ load: fetchSource, targets, head, onBack, barExtra }: 
         })}
       </main>
 
+      {/* Both jumps share the bottom bar at equal width; the top bar names the current section, so ↑ needs no name. */}
       <footer className="bar bar-bottom">
-        <button className="bar-jump" disabled={next === null} onClick={() => next !== null && jump(next)}>
-          ↓ {next !== null ? label(next) : '已到结尾'}
-        </button>
+        <div className="bar-row">
+          <button className="bar-jump" disabled={up === null} onClick={() => up !== null && jump(up)}>
+            ↑ {up !== null ? '本节开头' : '已到开头'}
+          </button>
+          <button className="bar-jump" disabled={next === null} onClick={() => next !== null && jump(next)}>
+            ↓ {next !== null ? label(next) : '已到结尾'}
+          </button>
+        </div>
       </footer>
     </div>
   );

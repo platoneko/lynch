@@ -110,6 +110,7 @@ button { font: inherit; color: inherit; }
 .bar-row { display: flex; gap: 8px; }
 .bar-jump { flex: 1; min-width: 0; text-align: left; padding: 6px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
 .bar-jump:disabled { color: var(--muted); }
+.bar-title { flex: 1; min-width: 0; align-self: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 600; }
 .bar-count { align-self: center; color: var(--muted); font-size: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 ::highlight(doc-search) { background: rgba(255, 196, 0, 0.35); }
 ::highlight(doc-search-current) { background: #ff9d00; color: #1c1c1e; }
