@@ -126,6 +126,9 @@ class MainActivity : Activity() {
 
             override fun onPageFinished(view: WebView, url: String?) {
                 if (!mainFrameFailed) showWeb()
+                // Pairing ends in a page load: save its cookie now, since the WebView writes
+                // cookies to disk only every so often and the process may die before onPause.
+                CookieManager.getInstance().flush()
             }
         }
     }
