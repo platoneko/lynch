@@ -202,7 +202,9 @@ def test_discover_create_save_list_and_dismiss(repo, tmp_path, quotes):
                                          "context_window": 123})
         assert bad.status_code == 400
         conv_id = c.post("/api/chats", json={"kind": "discover", "text": "candidates", "model": "grok-4.6",
-                                             "effort": "high", "context_window": 500000}).json()["id"]
+                                             "effort": "high", "context_window": 500000,
+                                             "lookback_days": 3}).json()["id"]
+        assert svc.snapshot(conv_id)["conv"]["lookback_days"] == 3
         asyncio.run(until(lambda: state_of(svc, conv_id) == "dormant"
                           and any(i.get("candidates") for i in svc.snapshot(conv_id)["items"])))
         [item] = [i for i in svc.snapshot(conv_id)["items"] if i.get("candidates")]

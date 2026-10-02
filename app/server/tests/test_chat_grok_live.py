@@ -22,7 +22,7 @@ import pytest
 from lynch_reader.catalog import REPO_ROOT
 from lynch_reader.chat.grok import GrokConfig, discover_prompt, grok_argv, grok_env, grok_models, new_session
 from lynch_reader.chat.items import message_items
-from lynch_reader.chat.kol import INVEST_ROOT, KolSources, kol_brief, kol_sources
+from lynch_reader.chat.kol import DEFAULT_LOOKBACK_DAYS, INVEST_ROOT, KolSources, kol_brief, kol_sources
 from tests.chat_helpers import conv
 
 pytestmark = pytest.mark.skipif(os.environ.get("LYNCH_LIVE_GROK") != "1", reason="real grok, opt-in")
@@ -41,7 +41,7 @@ def config(tmp_path: Path) -> GrokConfig:
 
 def prompt(kol: KolSources, text: str) -> str:
     """The message the server sends for `text` (service._start_grok_turn)."""
-    return discover_prompt(SKILL.read_text(encoding="utf-8"), kol_brief(kol, datetime.now(UTC)), text)
+    return discover_prompt(SKILL.read_text(encoding="utf-8"), kol_brief(kol, DEFAULT_LOOKBACK_DAYS, datetime.now(UTC)), text)
 
 
 async def run_turn(cfg: GrokConfig, message: str, window: int = 256000) -> tuple[str, list[dict]]:

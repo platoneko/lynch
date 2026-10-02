@@ -61,8 +61,12 @@ def test_discover_fields_default_and_are_type_checked(tmp_path):
         {**base, "id": "b", "kind": "discover", "grok_session": "s1", "cost_usd": 0.25},
         {**base, "id": "c", "cost_usd": "free"},
         {**base, "id": "d", "grok_session": 7},
+        {**base, "id": "e", "kind": "discover", "lookback_days": 3},
+        {**base, "id": "f", "lookback_days": "2"},
+        {**base, "id": "g", "lookback_days": True},
     ]), encoding="utf-8")
     index = ChatIndex(path)
-    assert [c.id for c in index.all()] == ["a", "b"]
+    assert [c.id for c in index.all()] == ["a", "b", "e"]
+    assert (index.get("a").lookback_days, index.get("e").lookback_days) == (None, 3)
     assert (index.get("a").grok_session, index.get("a").cost_usd) == (None, None)
     assert (index.get("b").grok_session, index.get("b").cost_usd) == ("s1", 0.25)

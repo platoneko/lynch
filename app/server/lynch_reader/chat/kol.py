@@ -1,8 +1,9 @@
-"""The KOL source invest tracks on X, read through invest's own loaders (spec §3c): its X List, whose members
-the user keeps on X, and how far back to look. invest's handle list is not used: discover searches the List only.
+"""The KOL source invest tracks on X, read through invest's own loader (spec §3c): its X List, whose members the
+user keeps on X. invest's handle list is not used: discover searches the List only. How far back to look is the
+user's choice per chat (LOOKBACK_DAYS), not invest's.
 
-invest decides which config wins (its gitignored override over the checked-in template) and how far back to
-look; calling its loaders keeps those rules in invest alone.
+invest decides which config wins (its gitignored override over the checked-in template); calling its loader keeps
+that rule in invest alone.
 """
 from __future__ import annotations
 
@@ -16,7 +17,8 @@ from pathlib import Path
 from lynch_reader.catalog import REPO_ROOT
 
 READ_TIMEOUT_S = 10.0
-DEFAULT_LOOKBACK_HOURS = 36  # invest's own fallback when [fetch.tweets] sets none (scripts/fetch-tweets.py)
+LOOKBACK_DAYS = (1, 2, 3, 7)  # what a discover chat may look back over, picked when it is created
+DEFAULT_LOOKBACK_DAYS = 2
 # invest is checked out next to the main lynch checkout. frameworks/ (a real dir there, a symlink in a worktree)
 # always lives in that checkout, so it finds the place from a worktree too.
 INVEST_ROOT = (REPO_ROOT / "frameworks").resolve().parent.parent / "invest"
@@ -25,9 +27,7 @@ _READ = """\
 import json, sys
 sys.path.insert(0, sys.argv[1])
 import load_kol_handles
-from load_policies import POLICIES
-tweets = (POLICIES.get("fetch") or {}).get("tweets") or {}
-print(json.dumps({"list_id": load_kol_handles.load_list_id(), "lookback_hours": tweets.get("lookback_hours")}))
+print(json.dumps({"list_id": load_kol_handles.load_list_id()}))
 """
 
 
@@ -38,7 +38,6 @@ class KolUnavailable(Exception):
 @dataclass(frozen=True)
 class KolSources:
     list_id: str  # an X List id
-    lookback_hours: int
 
 
 async def kol_sources(invest_root: Path, python: str = sys.executable) -> KolSources:
@@ -62,25 +61,22 @@ async def kol_sources(invest_root: Path, python: str = sys.executable) -> KolSou
     except ValueError as e:
         raise KolUnavailable("invest 的 KOL 名单加载脚本输出无法解析") from e
 
-    hours = data.get("lookback_hours")
-    if not isinstance(hours, int) or isinstance(hours, bool) or hours <= 0:
-        hours = DEFAULT_LOOKBACK_HOURS
     list_id = data.get("list_id")
     if not isinstance(list_id, str) or not list_id.strip():
         raise KolUnavailable("invest 的 KOL 配置里没有 X 列表（config/kol_handles.toml 的 list_id）")
-    return KolSources(list_id.strip(), hours)
+    return KolSources(list_id.strip())
 
 
-def kol_brief(kol: KolSources, now: datetime) -> str:
+def kol_brief(kol: KolSources, days: int, now: datetime) -> str:
     """The KOL source as the search rules expect it: which List, and the exact UTC moment the lookback starts.
 
     X's `since:` filters by date only, so the start moment is spelled out: posts before it do not count and paging
     stops there. The app sends this to Grok every turn and `just kol-sources` prints it, so both read the same words.
     """
-    start = now.astimezone(UTC) - timedelta(hours=kol.lookback_hours)
+    start = now.astimezone(UTC) - timedelta(days=days)
     moment, day = start.strftime("%Y-%m-%d %H:%M UTC"), start.date().isoformat()
     return "\n".join([
         f"- X 列表：{kol.list_id}（https://x.com/i/lists/{kol.list_id}，搜索写 list:{kol.list_id}）",
-        f"- 回看范围：最近 {kol.lookback_hours} 小时，即 {moment} 之后发的帖子；搜索写 since:{day}"
+        f"- 回看范围：最近 {days} 天，即 {moment} 之后发的帖子；搜索写 since:{day}"
         f"（since 只按日期过滤，早于 {moment} 的帖子不算，翻到这里就停）",
     ])

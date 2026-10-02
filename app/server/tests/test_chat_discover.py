@@ -32,6 +32,7 @@ def test_options_default_to_grok_45_with_500k(tmp_path):
     cache.write_text(json.dumps({"models": models}))
     d = svc.options()["discover"]
     assert (d["default_model"], d["default_window"], d["hint"]) == ("grok-4.5", 500000, None)
+    assert (d["lookback_days"], d["default_lookback_days"]) == ([1, 2, 3, 7], 2)
 
 
 def test_options_fall_back_to_the_first_model_and_its_first_window(tmp_path):
@@ -63,6 +64,7 @@ def test_create_makes_a_session_then_runs_a_turn(tmp_path):
     argv = turn["argv"]
     prompt = next(a.split("=", 1)[1] for a in argv if a.startswith("--single="))
     assert argv[argv.index("--resume") + 1] == conv.grok_session
+    assert "最近 2 天" in prompt and snap["conv"]["lookback_days"] == 2
     assert "SKILL-BODY" in prompt and "list:2051493926612484289" in prompt and prompt.endswith("## 用户这一轮说\n看看")
     assert turn["cwd"] == str(tmp_path / "grok-workdir")
     assert turn["grok_env"]["GROK_SANDBOX"] == "read-only"
@@ -259,6 +261,28 @@ def test_unknown_model_effort_or_window_is_invalid(tmp_path, model, effort, wind
     svc, _ = make_service(tmp_path)
     with pytest.raises(Invalid):
         asyncio.run(svc.create("discover", None, "x", model, effort, window))
+
+
+def test_the_chosen_lookback_goes_into_every_turn(tmp_path):
+    async def main():
+        svc, _ = make_service(tmp_path)
+        conv = await svc.create("discover", None, "one", "grok-4.6", "high", 256000, 7)
+        await settled(svc, conv.id)
+        await svc.send(conv.id, "two")
+        await settled(svc, conv.id)
+        await svc.shutdown()
+        return conv
+    conv = asyncio.run(main())
+    assert conv.lookback_days == 7
+    assert all("最近 7 天" in next(a for a in t["argv"] if a.startswith("--single=")) for t in turns(tmp_path))
+
+
+@pytest.mark.parametrize("days", [5, 0, "2", True, 2.0])
+def test_a_lookback_not_offered_is_invalid(tmp_path, days):
+    svc, _ = make_service(tmp_path)
+    with pytest.raises(Invalid):
+        asyncio.run(svc.create("discover", None, "x", "grok-4.6", "high", 256000, days))
+    assert grok_launches(tmp_path) == []
 
 
 def test_no_kol_list_means_no_session(tmp_path):

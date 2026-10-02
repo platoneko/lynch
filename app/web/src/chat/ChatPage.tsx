@@ -58,6 +58,7 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
   const [model, setModel] = useState('');
   const [effort, setEffort] = useState('');
   const [ctxWindow, setCtxWindow] = useState(0); // discover: the context window picked on the blank page
+  const [lookbackDays, setLookbackDays] = useState(0); // discover: how many days back, picked on the blank page
   // discover: tickers in the candidate list; null until loaded, so the cards' first ticks can skip them
   const [savedTickers, setSavedTickers] = useState<ReadonlySet<string> | null>(null);
   const [stream, setStream] = useState(0); // bumping it reopens the event stream (after an edit)
@@ -98,6 +99,7 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
     setModel(m.id);
     setEffort(m.default_effort);
     setCtxWindow(m.windows.includes(d.default_window) ? d.default_window : m.windows[0]);
+    setLookbackDays(d.default_lookback_days);
   }, [options, model, newDiscover]);
 
   useEffect(() => {
@@ -195,7 +197,7 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
         setCreating(body);
         const created = await createChat({
           kind: discover ? 'discover' : newTicker ? 'ticker' : 'research', ticker: discover ? null : newTicker,
-          text: body, model, effort, ...(discover ? { context_window: ctxWindow } : {}),
+          text: body, model, effort, ...(discover ? { context_window: ctxWindow, lookback_days: lookbackDays } : {}),
         });
         clearDraft(draftKey);
         onCreated(created.id, body);
@@ -399,6 +401,9 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
                 </select>
                 <select value={effort} onChange={(e) => setEffort(e.target.value)}>
                   {discoverModel.efforts.map((x) => <option key={x} value={x}>{x}</option>)}
+                </select>
+                <select value={lookbackDays} onChange={(e) => setLookbackDays(Number(e.target.value))}>
+                  {options.discover.lookback_days.map((d) => <option key={d} value={d}>最近 {d} 天</option>)}
                 </select>
               </div>
             )}

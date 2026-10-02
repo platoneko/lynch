@@ -51,6 +51,8 @@ describe('discover header', () => {
   it('shows model, window and effort, and the cost', () => {
     expect(discoverModelText({ model: 'grok-4.6', effort: 'high', context_window: 500000 })).toBe('grok-4.6-500k · high');
     expect(discoverModelText({ model: 'grok-4.6', effort: 'low', context_window: 256000 })).toBe('grok-4.6-256k · low');
+    expect(discoverModelText({ model: 'grok-4.5', effort: 'high', context_window: 500000, lookback_days: 3 }))
+      .toBe('grok-4.5-500k · high · 3天');
     expect(costText(0.123)).toBe('本对话 $0.12');
     expect(costText(null)).toBe('');
   });

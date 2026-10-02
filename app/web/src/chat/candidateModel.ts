@@ -42,9 +42,11 @@ export function candidateDraft(c: Candidate): string {
 }
 
 /** A Grok chat's model as picked: model, context window, effort (grok-4.6-500k · high). */
-export function discoverModelText(conv: Pick<ChatSummary, 'model' | 'effort' | 'context_window'>): string {
+export function discoverModelText(
+  conv: Pick<ChatSummary, 'model' | 'effort' | 'context_window' | 'lookback_days'>,
+): string {
   const window = conv.context_window ? `-${Math.round(conv.context_window / 1000)}k` : '';
-  return `${conv.model}${window} · ${conv.effort}`;
+  return `${conv.model}${window} · ${conv.effort}${conv.lookback_days ? ` · ${conv.lookback_days}天` : ''}`;
 }
 
 export function costText(usd: number | null | undefined): string {

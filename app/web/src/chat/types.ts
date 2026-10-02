@@ -14,6 +14,7 @@ export interface ChatSummary {
   updated_at: number;
   context_window: number | null;
   cost_usd?: number | null; // discover: what its turns have cost so far, in USD
+  lookback_days?: number | null; // discover: how many days back the KOL search looks, picked at creation
   archived: boolean;
   state: ChatState;
 }
@@ -114,6 +115,8 @@ export interface DiscoverOptions {
   models: DiscoverModel[];
   default_model: string | null;
   default_window: number;
+  lookback_days: number[]; // the lookback choices, in days
+  default_lookback_days: number;
   hint: string | null; // why the list is empty
 }
 

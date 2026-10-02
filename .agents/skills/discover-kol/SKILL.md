@@ -9,7 +9,7 @@ description: 发现新票——在 X 上看 invest KOL 列表最近提到哪些�
 
 ## 流程
 
-1. 在 lynch 根目录跑 `just kol-sources`，拿到 X 列表和回看范围（精确到起点时刻）。失败就停下，把报错原样告诉用户（列表 id 在 `../invest/config/kol_handles.toml` 的 `list_id`，成员由用户在 X 上维护；lynch 不改它们）。
+1. 问用户看最近几天（1、2、3 或 7 天，默认 2 天），在 lynch 根目录跑 `just kol-sources <天数>`，拿到 X 列表和回看范围（精确到起点时刻）。失败就停下，把报错原样告诉用户（列表 id 在 `../invest/config/kol_handles.toml` 的 `list_id`，成员由用户在 X 上维护；lynch 不改它们）。
 2. 读 `references/search.md`，按它搜索、整理，回答末尾附候选块。
 3. 问用户要把哪几只存进候选区。用户没有明确点名，不落盘。
 4. 把整段回答（含候选块）写到 `_local/tmp/discover-<YYYYMMDD-HHMM>.md`，然后跑：

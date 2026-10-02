@@ -30,10 +30,17 @@ def run(script: str, *args: str) -> subprocess.CompletedProcess:
 
 
 def test_kol_sources_prints_the_brief(tmp_path):
-    invest = write_invest(tmp_path / "invest", list_id="123", handles=("alice",), hours=48)
+    invest = write_invest(tmp_path / "invest", list_id="123", handles=("alice",))
     p = run("kol_sources.py", "--invest", str(invest))
     assert p.returncode == 0, p.stderr
-    assert "list:123" in p.stdout and "@alice" not in p.stdout and "最近 48 小时" in p.stdout
+    assert "list:123" in p.stdout and "@alice" not in p.stdout and "最近 2 天" in p.stdout
+    p = run("kol_sources.py", "--invest", str(invest), "--days", "7")
+    assert p.returncode == 0 and "最近 7 天" in p.stdout
+
+
+def test_kol_sources_refuses_a_range_not_offered(tmp_path):
+    p = run("kol_sources.py", "--invest", str(write_invest(tmp_path / "invest")), "--days", "5")
+    assert p.returncode == 2 and "invalid choice" in p.stderr
 
 
 def test_kol_sources_fails_on_an_empty_list(tmp_path):

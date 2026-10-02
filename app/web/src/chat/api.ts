@@ -14,6 +14,7 @@ export async function fetchChatOptions(): Promise<ChatOptions> {
 
 export async function createChat(body: {
   kind: ChatKind; ticker: string | null; text: string; model: string; effort: string; context_window?: number;
+  lookback_days?: number;
 }): Promise<{ id: string }> {
   return (await post('/api/chats', body)).json();
 }

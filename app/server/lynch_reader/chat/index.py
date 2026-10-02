@@ -30,6 +30,7 @@ class Conversation:
     archived: bool = False
     grok_session: str | None = None  # discover: grok's own session id (made over ACP, chat/grok.py)
     cost_usd: float | None = None  # discover: what its turns have cost, from each `result`
+    lookback_days: int | None = None  # discover: how many days back the KOL search looks, picked at creation
 
 
 def make_title(text: str) -> str:
@@ -55,7 +56,8 @@ def _parse_row(row: object) -> Conversation | None:
                    and (c.context_window is None or number(c.context_window))
                    and isinstance(c.archived, bool)
                    and (c.grok_session is None or isinstance(c.grok_session, str))
-                   and (c.cost_usd is None or number(c.cost_usd)))
+                   and (c.cost_usd is None or number(c.cost_usd))
+                   and (c.lookback_days is None or type(c.lookback_days) is int))
     return c if well_formed else None
 
 

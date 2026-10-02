@@ -25,7 +25,8 @@ from lynch_reader.chat.grok_log import GrokLog
 from lynch_reader.chat.index import ChatIndex, Conversation, make_title
 from lynch_reader.chat.items import (compact_item, context_tokens, framework_ticker, message_items, notice_item,
                                      retry_text)
-from lynch_reader.chat.kol import KolSources, KolUnavailable, kol_brief, kol_sources
+from lynch_reader.chat.kol import (DEFAULT_LOOKBACK_DAYS, LOOKBACK_DAYS, KolSources, KolUnavailable, kol_brief,
+                                   kol_sources)
 from lynch_reader.chat.process import ChatProcess
 
 log = logging.getLogger(__name__)
@@ -116,6 +117,7 @@ class ChatService:
         discover = {"models": [m.public() for m in models], "default_model": default.id if default else None,
                     "default_window": (DEFAULT_WINDOW if default is None or DEFAULT_WINDOW in default.windows
                                        else default.windows[0]),
+                    "lookback_days": list(LOOKBACK_DAYS), "default_lookback_days": DEFAULT_LOOKBACK_DAYS,
                     "hint": None if models else "在终端运行 grok models 刷新 Grok 模型清单"}
         return {"models": [{"id": m, "label": label} for m, label in CHAT_MODELS], "efforts": list(CHAT_EFFORTS),
                 "default_model": DEFAULT_MODEL, "default_effort": DEFAULT_EFFORT, "discover": discover}
@@ -151,7 +153,7 @@ class ChatService:
     # ---- commands
 
     async def create(self, kind: str, ticker: str | None, text: str, model: str, effort: str,
-                     context_window: object = None) -> Conversation:
+                     context_window: object = None, lookback_days: object = None) -> Conversation:
         # The values come from a JSON body; a list or dict would break the membership tests below.
         if not all(isinstance(v, str) for v in (kind, text, model, effort)) or not isinstance(ticker, str | None):
             raise Invalid("fields must be strings")
@@ -159,7 +161,7 @@ class ChatService:
             raise Invalid(f"unknown kind {kind!r}")
         if not text.strip():
             raise Invalid("empty message")
-        conv = (await self._new_discover(text, model, effort, context_window) if kind == "discover"
+        conv = (await self._new_discover(text, model, effort, context_window, lookback_days) if kind == "discover"
                 else self._new_claude(kind, ticker, text, model, effort))
         self._index.put(conv)
         # Visible in the list before its transcript exists. Claude titles a chat after its first reply; grok cannot.
@@ -182,7 +184,7 @@ class ChatService:
                             title=make_title(text), model=model, effort=effort, created_at=now, updated_at=now,
                             context_window=window)
 
-    async def _new_discover(self, text: str, model: str, effort: str, window: object) -> Conversation:
+    async def _new_discover(self, text: str, model: str, effort: str, window: object, days: object) -> Conversation:
         grok = self._require_grok()
         chosen = next((m for m in grok_models(grok.home) if m.id == model), None)
         if chosen is None:
@@ -192,6 +194,9 @@ class ChatService:
         # From JSON: 256000.0 equals 256000 and True equals 1, but neither is a window grok takes.
         if type(window) is not int or window not in chosen.windows:
             raise Invalid(f"unknown context window {window!r}")
+        days = DEFAULT_LOOKBACK_DAYS if days is None else days
+        if type(days) is not int or days not in LOOKBACK_DAYS:
+            raise Invalid(f"unknown lookback {days!r}")
         self._discover_skill()  # no session for a chat that could not run
         await self._kol_sources()  # likewise
         try:
@@ -201,7 +206,7 @@ class ChatService:
         now = self._wall()
         return Conversation(id=str(uuid.uuid4()), kind="discover", ticker=None, title=make_title(text), model=model,
                             effort=effort, created_at=now, updated_at=now, context_window=window,
-                            grok_session=session)
+                            grok_session=session, lookback_days=days)
 
     async def send(self, conv_id: str, text: str) -> None:
         conv = self._conv(conv_id)
@@ -397,7 +402,8 @@ class ChatService:
         grok = self._require_grok()
         skill = self._discover_skill()  # both read every turn: an edit applies at once
         kol = await self._kol_sources()
-        prompt = discover_prompt(skill, kol_brief(kol, datetime.fromtimestamp(self._wall(), UTC)), text)
+        days = conv.lookback_days or DEFAULT_LOOKBACK_DAYS  # chats made before the choice existed
+        prompt = discover_prompt(skill, kol_brief(kol, days, datetime.fromtimestamp(self._wall(), UTC)), text)
         await self._make_room()
         try:
             prepare_workdir(grok.workdir)
