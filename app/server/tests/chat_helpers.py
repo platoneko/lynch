@@ -71,3 +71,16 @@ def write_invest(root: Path, list_id: str | None = "2051493926612484289", handle
     body = "raise RuntimeError('bad policies.toml')\n" if broken else f"POLICIES = {policies!r}\n"
     (scripts / "load_policies.py").write_text(body, encoding="utf-8")
     return root
+
+
+def write_models_cache(home: Path) -> None:
+    """A ~/.grok/models_cache.json shaped like grok 1.0.46's: one usable model, one hidden, one without X search."""
+    def model(mid: str, **info) -> dict:
+        return {"info": {"id": mid, "name": mid.replace("grok-", "Grok "), "hidden": False,
+                         "supports_backend_search": True, "context_window": 256000,
+                         "context_windows": [256000, 500000], "reasoning_effort": "high",
+                         "reasoning_efforts": [{"id": e} for e in ("high", "medium", "low")], **info}}
+    models = {"grok-4.6": model("grok-4.6"), "grok-secret": model("grok-secret", hidden=True),
+              "grok-plain": model("grok-plain", supports_backend_search=False)}
+    (home / ".grok").mkdir(parents=True, exist_ok=True)
+    (home / ".grok" / "models_cache.json").write_text(json.dumps({"models": models}), encoding="utf-8")

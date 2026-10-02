@@ -50,3 +50,19 @@ def test_make_title_collapses_whitespace_and_truncates():
     assert make_title("  研究一下\n宁德时代  ") == "研究一下 宁德时代"
     title = make_title("x" * 100)
     assert len(title) == TITLE_MAX and title.endswith("…")
+
+
+def test_discover_fields_default_and_are_type_checked(tmp_path):
+    path = tmp_path / "index.json"
+    base = {"id": "a", "kind": "research", "ticker": None, "title": "t", "model": "m", "effort": "e",
+            "created_at": 1.0, "updated_at": 1.0}
+    path.write_text(json.dumps([
+        base,
+        {**base, "id": "b", "kind": "discover", "grok_session": "s1", "cost_usd": 0.25},
+        {**base, "id": "c", "cost_usd": "free"},
+        {**base, "id": "d", "grok_session": 7},
+    ]), encoding="utf-8")
+    index = ChatIndex(path)
+    assert [c.id for c in index.all()] == ["a", "b"]
+    assert (index.get("a").grok_session, index.get("a").cost_usd) == (None, None)
+    assert (index.get("b").grok_session, index.get("b").cost_usd) == ("s1", 0.25)

@@ -18,8 +18,8 @@ TITLE_MAX = 40
 
 @dataclass(frozen=True)
 class Conversation:
-    id: str  # also the Claude Code session id
-    kind: str  # "research" (new ticker, no framework yet) | "ticker"
+    id: str  # also the Claude Code session id (Claude kinds)
+    kind: str  # "research" (new ticker, no framework yet) | "ticker" | "discover" (Grok on X)
     ticker: str | None  # research: None until the agent writes frameworks/<TICKER>.md
     title: str
     model: str
@@ -28,6 +28,8 @@ class Conversation:
     updated_at: float
     context_window: int | None = None  # from the latest `result` event
     archived: bool = False
+    grok_session: str | None = None  # discover: grok's own session id (made over ACP, chat/grok.py)
+    cost_usd: float | None = None  # discover: what its turns have cost, from each `result`
 
 
 def make_title(text: str) -> str:
@@ -51,7 +53,9 @@ def _parse_row(row: object) -> Conversation | None:
                    and (c.ticker is None or isinstance(c.ticker, str))
                    and number(c.created_at) and number(c.updated_at)
                    and (c.context_window is None or number(c.context_window))
-                   and isinstance(c.archived, bool))
+                   and isinstance(c.archived, bool)
+                   and (c.grok_session is None or isinstance(c.grok_session, str))
+                   and (c.cost_usd is None or number(c.cost_usd)))
     return c if well_formed else None
 
 
