@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { SourceList } from './CandidateCards';
-import { archiveDaysLeft, candidateDraft, candidateLabel, groupCandidates, shownSources, STANCE_LABEL } from './candidateModel';
+import { archiveDaysLeft, candidateDraft, candidateLabel, groupCandidates } from './candidateModel';
 import { ConfirmSheet, type Confirm } from './ConfirmSheet';
 import { loadDraft, saveDraft } from './drafts';
 import { relativeTime } from './listModel';
@@ -43,9 +43,8 @@ export function CandidatesPage({ list, error, hasFramework, onBack, onResearch, 
   const row = (c: SavedCandidate, actions: 'todo' | 'landed' | 'archived') => (
     <div key={c.ticker} className="cand-row">
       <button className="chat-row-main" onClick={() => toggle(c.ticker)}>
-        <span className="chat-row-title">
-          {candidateLabel(c)} · {shownSources(c.sources).map((s) => `@${s.handle} ${STANCE_LABEL[s.stance]}`).join('、')}
-        </span>
+        {/* KOL sources do not fit one phone-width line: they show only when the row expands */}
+        <span className="chat-row-title">{candidateLabel(c)}</span>
         <span className="chat-row-time">
           {c.archived_at !== null
             ? `${hasFramework(c.ticker) ? '已入库 · ' : ''}还剩 ${archiveDaysLeft(c.archived_at, now)} 天`
