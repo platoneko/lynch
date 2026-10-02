@@ -1,15 +1,19 @@
 """KOL candidates: the block Grok ends a discover reply with (spec §3e) and the app's candidate list (§3f)."""
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
 import os
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+
+from lynch_reader.catalog import REPO_ROOT
 
 log = logging.getLogger(__name__)
 
@@ -20,6 +24,7 @@ NAME_REQUIRED = ("HK", "SH", "SZ")
 STANCES = ("bullish", "bearish", "neutral")
 POST_URL = re.compile(r"^https://(?:x|twitter)\.com/[^/\s]+/status/\d+")
 SOURCE_FIELDS = ("handle", "stance", "reason", "quote", "url", "posted_at")
+CANDIDATES_FILE = REPO_ROOT / "output" / "candidates" / "candidates.json"
 
 
 @dataclass(frozen=True)
@@ -99,47 +104,63 @@ def _is_iso_time(s: str) -> bool:
 class CandidateStore:
     """output/candidates/candidates.json, one row per ticker.
 
-    Single writer: only the server's event loop touches it, so no lock. Written only when the user taps
-    存入候选区 (spec §3f). Whether a ticker has landed is not stored: its framework file says so.
+    Two writers share it: the server (存入候选区, 划掉) and `just candidates-save` from a terminal session. So
+    every call reads the file, and each change is a read-modify-write under an exclusive flock on
+    candidates.lock. Reads take no lock: the file is only ever replaced whole. Whether a ticker has landed is not
+    stored: its framework file says so.
     """
 
     def __init__(self, path: Path, wall: Callable[[], float] = time.time) -> None:
         self._path, self._wall = path, wall
-        self._rows: dict[str, dict] = {}
-        if path.exists():
-            for row in json.loads(path.read_text(encoding="utf-8")):
-                if isinstance(row, dict) and isinstance(row.get("ticker"), str) and isinstance(row.get("sources"), list):
-                    self._rows[row["ticker"]] = row
-                else:  # one bad row must not take the whole list down
-                    log.warning("skipping malformed candidate row: %r", row)
 
     def all(self) -> list[dict]:
-        return sorted(self._rows.values(), key=lambda r: r["updated_at"], reverse=True)
+        return sorted(self._read().values(), key=lambda r: r["updated_at"], reverse=True)
 
     def save(self, conv_id: str, picked: list[dict]) -> list[str]:
         """Adds checked candidates (parse_candidates' shape). A ticker saved again gains its new sources and
         leaves the dismissed group: the user picked it again."""
-        now = self._wall()
-        for c in picked:
-            row = self._rows.setdefault(c["ticker"], {"ticker": c["ticker"], "name": "", "sources": [],
-                                                      "first_saved_at": now, "updated_at": now, "dismissed": False})
-            row["name"] = c["name"] or row["name"]
-            urls = {s["url"] for s in row["sources"]}
-            row["sources"] += [{**s, "saved_at": now, "conv_id": conv_id} for s in c["sources"] if s["url"] not in urls]
-            row.update(updated_at=now, dismissed=False)
-        self._save()
+        with self._locked():
+            rows = self._read()
+            now = self._wall()
+            for c in picked:
+                row = rows.setdefault(c["ticker"], {"ticker": c["ticker"], "name": "", "sources": [],
+                                                    "first_saved_at": now, "updated_at": now, "dismissed": False})
+                row["name"] = c["name"] or row["name"]
+                urls = {s["url"] for s in row["sources"]}
+                row["sources"] += [{**s, "saved_at": now, "conv_id": conv_id}
+                                   for s in c["sources"] if s["url"] not in urls]
+                row.update(updated_at=now, dismissed=False)
+            self._write(rows)
         return [c["ticker"] for c in picked]
 
     def dismiss(self, ticker: str) -> bool:
-        row = self._rows.get(ticker)
-        if row is None:
-            return False
-        row["dismissed"] = True
-        self._save()
+        with self._locked():
+            rows = self._read()
+            if ticker not in rows:
+                return False
+            rows[ticker]["dismissed"] = True
+            self._write(rows)
         return True
 
-    def _save(self) -> None:
+    def _read(self) -> dict[str, dict]:
+        if not self._path.exists():
+            return {}
+        rows = {}
+        for row in json.loads(self._path.read_text(encoding="utf-8")):
+            if isinstance(row, dict) and isinstance(row.get("ticker"), str) and isinstance(row.get("sources"), list):
+                rows[row["ticker"]] = row
+            else:  # one bad row must not take the whole list down
+                log.warning("skipping malformed candidate row: %r", row)
+        return rows
+
+    @contextmanager
+    def _locked(self) -> Iterator[None]:
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self._path.with_suffix(".lock"), "a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)  # released when the file closes
+            yield
+
+    def _write(self, rows: dict[str, dict]) -> None:
         tmp = self._path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(list(self._rows.values()), ensure_ascii=False, indent=1), encoding="utf-8")
+        tmp.write_text(json.dumps(list(rows.values()), ensure_ascii=False, indent=1), encoding="utf-8")
         os.replace(tmp, self._path)  # a crash mid-write must not leave a torn list

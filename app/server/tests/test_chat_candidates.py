@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import fcntl
 import json
+import threading
 
 from lynch_reader.catalog import REPO_ROOT
 from lynch_reader.chat.candidates import CandidateStore, parse_candidates
@@ -126,3 +128,31 @@ def test_newest_first_and_malformed_rows_skipped(tmp_path):
     store = CandidateStore(path, clock)
     store.save("c", [cand("NEW.US", "")])
     assert [r["ticker"] for r in store.all()] == ["NEW.US", "OLD.US"]
+
+
+def test_two_stores_on_one_file_keep_each_others_rows(tmp_path):
+    path = tmp_path / "candidates.json"
+    server, script = CandidateStore(path, Clock()), CandidateStore(path, Clock())
+    server.save("conv1", [cand("AAPL.US", "Apple")])
+    script.save("terminal", [cand("MSFT.US", "Microsoft")])
+    server.save("conv1", [cand("AXTI.US")])  # the server's next save must not drop the script's row
+    assert sorted(r["ticker"] for r in server.all()) == ["AAPL.US", "AXTI.US", "MSFT.US"]
+    assert script.dismiss("AAPL.US") is True
+    assert {r["ticker"]: r["dismissed"] for r in server.all()}["AAPL.US"] is True
+
+
+def test_save_waits_for_another_writers_lock(tmp_path):
+    path = tmp_path / "candidates.json"
+    store = CandidateStore(path, Clock())
+    with open(tmp_path / "candidates.lock", "a") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        t = threading.Thread(target=store.save, args=("conv1", [cand()]))
+        t.start()
+        t.join(0.3)
+        assert t.is_alive() and not path.exists()  # blocked behind the other writer
+    t.join(5)
+    assert not t.is_alive() and [r["ticker"] for r in store.all()] == ["AXTI.US"]
+
+
+def test_a_missing_file_is_an_empty_list(tmp_path):
+    assert CandidateStore(tmp_path / "nope" / "candidates.json").all() == []

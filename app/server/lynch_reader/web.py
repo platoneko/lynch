@@ -24,7 +24,7 @@ from starlette.staticfiles import StaticFiles
 from lynch_reader.auth.gate import DeviceAuth, pair_routes
 from lynch_reader.auth.store import DEVICES_FILE, DeviceStore
 from lynch_reader.catalog import FRAMEWORKS_DIR, REPO_ROOT, QuoteCache, axis_path_in, catalog, framework_path
-from lynch_reader.chat.candidates import CandidateStore
+from lynch_reader.chat.candidates import CANDIDATES_FILE, CandidateStore
 from lynch_reader.chat.config import LaunchConfig
 from lynch_reader.chat.grok import GrokConfig
 from lynch_reader.chat.index import ChatIndex
@@ -100,7 +100,7 @@ def main(argv: list[str] | None = None) -> None:
         dict(os.environ),
         grok=GrokConfig((shutil.which("grok") or "grok",), workdir=output / "chat" / "grok-workdir",
                         home=Path.home(), logs=output / "chat" / "grok", invest_root=INVEST_ROOT),
-        candidates=CandidateStore(output / "candidates" / "candidates.json"),
+        candidates=CandidateStore(CANDIDATES_FILE),
     )
     # An open chat stream never ends by itself: without a graceful-shutdown timeout, SIGTERM waits on it
     # forever and the lifespan shutdown that stops the claude processes never runs.
