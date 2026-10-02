@@ -124,6 +124,29 @@ def test_an_exit_without_a_result_is_reported(tmp_path, text):
     assert notice["text"].startswith("Grok 进程意外退出") and state == "dormant"
 
 
+def test_a_turn_ends_when_grok_exits_not_at_its_result(tmp_path):
+    # A second `--resume` of the same session, or a SIGTERM, while grok is still finishing could lose the turn.
+    async def main():
+        svc, _ = make_service(tmp_path, idle_timeout_s=0)
+        conv = await svc.create("discover", None, "linger", "grok-4.6", "high", 256000)
+        await until(lambda: svc.snapshot(conv.id)["conv"]["cost_usd"] is not None)  # its result arrived
+        await svc.reap_idle()
+        await svc.interrupt(conv.id)
+        during = state_of(svc, conv.id)
+        with pytest.raises(Conflict):
+            await svc.send(conv.id, "more")
+        await settled(svc, conv.id)
+        await svc.send(conv.id, "again")
+        await settled(svc, conv.id)
+        snap = svc.snapshot(conv.id)
+        await svc.shutdown()
+        return during, snap
+    during, snap = asyncio.run(main())
+    assert during == "running"
+    assert texts(snap) == [("user", "linger"), ("text", "echo: linger"), ("user", "again"), ("text", "echo: again")]
+    assert len(turns(tmp_path)) == 2
+
+
 def test_x_search_shows_as_a_finished_tool(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)

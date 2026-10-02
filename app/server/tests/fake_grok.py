@@ -12,6 +12,7 @@
         noresult    a reply but no result line, exit 0
         candidates  a reply ending in a lynch-candidates block
         search      an X search call and its result (is_error the string "False", as grok prints it), a reply
+        linger      a reply and its result, then 1 s before exiting 0
         anything else  "echo: <text>"
 
 Sessions live in $FAKE_GROK_SESSIONS/<id>.json ({model, window}); a turn on an unknown id fails as grok does.
@@ -137,6 +138,11 @@ def turn():
         return
     if text == "noresult":
         reply("half")
+        return
+    if text == "linger":  # grok finishing up after its result, before it exits
+        reply("echo: linger")
+        result()
+        time.sleep(1)
         return
     reply(CANDIDATES if text == "candidates" else f"echo: {text}")
     result()

@@ -396,8 +396,8 @@ class ChatService:
     async def _stop_grok_turn(self, conv_id: str, live: Live) -> None:
         """grok has no interrupt message: the turn's process is ended, and the log marks the stop."""
         async with live.lock:
-            if live.state not in BUSY:
-                return  # the turn ended while we waited for the lock
+            if live.state not in BUSY or live.result_seen:
+                return  # the turn ended while we waited for the lock, or grok has answered and is finishing
             await self._stop(conv_id)
             self._broadcast_entry(conv_id, self._grok_log(conv_id).interrupted())
 
@@ -523,7 +523,10 @@ class ChatService:
         live.partial = ""
         live.last_used = self._now()
         self._clear_approvals(conv_id, live)  # an interrupted turn whose cancel never arrived
-        self._set_state(conv_id, "idle")
+        # A discover turn ends when grok exits (`_on_exit`): until then it still writes its session, so a
+        # second resume, an eviction or a reap must not start.
+        if conv.kind != "discover":
+            self._set_state(conv_id, "idle")
         self._broadcast(conv_id, "context", self._context(conv_id))
         if "cost_usd" in changes:
             self._broadcast(conv_id, "conv", self._summary(conv))
