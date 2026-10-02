@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { CandidateSourceView } from './CandidateCards';
+import { SourceList } from './CandidateCards';
 import { archiveDaysLeft, candidateDraft, candidateLabel, groupCandidates, shownSources, STANCE_LABEL } from './candidateModel';
 import { ConfirmSheet, type Confirm } from './ConfirmSheet';
 import { loadDraft, saveDraft } from './drafts';
@@ -57,7 +57,7 @@ export function CandidatesPage({ list, error, hasFramework, onBack, onResearch, 
       {actions !== 'archived' && <button className="text-btn" onClick={() => onArchive(c.ticker)}>归档</button>}
       {actions === 'archived' && <button className="text-btn" onClick={() => onRestore(c.ticker)}>恢复</button>}
       {open.has(c.ticker) && (
-        <div className="cand-detail">{shownSources(c.sources).map((s) => <CandidateSourceView key={s.url} source={s} />)}</div>
+        <div className="cand-detail"><SourceList sources={c.sources} /></div>
       )}
     </div>
   );

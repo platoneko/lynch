@@ -148,16 +148,33 @@ def test_an_archived_ticker_is_gone_after_30_days(tmp_path):
     assert "AXTI.US" not in path.read_text(encoding="utf-8")
 
 
-def test_saving_again_drops_that_tickers_sources_older_than_30_days(tmp_path):
+def post(handle, day):
+    return src(handle=handle, url=f"https://x.com/{handle}/status/{day}", posted_at=f"2026-10-{day:02d}T08:00:00Z")
+
+
+def test_saving_again_drops_old_sources_except_the_five_kols_shown(tmp_path):
     clock = Clock()
     store = CandidateStore(tmp_path / "candidates.json", clock)
-    store.save("conv1", [cand(), cand("MSFT.US", "Microsoft")])
+    seven = [post("alice", 1), post("alice", 2), post("bob", 3), post("carol", 4), post("dave", 5), post("erin", 6),
+             post("frank", 7)]
+    store.save("conv1", [cand("AXTI.US", "AXT Inc", *seven), cand("MSFT.US", "Microsoft", post("alice", 1))])
     clock.t += 31 * DAY
-    assert [len(r["sources"]) for r in store.all()] == [1, 1]  # lazy: nothing goes until that ticker is saved again
-    store.save("conv2", [cand("AXTI.US", "", src(handle="bob", url="https://x.com/bob/status/2"))])
+    assert len({r["ticker"]: r for r in store.all()}["AXTI.US"]["sources"]) == 7  # lazy: nothing goes before a save
+    store.save("conv2", [cand("AXTI.US", "", post("gina", 8))])
     rows = {r["ticker"]: r for r in store.all()}
-    assert [s["handle"] for s in rows["AXTI.US"]["sources"]] == ["bob"]
+    # Shown: the latest post of the 5 newest KOLs (gina, frank, erin, dave, carol), kept however old. The rest were
+    # saved over 30 days ago: alice's two posts and bob's go.
+    assert sorted(s["handle"] for s in rows["AXTI.US"]["sources"]) == ["carol", "dave", "erin", "frank", "gina"]
     assert [s["handle"] for s in rows["MSFT.US"]["sources"]] == ["alice"]  # not saved again: untouched
+
+
+def test_sources_within_30_days_all_stay(tmp_path):
+    clock = Clock()
+    store = CandidateStore(tmp_path / "candidates.json", clock)
+    store.save("conv1", [cand("AXTI.US", "AXT Inc", post("alice", 1), post("alice", 2))])
+    clock.t += 29 * DAY
+    store.save("conv2", [cand("AXTI.US", "", post("bob", 3))])
+    assert len(store.all()[0]["sources"]) == 3
 
 
 def test_a_row_dismissed_before_archiving_existed_reads_as_archived(tmp_path):

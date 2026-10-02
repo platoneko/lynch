@@ -37,17 +37,22 @@ export function archiveDaysLeft(archivedAt: number, now: number): number {
   return Math.max(0, Math.ceil(ARCHIVE_DAYS - (now - archivedAt) / 86400));
 }
 
-const SHOWN_KOLS = 5;
+const SHOWN_KOLS = 5; // server candidates.py SHOWN_KOLS: these sources are never recycled
+const postTime = (s: CandidateSource) => Date.parse(s.posted_at) || 0;
 
-/** The sources a card shows: each KOL's latest post, newest first, at most SHOWN_KOLS KOLs. All stay stored. */
+/** The sources a card shows: each KOL's latest post, newest first, at most SHOWN_KOLS KOLs. */
 export function shownSources<S extends CandidateSource>(sources: S[]): S[] {
-  const time = (s: S) => Date.parse(s.posted_at) || 0;
   const latest = new Map<string, S>();
   for (const s of sources) {
     const known = latest.get(s.handle);
-    if (!known || time(s) > time(known)) latest.set(s.handle, s);
+    if (!known || postTime(s) > postTime(known)) latest.set(s.handle, s);
   }
-  return [...latest.values()].sort((a, b) => time(b) - time(a)).slice(0, SHOWN_KOLS);
+  return [...latest.values()].sort((a, b) => postTime(b) - postTime(a)).slice(0, SHOWN_KOLS);
+}
+
+/** Every stored source, newest first: the card's expanded view. */
+export function sourceTimeline<S extends CandidateSource>(sources: S[]): S[] {
+  return [...sources].sort((a, b) => postTime(b) - postTime(a));
 }
 
 const BJT_OFFSET_MS = 8 * 3600_000; // every time the user reads is Beijing time

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { saveCandidates } from './api';
-import { bjtTime, candidateLabel, defaultPicked, shownSources, STANCE_LABEL } from './candidateModel';
+import { bjtTime, candidateLabel, defaultPicked, shownSources, sourceTimeline, STANCE_LABEL } from './candidateModel';
 import type { Candidate, CandidateSource } from './types';
 
 /** The candidates one Grok reply ends with. Ticking and tapping 存入候选区 is the user's consent to save them. */
@@ -50,7 +50,7 @@ export function CandidateCards({ convId, itemKey, candidates, dropped, hasFramew
               {hasFramework(c.ticker) && <span className="cand-badge">已有框架</span>}
               {saved.has(c.ticker) && <span className="cand-badge">已在候选区</span>}
             </div>
-            {shownSources(c.sources).map((s) => <CandidateSourceView key={s.url} source={s} />)}
+            <SourceList sources={c.sources} />
           </div>
         </div>
       ))}
@@ -60,6 +60,22 @@ export function CandidateCards({ convId, itemKey, candidates, dropped, hasFramew
         存入候选区（{picked.size}）
       </button>
     </div>
+  );
+}
+
+/** A candidate's sources: the shown ones, and every stored one on request, newest first. */
+export function SourceList({ sources }: { sources: CandidateSource[] }) {
+  const [all, setAll] = useState(false);
+  const shown = shownSources(sources);
+  return (
+    <>
+      {(all ? sourceTimeline(sources) : shown).map((s) => <CandidateSourceView key={s.url} source={s} />)}
+      {sources.length > shown.length && (
+        <button className="text-btn" onClick={() => setAll((a) => !a)}>
+          {all ? '收起' : `查看全部 ${sources.length} 条来源`}
+        </button>
+      )}
+    </>
   );
 }
 

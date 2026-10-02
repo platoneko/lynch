@@ -26,7 +26,8 @@ WORTH_RESEARCH = ("bullish", "neutral")  # a bearish view is not worth a researc
 POST_URL = re.compile(r"^https://(?:x|twitter)\.com/[^/\s]+/status/(\d+)")
 SOURCE_FIELDS = ("handle", "stance", "reason", "quote", "url", "posted_at")
 CANDIDATES_FILE = REPO_ROOT / "output" / "candidates" / "candidates.json"
-RETENTION_S = 30 * 86400  # how long an archived ticker, and a source not saved again, is kept
+RETENTION_S = 30 * 86400  # how long an archived ticker, and a source not among the shown ones, is kept
+SHOWN_KOLS = 5  # a candidate shows each KOL's latest post, for this many KOLs; the web's shownSources matches it
 
 
 @dataclass(frozen=True)
@@ -98,6 +99,15 @@ def _source(s: object) -> dict | None:
     return out
 
 
+def shown_sources(sources: list[dict]) -> list[dict]:
+    """Each KOL's latest post, newest first, for at most SHOWN_KOLS KOLs: what a card shows, and never recycled."""
+    latest: dict[str, dict] = {}
+    for s in sources:
+        if s["handle"] not in latest or s["posted_at"] > latest[s["handle"]]["posted_at"]:
+            latest[s["handle"]] = s
+    return sorted(latest.values(), key=lambda s: s["posted_at"], reverse=True)[:SHOWN_KOLS]
+
+
 def post_id(url: str) -> str:
     """The X post a link points at: one post may come as x.com or twitter.com, with or without a query."""
     m = POST_URL.match(url)
@@ -121,7 +131,8 @@ class CandidateStore:
     stored: its framework file says so.
 
     Retention is lazy. A ticker archived for RETENTION_S is hidden at once and leaves the file with the next write.
-    A ticker's sources older than RETENTION_S go only when that ticker is saved again.
+    A ticker's sources saved over RETENTION_S ago go only when that ticker is saved again, and never the shown ones
+    (shown_sources).
     """
 
     def __init__(self, path: Path, wall: Callable[[], float] = time.time) -> None:
@@ -131,8 +142,8 @@ class CandidateStore:
         return sorted(self._live(self._wall()).values(), key=lambda r: r["updated_at"], reverse=True)
 
     def save(self, conv_id: str, picked: list[dict]) -> list[str]:
-        """Adds checked candidates (parse_candidates' shape). A ticker saved again drops its sources saved more than
-        RETENTION_S ago, gains the new ones, and leaves the archive: the user picked it again."""
+        """Adds checked candidates (parse_candidates' shape). A ticker saved again gains the new sources, drops those
+        saved more than RETENTION_S ago that it no longer shows, and leaves the archive: the user picked it again."""
         with self._locked():
             now = self._wall()
             rows = self._live(now)
@@ -140,10 +151,12 @@ class CandidateStore:
                 row = rows.setdefault(c["ticker"], {"ticker": c["ticker"], "name": "", "sources": [],
                                                     "first_saved_at": now, "updated_at": now, "archived_at": None})
                 row["name"] = c["name"] or row["name"]
-                row["sources"] = [s for s in row["sources"] if now - s.get("saved_at", now) < RETENTION_S]
                 seen = {post_id(s["url"]) for s in row["sources"]}
                 row["sources"] += [{**s, "saved_at": now, "conv_id": conv_id}
                                    for s in c["sources"] if post_id(s["url"]) not in seen]
+                shown = {post_id(s["url"]) for s in shown_sources(row["sources"])}
+                row["sources"] = [s for s in row["sources"]
+                                  if post_id(s["url"]) in shown or now - s.get("saved_at", now) < RETENTION_S]
                 row.update(updated_at=now, archived_at=None)
             self._write(rows)
         return [c["ticker"] for c in picked]
