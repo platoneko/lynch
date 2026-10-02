@@ -89,11 +89,13 @@ def chat_routes(service: ChatService, frameworks_dir: Path) -> list[Route]:
 
     async def create(request: Request) -> Response:
         body = await _body(request)
-        ticker = body.get("ticker")
-        if body.get("kind") == "ticker" and framework_path(str(ticker or ""), frameworks_dir) is None:
+        kind, ticker = body.get("kind"), body.get("ticker")
+        if kind == "ticker" and framework_path(str(ticker or ""), frameworks_dir) is None:
             raise Invalid("unknown ticker")
-        conv = await service.create(body.get("kind"), ticker, str(body.get("text", "")),
-                                    body.get("model") or DEFAULT_MODEL, body.get("effort") or DEFAULT_EFFORT)
+        # A Claude chat may leave model and effort to the defaults; a Grok chat names model, effort and window.
+        model, effort = (None, None) if kind == "discover" else (DEFAULT_MODEL, DEFAULT_EFFORT)
+        conv = await service.create(kind, ticker, str(body.get("text", "")), body.get("model") or model,
+                                    body.get("effort") or effort, body.get("context_window"))
         return JSONResponse({"id": conv.id})
 
     async def archive_ticker(request: Request) -> Response:
@@ -135,7 +137,20 @@ def chat_routes(service: ChatService, frameworks_dir: Path) -> list[Route]:
         await service.answer_approval(request.path_params["id"], request.path_params["request_id"], allow)
         return Response(status_code=204)
 
-    return [
+    async def save_candidates(request: Request) -> Response:
+        body = await _body(request)
+        saved = service.save_candidates(request.path_params["id"], body.get("key"), body.get("tickers"))
+        return JSONResponse({"saved": saved})
+
+    async def list_candidates(request: Request) -> Response:
+        return JSONResponse({"candidates": service.candidates.all()})
+
+    async def dismiss_candidate(request: Request) -> Response:
+        if not service.candidates.dismiss(request.path_params["ticker"]):
+            raise Invalid("候选区没有这只票")
+        return Response(status_code=204)
+
+    routes = [
         Route("/api/chats", _guarded(list_chats), methods=["GET"]),
         Route("/api/chats", _guarded(create), methods=["POST"]),
         Route("/api/chats/options", _guarded(options), methods=["GET"]),
@@ -147,7 +162,14 @@ def chat_routes(service: ChatService, frameworks_dir: Path) -> list[Route]:
         Route("/api/chats/{id}/archive", _guarded(archive), methods=["POST"]),
         Route("/api/chats/{id}/title", _guarded(rename), methods=["POST"]),
         Route("/api/chats/{id}/approvals/{request_id}", _guarded(approval), methods=["POST"]),
+        Route("/api/chats/{id}/candidates", _guarded(save_candidates), methods=["POST"]),
     ]
+    if service.candidates is not None:
+        routes += [
+            Route("/api/candidates", _guarded(list_candidates), methods=["GET"]),
+            Route("/api/candidates/{ticker}/dismiss", _guarded(dismiss_candidate), methods=["POST"]),
+        ]
+    return routes
 
 
 def chat_lifespan(service: ChatService, *, reap_interval_s: float = REAP_INTERVAL_S):

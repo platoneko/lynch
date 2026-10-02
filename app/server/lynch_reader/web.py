@@ -1,8 +1,9 @@
 """HTTP surface: ticker catalog with zones on live quotes, raw framework and axis markdown, chats, and the built web UI.
 
 Only paired devices get in (lynch_reader.auth): a one-time code from `just app-pair` buys a long-lived cookie.
-The server itself writes neither frameworks/ nor output/bands/. Chats run Claude Code subprocesses that may
-write frameworks/ under a tool whitelist and the sediment-framework skill (AGENTS.md「app 对话」).
+Chats run Claude Code subprocesses that may write frameworks/ under a tool whitelist and the sediment-framework
+skill, and read-only grok subprocesses that search X (AGENTS.md「app 对话」). The server itself writes only
+output/chat/ and output/candidates/.
 """
 from __future__ import annotations
 
@@ -23,7 +24,9 @@ from starlette.staticfiles import StaticFiles
 from lynch_reader.auth.gate import DeviceAuth, pair_routes
 from lynch_reader.auth.store import DEVICES_FILE, DeviceStore
 from lynch_reader.catalog import FRAMEWORKS_DIR, REPO_ROOT, QuoteCache, axis_path_in, catalog, framework_path
+from lynch_reader.chat.candidates import CandidateStore
 from lynch_reader.chat.config import LaunchConfig
+from lynch_reader.chat.grok import GrokConfig
 from lynch_reader.chat.index import ChatIndex
 from lynch_reader.chat.routes import chat_lifespan, chat_routes
 from lynch_reader.chat.service import ChatService
@@ -88,11 +91,15 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    output = REPO_ROOT / "output"
     chat = ChatService(
-        ChatIndex(REPO_ROOT / "output" / "chat" / "index.json"),
+        ChatIndex(output / "chat" / "index.json"),
         LaunchConfig((shutil.which("claude") or "claude",), REPO_ROOT),
         projects_dir_for(REPO_ROOT, Path.home()),
         dict(os.environ),
+        grok=GrokConfig((shutil.which("grok") or "grok",), workdir=output / "chat" / "grok-workdir",
+                        home=Path.home(), logs=output / "chat" / "grok", invest_root=REPO_ROOT.parent / "invest"),
+        candidates=CandidateStore(output / "candidates" / "candidates.json"),
     )
     # An open chat stream never ends by itself: without a graceful-shutdown timeout, SIGTERM waits on it
     # forever and the lifespan shutdown that stops the claude processes never runs.

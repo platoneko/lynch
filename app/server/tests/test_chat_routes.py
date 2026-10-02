@@ -192,3 +192,25 @@ def test_answer_an_approval(repo, tmp_path, quotes):
         while state_of(svc, conv_id) != "idle" and time.monotonic() < deadline:
             time.sleep(0.02)
     assert f.read_text() == "beta\n"
+
+
+def test_discover_create_save_list_and_dismiss(repo, tmp_path, quotes):
+    c, svc = client(repo, tmp_path, quotes)
+    with c:
+        assert c.get("/api/chats/options").json()["discover"]["default_model"] == "grok-4.6"
+        bad = c.post("/api/chats", json={"kind": "discover", "text": "x", "model": "grok-4.6", "effort": "high",
+                                         "context_window": 123})
+        assert bad.status_code == 400
+        conv_id = c.post("/api/chats", json={"kind": "discover", "text": "candidates", "model": "grok-4.6",
+                                             "effort": "high", "context_window": 500000}).json()["id"]
+        asyncio.run(until(lambda: state_of(svc, conv_id) == "dormant"
+                          and any(i.get("candidates") for i in svc.snapshot(conv_id)["items"])))
+        [item] = [i for i in svc.snapshot(conv_id)["items"] if i.get("candidates")]
+        r = c.post(f"/api/chats/{conv_id}/candidates", json={"key": item["key"], "tickers": ["AXTI.US"]})
+        assert r.json() == {"saved": ["AXTI.US"]}
+        assert c.post(f"/api/chats/{conv_id}/candidates", json={"key": "nope", "tickers": ["AXTI.US"]}).status_code == 409
+        assert [x["ticker"] for x in c.get("/api/candidates").json()["candidates"]] == ["AXTI.US"]
+        assert c.post("/api/candidates/AXTI.US/dismiss", json={}).status_code == 204
+        assert c.get("/api/candidates").json()["candidates"][0]["dismissed"] is True
+        assert c.post("/api/candidates/NOPE.US/dismiss", json={}).status_code == 400
+        assert c.post("/api/candidates/AXTI.US/dismiss", data="x").status_code == 415  # the CSRF guard holds
