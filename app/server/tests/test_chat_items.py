@@ -97,3 +97,24 @@ def test_framework_ticker(tmp_path):
     for path in ("frameworks/_TEMPLATE.md", "frameworks/AGENTS.md", "frameworks/README.md",
                  "frameworks/eval/NVDA.US.py", "frameworks/axes/ai-capex.md", "eval/lib/x.md", "/elsewhere/A.md"):
         assert framework_ticker(path, root) is None
+
+
+def test_text_with_a_candidate_block_carries_the_candidates():
+    text = ('看完了\n```lynch-candidates\n{"candidates": [{"ticker": "AAPL.US", "name": "Apple", "sources": ['
+            '{"handle": "a", "stance": "bullish", "reason": "r", "quote": "q", '
+            '"url": "https://x.com/a/status/1", "posted_at": "2026-10-01T00:00:00Z"}]}]}\n```')
+    [item] = message_items(assistant("a1", {"type": "text", "text": text}))
+    assert item["text"] == "看完了" and item["candidates"][0]["ticker"] == "AAPL.US"
+    assert item["candidates_dropped"] == 0
+
+
+def test_grok_string_tool_input_becomes_a_dict():
+    [item] = message_items(assistant("a1", {"type": "tool_use", "id": "t1", "name": "X search:",
+                                            "input": "{'variant': 'XSearch', 'backend': True}"}))
+    assert item["input"] == {"value": "{'variant': 'XSearch', 'backend': True}"}
+
+
+def test_grok_string_is_error_flag():
+    ok = message_items(user("u1", [{"type": "tool_result", "tool_use_id": "t1", "content": "x", "is_error": "False"}]))
+    bad = message_items(user("u2", [{"type": "tool_result", "tool_use_id": "t2", "content": "x", "is_error": "True"}]))
+    assert ok[0]["is_error"] is False and bad[0]["is_error"] is True

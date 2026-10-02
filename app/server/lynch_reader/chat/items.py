@@ -8,6 +8,8 @@ from __future__ import annotations
 import uuid as uuidlib
 from pathlib import Path
 
+from lynch_reader.chat.candidates import parse_candidates
+
 OUTPUT_MAX = 4000
 # Tool results that mean "the whitelist refused this call" (verified texts, spec §9 第 2 条).
 DENIAL_MARKERS = (
@@ -90,10 +92,17 @@ def framework_ticker(file_path: str, repo_root: Path) -> str | None:
 
 def _assistant_block(uuid: str, index: int, block: dict) -> list[dict]:
     if block.get("type") == "text" and block["text"].strip():
-        return [{"kind": "text", "key": f"{uuid}#{index}", "text": block["text"]}]
+        item = {"kind": "text", "key": f"{uuid}#{index}", "text": block["text"]}
+        parsed = parse_candidates(block["text"])
+        if parsed is not None:  # a discover reply's candidate list (chat/candidates.py)
+            item.update(text=parsed.text, candidates=parsed.candidates, candidates_dropped=parsed.dropped)
+        return [item]
     if block.get("type") == "tool_use":
+        tool_input = block.get("input") or {}
+        if not isinstance(tool_input, dict):  # grok prints a server-side tool's input as a Python repr string
+            tool_input = {"value": str(tool_input)}
         return [{"kind": "tool", "key": block["id"], "id": block["id"], "name": block["name"],
-                 "input": block.get("input") or {}, "output": None, "is_error": False, "denied": False}]
+                 "input": tool_input, "output": None, "is_error": False, "denied": False}]
     return []  # thinking and anything newer
 
 
@@ -109,7 +118,7 @@ def _tool_result(block: dict) -> dict:
     raw = block.get("content")
     text = raw if isinstance(raw, str) else "\n".join(
         part.get("text", "") for part in raw or [] if part.get("type") == "text")
-    is_error = bool(block.get("is_error"))
+    is_error = block.get("is_error") in (True, "True")  # grok prints the flag as a string
     return {
         "kind": "tool_result", "id": block["tool_use_id"],
         "output": text if len(text) <= OUTPUT_MAX else text[: OUTPUT_MAX - 1] + "…",
