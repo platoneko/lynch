@@ -13,7 +13,7 @@
 
 ## 输出
 
-先讲发现：谁、在什么时候、对哪只票、看多还是看空、为什么。末尾附恰好一个候选块；没有候选就不附。候选块格式：
+先讲发现：谁、在什么时候、对哪只票、看多还是看空、为什么。回答里提到的时间一律写北京时间（UTC+8）。末尾附恰好一个候选块；没有候选就不附。候选块格式：
 
 ```lynch-candidates
 {"candidates": [{"ticker": "0700.HK", "name": "腾讯控股", "sources": [{"handle": "someone", "stance": "bullish", "reason": "一句话中文理由", "quote": "帖子原文摘录，保留原语言", "url": "https://x.com/someone/status/123", "posted_at": "2026-10-01T08:00:00Z"}]}]}
@@ -23,4 +23,4 @@
 - name 必填：港股和 A 股写中文简称，其他市场写公司英文名。
 - stance 是 bullish、bearish 或 neutral。
 - 同一只票被多位 KOL 提到，合并成一条，sources 里列多个出处。
-- 每个出处都要有原帖链接和发帖时间（UTC，ISO 8601）。
+- 每个出处都要有原帖链接和发帖时间（posted_at 写 UTC 的 ISO 8601，app 显示时换成北京时间）。

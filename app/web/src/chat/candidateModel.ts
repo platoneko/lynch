@@ -37,11 +37,19 @@ export function archiveDaysLeft(archivedAt: number, now: number): number {
   return Math.max(0, Math.ceil(ARCHIVE_DAYS - (now - archivedAt) / 86400));
 }
 
+const BJT_OFFSET_MS = 8 * 3600_000; // every time the user reads is Beijing time
+
+/** An ISO time as Beijing time to the minute (2026-10-02 04:30); the text itself when it does not parse. */
+export function bjtTime(iso: string): string {
+  const t = Date.parse(iso);
+  return Number.isNaN(t) ? iso : new Date(t + BJT_OFFSET_MS).toISOString().slice(0, 16).replace('T', ' ');
+}
+
 /** The opening of a new-ticker research chat started from the candidate list; the user edits it before sending. */
 export function candidateDraft(c: Candidate): string {
   const lines = [`调研 ${candidateLabel(c)}。`, '', 'KOL 线索：'];
   for (const s of c.sources) {
-    lines.push(`- @${s.handle}（${STANCE_LABEL[s.stance]}，${s.posted_at.slice(0, 10)}）：${s.reason}`);
+    lines.push(`- @${s.handle}（${STANCE_LABEL[s.stance]}，${bjtTime(s.posted_at)} 北京时间）：${s.reason}`);
     lines.push(`  原文：${s.quote}`);
     lines.push(`  原帖：${s.url}`);
   }

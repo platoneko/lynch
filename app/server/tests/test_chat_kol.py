@@ -46,11 +46,12 @@ NOW = datetime(2026, 10, 3, 1, 0, tzinfo=UTC)
 def test_brief_names_the_list_window_and_start_date():
     assert kol_brief(KolSources("123"), 2, NOW).splitlines() == [
         "- X 列表：123（https://x.com/i/lists/123，搜索写 list:123）",
-        "- 回看范围：最近 2 天，即 2026-10-01 01:00 UTC 之后发的帖子；搜索写 since:2026-10-01"
-        "（since 只按日期过滤，早于 2026-10-01 01:00 UTC 的帖子不算，翻到这里就停）",
+        "- 回看范围：最近 2 天，即北京时间 2026-10-01 09:00 之后发的帖子；搜索写 since:2026-10-01"
+        "（since 只按 UTC 日期过滤，搜到的会更早一些；早于北京时间 2026-10-01 09:00 的帖子不算，翻到这里就停）",
     ]
 
 
-def test_brief_start_date_is_utc():
+def test_brief_reads_now_in_any_timezone():
     east8 = datetime(2026, 10, 3, 9, 0, tzinfo=timezone(timedelta(hours=8)))  # 01:00 UTC
-    assert "即 2026-09-26 01:00 UTC 之后" in kol_brief(KolSources("1"), 7, east8)
+    assert "即北京时间 2026-09-26 09:00 之后" in kol_brief(KolSources("1"), 7, east8)
+    assert "since:2026-09-26" in kol_brief(KolSources("1"), 7, east8)

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { saveCandidates } from './api';
-import { candidateLabel, defaultPicked, STANCE_LABEL } from './candidateModel';
+import { bjtTime, candidateLabel, defaultPicked, STANCE_LABEL } from './candidateModel';
 import type { Candidate, CandidateSource } from './types';
 
 /** The candidates one Grok reply ends with. Ticking and tapping 存入候选区 is the user's consent to save them. */
@@ -66,7 +66,7 @@ export function CandidateCards({ convId, itemKey, candidates, dropped, hasFramew
 export function CandidateSourceView({ source: s }: { source: CandidateSource }) {
   return (
     <div className="cand-src">
-      <div className="cand-src-head">@{s.handle} · {STANCE_LABEL[s.stance]} · {s.posted_at.slice(0, 10)}</div>
+      <div className="cand-src-head">@{s.handle} · {STANCE_LABEL[s.stance]} · {bjtTime(s.posted_at)}</div>
       <div>{s.reason}</div>
       <blockquote className="cand-quote">{s.quote}</blockquote>
       <a className="cand-link" href={s.url} target="_blank" rel="noreferrer">原帖</a>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  archiveDaysLeft, candidateDraft, candidateLabel, costText, defaultPicked, discoverModelText, groupCandidates,
+  archiveDaysLeft, bjtTime, candidateDraft, candidateLabel, costText, defaultPicked, discoverModelText, groupCandidates,
   partialText,
 } from './candidateModel';
 import { toolSummary } from './chatModel';
@@ -51,11 +51,19 @@ describe('archiveDaysLeft', () => {
   });
 });
 
+describe('bjtTime', () => {
+  it('shows an ISO time in Beijing time to the minute', () => {
+    expect(bjtTime('2026-10-01T20:30:00Z')).toBe('2026-10-02 04:30');
+    expect(bjtTime('2026-10-01T20:30:00+00:00')).toBe('2026-10-02 04:30');
+    expect(bjtTime('not a time')).toBe('not a time');
+  });
+});
+
 describe('candidateDraft', () => {
   it('names the ticker and quotes every source', () => {
     expect(candidateDraft(hk)).toBe([
       '调研 腾讯控股 · 0700.HK。', '', 'KOL 线索：',
-      '- @alice（看多，2026-10-01）：游戏回暖', '  原文：Tencent looks cheap', '  原帖：https://x.com/alice/status/1',
+      '- @alice（看多，2026-10-01 16:00 北京时间）：游戏回暖', '  原文：Tencent looks cheap', '  原帖：https://x.com/alice/status/1',
     ].join('\n'));
   });
 });

@@ -11,12 +11,13 @@ import asyncio
 import json
 import sys
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 from lynch_reader.catalog import REPO_ROOT
 
 READ_TIMEOUT_S = 10.0
+BJT = timezone(timedelta(hours=8), "北京时间")  # every time the user reads is Beijing time
 LOOKBACK_DAYS = (1, 2, 3, 7)  # what a discover chat may look back over, picked when it is created
 DEFAULT_LOOKBACK_DAYS = 2
 # invest is checked out next to the main lynch checkout. frameworks/ (a real dir there, a symlink in a worktree)
@@ -68,15 +69,16 @@ async def kol_sources(invest_root: Path, python: str = sys.executable) -> KolSou
 
 
 def kol_brief(kol: KolSources, days: int, now: datetime) -> str:
-    """The KOL source as the search rules expect it: which List, and the exact UTC moment the lookback starts.
+    """The KOL source as the search rules expect it: which List, and the exact moment the lookback starts.
 
-    X's `since:` filters by date only, so the start moment is spelled out: posts before it do not count and paging
-    stops there. The app sends this to Grok every turn and `just kol-sources` prints it, so both read the same words.
+    The moment is in Beijing time, as everything the user reads. X's `since:` takes a UTC date only, so the search
+    starts that UTC day (never later than the moment) and posts before the moment do not count. The app sends this
+    to Grok every turn and `just kol-sources` prints it, so both read the same words.
     """
     start = now.astimezone(UTC) - timedelta(days=days)
-    moment, day = start.strftime("%Y-%m-%d %H:%M UTC"), start.date().isoformat()
+    moment, day = start.astimezone(BJT).strftime("%Y-%m-%d %H:%M"), start.date().isoformat()
     return "\n".join([
         f"- X 列表：{kol.list_id}（https://x.com/i/lists/{kol.list_id}，搜索写 list:{kol.list_id}）",
-        f"- 回看范围：最近 {days} 天，即 {moment} 之后发的帖子；搜索写 since:{day}"
-        f"（since 只按日期过滤，早于 {moment} 的帖子不算，翻到这里就停）",
+        f"- 回看范围：最近 {days} 天，即北京时间 {moment} 之后发的帖子；搜索写 since:{day}"
+        f"（since 只按 UTC 日期过滤，搜到的会更早一些；早于北京时间 {moment} 的帖子不算，翻到这里就停）",
     ])
