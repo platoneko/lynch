@@ -55,6 +55,8 @@ export function ChatsPage({ list, error, names, labels, onBack, onOpen, onNewRes
           <button className="icon-btn" onClick={onBack} aria-label="返回">‹</button>
           <input className="home-search" type="search" placeholder="搜索标的" value={query}
             onChange={(e) => setQuery(e.target.value)} />
+        </div>
+        <div className="bar-row chats-new">
           <button className="text-btn" onClick={onNewResearch}>＋ 新票调研</button>
           <button className="text-btn" onClick={onNewDiscover}>＋ 发现新票</button>
         </div>
