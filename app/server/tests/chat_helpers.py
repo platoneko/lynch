@@ -57,3 +57,17 @@ async def next_event(q: asyncio.Queue, name: str, pred: Callable[[dict], bool] =
             if event == name and pred(data):
                 return data
     return await asyncio.wait_for(scan(), timeout)
+
+
+def write_invest(root: Path, list_id: str | None = "2051493926612484289", handles: tuple[str, ...] = ("alice", "bob"),
+                 hours: int | None = 36, broken: bool = False) -> Path:
+    """A stand-in for ../invest with the two loaders lynch calls (scripts/load_kol_handles.py, load_policies.py)."""
+    scripts = root / "scripts"
+    scripts.mkdir(parents=True, exist_ok=True)
+    (scripts / "load_kol_handles.py").write_text(
+        f"def load_list_id():\n    return {list_id!r}\n\ndef load_handles():\n    return {list(handles)!r}\n",
+        encoding="utf-8")
+    policies = {"fetch": {"tweets": {"lookback_hours": hours}}} if hours is not None else {}
+    body = "raise RuntimeError('bad policies.toml')\n" if broken else f"POLICIES = {policies!r}\n"
+    (scripts / "load_policies.py").write_text(body, encoding="utf-8")
+    return root
