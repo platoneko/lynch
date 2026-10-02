@@ -38,6 +38,18 @@ def test_chain_continues_after_reopening_and_marks_a_stop(tmp_path):
     assert [(i["kind"], i["text"]) for i in replay(path).items] == [("user", "one"), ("notice", "已停止")]
 
 
+def test_a_line_torn_by_a_crash_does_not_swallow_the_next(tmp_path):
+    path = tmp_path / "c1.jsonl"
+    GrokLog(path).user("one")
+    with path.open("a", encoding="utf-8") as f:
+        f.write('{"type": "assistant", "mess')  # the server died mid-write
+    log = GrokLog(path)
+    log.user("two")
+    log.message(grok_assistant({"type": "text", "text": "完"}))
+    assert [(i["kind"], i.get("text")) for i in replay(path).items] == [("user", "one"), ("user", "two"),
+                                                                       ("text", "完")]
+
+
 def test_a_turn_with_no_reply_is_unfinished(tmp_path):
     path = tmp_path / "c1.jsonl"
     GrokLog(path).user("one")
