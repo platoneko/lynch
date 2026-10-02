@@ -86,10 +86,21 @@ class MainActivity : Activity() {
         w.settings.domStorageEnabled = true // localStorage: chat drafts survive leaving the page
         w.webChromeClient = WebChromeClient() // without one, JS alert/confirm are silently cancelled
         w.webViewClient = object : WebViewClient() {
-            // true = block: only the forwarded lynch origin may load in the WebView.
+            // true = block: only the forwarded lynch origin loads in the WebView; tapped X post links open outside it.
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val u = request.url
-                return !(u.scheme == "http" && u.host == "127.0.0.1" && u.port == port)
+                if (u.scheme == "http" && u.host == "127.0.0.1" && u.port == port) return false
+                // A candidate's post link (发现新票): hand a tapped x.com / twitter.com link to the X app or the
+                // browser. Anything else stays blocked.
+                if (request.hasGesture() && u.scheme == "https" &&
+                    u.host in setOf("x.com", "twitter.com", "mobile.twitter.com", "www.x.com")) {
+                    try {
+                        startActivity(Intent(Intent.ACTION_VIEW, u))
+                    } catch (_: android.content.ActivityNotFoundException) {
+                        Toast.makeText(this@MainActivity, "没有能打开链接的应用", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                return true
             }
 
             // A port change starts over; once its first page commits, drop the old port's pages

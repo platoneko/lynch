@@ -5,7 +5,8 @@ import { groupChats, relativeTime, type ChatGroup } from './listModel';
 import type { ChatList, ChatSummary } from './types';
 
 /** Every live conversation: unlanded research on top, then one folded group per ticker. */
-export function ChatsPage({ list, error, names, labels, onBack, onOpen, onNewResearch, onOpenDoc, onArchive, onArchiveTicker }: {
+export function ChatsPage({ list, error, names, labels, onBack, onOpen, onNewResearch, onNewDiscover, pendingCandidates,
+  onOpenCandidates, onOpenDoc, onArchive, onArchiveTicker }: {
   list: ChatList | null;
   error: string | null;
   names: ReadonlyMap<string, string>;
@@ -13,6 +14,9 @@ export function ChatsPage({ list, error, names, labels, onBack, onOpen, onNewRes
   onBack: () => void;
   onOpen: (id: string) => void;
   onNewResearch: () => void;
+  onNewDiscover: () => void;
+  pendingCandidates: number | null; // null until the candidate list loads
+  onOpenCandidates: () => void;
   onOpenDoc: (ticker: string) => void;
   onArchive: (id: string) => void;
   onArchiveTicker: (ticker: string) => void;
@@ -52,10 +56,23 @@ export function ChatsPage({ list, error, names, labels, onBack, onOpen, onNewRes
           <input className="home-search" type="search" placeholder="搜索标的" value={query}
             onChange={(e) => setQuery(e.target.value)} />
           <button className="text-btn" onClick={onNewResearch}>＋ 新票调研</button>
+          <button className="text-btn" onClick={onNewDiscover}>＋ 发现新票</button>
         </div>
       </header>
       <main className="chats-body">
         {error && <div className="banner-error">{error}</div>}
+        <button className="chat-doc-link" onClick={onOpenCandidates}>
+          候选区{pendingCandidates !== null ? ` · ${pendingCandidates} 只待看` : ''}
+        </button>
+        {view.discover.length > 0 && (
+          <section>
+            <h3 className="chats-caption">发现新票</h3>
+            {view.discover.map((c) => (
+              <ChatRow key={c.id} chat={c} label={`发现新票「${c.title}」`} now={now}
+                onOpen={() => onOpen(c.id)} onArchive={() => archiveOne(c)} />
+            ))}
+          </section>
+        )}
         {view.research.length > 0 && (
           <section>
             <h3 className="chats-caption">调研中（未落盘）</h3>
@@ -88,7 +105,7 @@ export function ChatsPage({ list, error, names, labels, onBack, onOpen, onNewRes
             </section>
           );
         })}
-        {list && view.research.length === 0 && view.groups.length === 0 && (
+        {list && view.discover.length === 0 && view.research.length === 0 && view.groups.length === 0 && (
           <p className="empty">{searching ? '没有匹配的对话' : '还没有对话'}</p>
         )}
       </main>

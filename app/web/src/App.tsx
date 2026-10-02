@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { fetchAxis, fetchCatalog, fetchFramework } from './api';
-import { archiveChat, archiveTicker, fetchChatOptions, fetchChats } from './chat/api';
+import { archiveChat, archiveTicker, dismissCandidate, fetchCandidates, fetchChatOptions, fetchChats } from './chat/api';
+import { groupCandidates } from './chat/candidateModel';
+import { CandidatesPage } from './chat/CandidatesPage';
 import { ChatPage } from './chat/ChatPage';
 import { ChatSheetButton } from './chat/ChatSheet';
 import { ChatsPage } from './chat/ChatsPage';
 import { tickerLabel } from './chat/listModel';
-import type { ChatList, ChatOptions } from './chat/types';
+import type { ChatList, ChatOptions, SavedCandidate } from './chat/types';
 import { AxisDocHead, DocPage, TickerDocHead } from './doc/DocPage';
 import { HomePage } from './home/HomePage';
 import { DEFAULT_FILTER, type HomeFilter } from './home/listModel';
-import { axisHash, chatHash, chatsHash, docHash, newChatHash, parseRoute, type Route } from './route';
+import { axisHash, candidatesHash, chatHash, chatsHash, docHash, newChatHash, newDiscoverHash, parseRoute, type Route } from './route';
 import type { Catalog } from './types';
 
 export function zoneLabels(catalog: Catalog): Map<string, string> {
@@ -31,16 +33,25 @@ export function App() {
   }, []);
   // The home badge and the lists follow agents running on the server; nothing pushes list changes, so poll.
   useEffect(() => {
-    if (route.page === 'chat' || route.page === 'chat-new') return;
+    if (route.page === 'chat' || route.page === 'chat-new' || route.page === 'chat-new-discover') return;
     loadChats();
     const timer = window.setInterval(loadChats, 10_000);
     return () => window.clearInterval(timer);
   }, [route.page, loadChats]);
+  const [candidates, setCandidates] = useState<SavedCandidate[] | null>(null);
+  const [candidateError, setCandidateError] = useState<string | null>(null);
+  const loadCandidates = useCallback(() => {
+    fetchCandidates().then((l) => { setCandidates(l); setCandidateError(null); },
+      (e: unknown) => setCandidateError(String(e instanceof Error ? e.message : e)));
+  }, []);
+  useEffect(() => {
+    if (route.page === 'chats' || route.page === 'candidates') loadCandidates();
+  }, [route.page, loadCandidates]);
   const [chatOptions, setChatOptions] = useState<ChatOptions | null>(null);
   // A new conversation's first message, handed from its blank page to its own page.
   const [firstMessage, setFirstMessage] = useState<{ id: string; text: string } | null>(null);
   useEffect(() => {
-    if (route.page === 'chat' || route.page === 'chat-new') {
+    if (route.page === 'chat' || route.page === 'chat-new' || route.page === 'chat-new-discover') {
       if (!chatOptions) fetchChatOptions().then(setChatOptions, () => {});
     }
   }, [route.page, chatOptions]);
@@ -103,11 +114,12 @@ export function App() {
       </div>
     );
   }
-  if (route.page === 'chat' || route.page === 'chat-new') {
+  if (route.page === 'chat' || route.page === 'chat-new' || route.page === 'chat-new-discover') {
     const id = route.page === 'chat' ? route.id : null;
+    const newTicker = route.page === 'chat-new' ? route.ticker : null;
     return (
-      <ChatPage key={id ?? `new:${route.page === 'chat-new' ? route.ticker : ''}`} id={id}
-        newTicker={route.page === 'chat-new' ? route.ticker : null} newDiscover={false}
+      <ChatPage key={id ?? `new:${route.page}:${newTicker ?? ''}`} id={id}
+        newTicker={newTicker} newDiscover={route.page === 'chat-new-discover'}
         firstMessage={firstMessage !== null && firstMessage.id === id ? firstMessage.text : null}
         options={chatOptions} targets={targets}
         onBack={() => (window.history.length > 1 ? window.history.back() : (window.location.hash = chatsHash()))}
@@ -124,9 +136,21 @@ export function App() {
       <ChatsPage list={chatList} error={chatError} names={names} labels={labels} onBack={goBack}
         onOpen={(id) => { window.location.hash = chatHash(id); }}
         onNewResearch={() => { window.location.hash = newChatHash(null); }}
+        onNewDiscover={() => { window.location.hash = newDiscoverHash(); }}
+        pendingCandidates={candidates ? groupCandidates(candidates, (t) => pool.has(t)).todo.length : null}
+        onOpenCandidates={() => { window.location.hash = candidatesHash(); }}
         onOpenDoc={(t) => { window.location.hash = docHash(t); }}
         onArchive={(id) => archive(archiveChat(id))}
         onArchiveTicker={(t) => archive(archiveTicker(t))} />
+    );
+  }
+  if (route.page === 'candidates') {
+    return (
+      <CandidatesPage list={candidates} error={candidateError} hasFramework={(t) => pool.has(t)}
+        onBack={() => (window.history.length > 1 ? window.history.back() : (window.location.hash = chatsHash()))}
+        onResearch={() => { window.location.hash = newChatHash(null); }}
+        onDismiss={(t) => dismissCandidate(t).then(loadCandidates, (e: unknown) => setCandidateError(String(e instanceof Error ? e.message : e)))}
+        onOpenDoc={(t) => { window.location.hash = docHash(t); }} />
     );
   }
   if (route.page === 'doc') {
