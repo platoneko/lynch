@@ -27,7 +27,10 @@ export function CandidateCards({ convId, itemKey, candidates, dropped, hasFramew
     setBusy(true);
     setError(null);
     try {
-      onSaved((await saveCandidates(convId, itemKey, [...picked])).saved);
+      const { saved: done } = await saveCandidates(convId, itemKey, [...picked]);
+      // Saved ones untick; their 已在候选区 badge now marks them.
+      setPicked((p) => new Set([...p].filter((t) => !done.includes(t))));
+      onSaved(done);
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
     } finally {

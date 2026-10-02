@@ -58,7 +58,8 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
   const [model, setModel] = useState('');
   const [effort, setEffort] = useState('');
   const [ctxWindow, setCtxWindow] = useState(0); // discover: the context window picked on the blank page
-  const [savedTickers, setSavedTickers] = useState<ReadonlySet<string>>(new Set()); // discover: in the candidate list
+  // discover: tickers in the candidate list; null until loaded, so the cards' first ticks can skip them
+  const [savedTickers, setSavedTickers] = useState<ReadonlySet<string> | null>(null);
   const [stream, setStream] = useState(0); // bumping it reopens the event stream (after an edit)
   const [answering, setAnswering] = useState<ReadonlySet<string>>(new Set()); // approvals whose answer is in flight
   const inputEl = useRef<HTMLTextAreaElement>(null);
@@ -101,7 +102,10 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
 
   useEffect(() => {
     if (id === null || !discover) return;
-    fetchCandidates().then((l) => setSavedTickers(new Set(l.filter((c) => !c.dismissed).map((c) => c.ticker))), () => {});
+    fetchCandidates().then(
+      (l) => setSavedTickers(new Set(l.filter((c) => !c.dismissed).map((c) => c.ticker))),
+      () => setSavedTickers(new Set()), // no candidate list to compare against: still show the cards
+    );
   }, [id, discover]);
 
   useEffect(() => {
@@ -303,10 +307,10 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
               </div>
             )}
             {it.kind === 'text' && <div className="msg msg-agent md" dangerouslySetInnerHTML={{ __html: html.get(it.key)?.html ?? '' }} />}
-            {it.kind === 'text' && it.candidates && it.candidates.length > 0 && id !== null && (
+            {it.kind === 'text' && it.candidates && it.candidates.length > 0 && id !== null && savedTickers && (
               <CandidateCards convId={id} itemKey={it.key} candidates={it.candidates} dropped={it.candidates_dropped ?? 0}
                 hasFramework={(t) => targets.pool.has(t)} saved={savedTickers}
-                onSaved={(ts) => setSavedTickers((s) => new Set([...s, ...ts]))} />
+                onSaved={(ts) => setSavedTickers((s) => new Set([...(s ?? []), ...ts]))} />
             )}
             {it.kind === 'tool' && showTools && (
               <details className={`tool ${it.denied ? 'tool-denied' : ''}`}>
