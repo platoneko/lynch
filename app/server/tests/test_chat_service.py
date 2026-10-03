@@ -239,6 +239,20 @@ def test_context_window_comes_from_the_conversation_model(tmp_path):
     assert asyncio.run(main()) == 1000000
 
 
+def test_a_subagent_message_does_not_move_the_context_count(tmp_path):
+    async def main():
+        svc, _ = make_service(tmp_path)
+        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium")
+        await until(lambda: state_of(svc, conv.id) == "idle")
+        svc._on_message(conv.id, svc._live[conv.id].proc, {
+            "type": "assistant", "uuid": "sub-1", "parent_tool_use_id": "toolu_1",
+            "message": {"content": [{"type": "text", "text": "sub"}], "usage": {"input_tokens": 24000}}})
+        tokens = svc.snapshot(conv.id)["context"]["tokens"]
+        await svc.shutdown()
+        return tokens
+    assert asyncio.run(main()) == 1000
+
+
 
 def test_a_new_conversation_starts_with_the_window_last_seen_for_its_model(tmp_path):
     async def main():

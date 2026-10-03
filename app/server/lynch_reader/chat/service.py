@@ -520,7 +520,9 @@ class ChatService:
             msg = self._grok_log(conv_id).message(msg)  # grok keeps no transcript the app can read
         if msg["type"] == "assistant":
             self._mark_busy(conv_id)
-            tokens = context_tokens(msg["message"])
+            # A subagent's messages come through the stream too, tagged with the Agent call that spawned them;
+            # their usage is the subagent's own context, not this conversation's.
+            tokens = None if msg.get("parent_tool_use_id") else context_tokens(msg["message"])
             if tokens:
                 live.context_tokens = tokens
                 self._broadcast(conv_id, "context", self._context(conv_id))
