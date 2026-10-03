@@ -414,6 +414,8 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
         )}
         {view && <div className="chat-status">{stateText(view.conv.state)}{view.retry && ` · ${view.retry}`}</div>}
         <div className="chat-input-row">
+          {/* stop sits left of the textarea so send keeps the right edge and a thumb aimed at send never lands on stop */}
+          {busy && id !== null && !gone && <button className="stop-btn" onClick={() => interruptChat(id).catch(fail)} aria-label="停止">■</button>}
           <textarea ref={inputEl} rows={1} value={text} disabled={gone} onChange={(e) => setInput((c) => typed(c, e.target.value))}
             placeholder={id === null ? (discover ? '想看 KOL 最近推了什么？（直接发送即可）' : newTicker ? `围绕 ${newTicker} 说点什么` : '想调研哪只票？') : '输入消息'} />
           <button className="send-btn" onClick={submit}
@@ -421,7 +423,6 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
               || (discover && id === null ? !discoverModel : !text.trim())}>
             {sending ? '发送中' : discover && busy ? '等这一轮结束' : '发送'}
           </button>
-          {busy && id !== null && !gone && <button className="stop-btn" onClick={() => interruptChat(id).catch(fail)} aria-label="停止">■</button>}
         </div>
       </footer>
 
