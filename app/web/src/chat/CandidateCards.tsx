@@ -56,7 +56,7 @@ export function CandidateCards({ convId, itemKey, candidates, dropped, hasFramew
       ))}
       {dropped > 0 && <div className="notice">另有 {dropped} 条格式不合格，已忽略</div>}
       {error && <div className="banner-error">{error}</div>}
-      <button className="text-btn cand-save" disabled={busy || picked.size === 0} onClick={save}>
+      <button className={`text-btn cand-save ${picked.size > 0 ? 'cand-save-on' : ''}`} disabled={busy || picked.size === 0} onClick={save}>
         存入候选区（{picked.size}）
       </button>
     </div>

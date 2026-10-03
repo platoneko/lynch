@@ -143,6 +143,15 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
     if (stick.current) window.scrollTo(0, document.documentElement.scrollHeight);
   }, [view]);
   useLayoutEffect(syncJumps, [view, showTools]);
+  // The composer grows with its text; a sticky 存入候选区 button sits just above it, so it needs the live height.
+  useLayoutEffect(() => {
+    const footer = footerEl.current;
+    const page = footer?.parentElement;
+    if (!footer || !page) return;
+    const ro = new ResizeObserver(() => page.style.setProperty('--chat-input-h', `${footer.offsetHeight}px`));
+    ro.observe(footer);
+    return () => ro.disconnect();
+  }, []);
   useLayoutEffect(() => {
     const el = inputEl.current;
     if (!el) return;

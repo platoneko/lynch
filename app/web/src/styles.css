@@ -269,7 +269,11 @@ button { font: inherit; color: inherit; }
 .cand-src-head { color: var(--muted); font-size: 12px; }
 .cand-quote { margin: 2px 0; padding-left: 8px; border-left: 2px solid var(--line); color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 .cand-link { font-size: 12px; color: var(--accent); }
-.cand-save { align-self: flex-end; }
+.cand-save { align-self: flex-end; height: 36px; }
+.cand-save:disabled { opacity: 0.4; }
+/* Once something is ticked the button rides just above the composer while its cards scroll by.
+   Centred, not right-aligned: the composer's jump buttons float at the bottom right. */
+.cand-save-on { position: sticky; bottom: calc(var(--chat-input-h, 0px) + 8px); z-index: 1; align-self: center; border-color: var(--accent); background: var(--accent); color: #fff; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2); }
 /* One divider per ticker, as the chat list has per group, so a row's buttons line up with its ticker. */
 .cand-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; border-bottom: 1px solid var(--line); }
 .cand-fold { width: 100%; border-bottom: 1px solid var(--line); }
