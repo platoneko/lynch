@@ -6,6 +6,7 @@ an option: no p_k, no probability, and it never feeds the base zone.
 """
 from __future__ import annotations
 
+import re
 import sys
 import tempfile
 import unittest
@@ -18,7 +19,7 @@ if str(_SCRIPTS) not in sys.path:
 
 import daily_bands  # noqa: E402
 from eval.lib.bands_io import build_record  # noqa: E402
-from eval.lib.frameworks import FRAMEWORKS_DIR, FrameworkMeta, load_framework  # noqa: E402
+from eval.lib.frameworks import FRAMEWORKS_DIR, FrameworkMeta, list_framework_paths, load_framework  # noqa: E402
 
 _NEEDS_CONTENT = unittest.skipUnless(FRAMEWORKS_DIR.is_dir(), "content repo not cloned at frameworks/")
 
@@ -116,12 +117,6 @@ class ParseCandidateTests(unittest.TestCase):
         self.assertEqual(m.candidate_label, "FY2027·单家，A3′")
         self.assertIsNone(m.candidate_gate)
 
-    @_NEEDS_CONTENT
-    def test_real_framework_gates(self) -> None:
-        gates = {t: load_framework(REPO_ROOT / "frameworks" / f"{t}.md").candidate_gate
-                 for t in ("0700.HK", "600096.SH", "0189.HK")}
-        self.assertEqual(gates, {"0700.HK": "A1c", "600096.SH": None, "0189.HK": None})
-
     def test_candidate_must_be_a_ladder(self) -> None:
         bad = "- 候选带（x）：L′ = **7.23** · M′ = **16.29** · H′ = **15.54**"
         with self.assertRaises(ValueError):
@@ -132,10 +127,12 @@ class ParseCandidateTests(unittest.TestCase):
             _load(_CANDIDATE_LINE + "\n" + _CANDIDATE_LINE)
 
     @_NEEDS_CONTENT
-    def test_sofi_framework_carries_candidate(self) -> None:
-        m = load_framework(REPO_ROOT / "frameworks" / "SOFI.US.md")
-        self.assertEqual(m.candidate, (5.56, 9.69, 10.15))
-        self.assertEqual(m.candidate_label, "FY28·Piper单家·窗口口径")
+    def test_real_candidate_lines_parse(self) -> None:
+        # Which tickers carry a band, and its numbers, are research content; only check every line is read.
+        line = re.compile(r"^-\s+(?:\*\*)?候选带（", re.MULTILINE)
+        for p in list_framework_paths():
+            if line.search(p.read_text(encoding="utf-8")):
+                self.assertIsNotNone(load_framework(p).candidate, p.name)
 
 
 class CandidateZoneTests(unittest.TestCase):

@@ -310,13 +310,8 @@ def test_real_frameworks_candidates(quotes):
         cand = rows[ticker]["candidate"]
         assert cand is not None, ticker
         assert cand["L"] < cand["M"] < cand["H"], ticker
-    # Only these two name no `门槛 A…` after their primed anchors; every gated one resolves its row.
-    ungated = {t for t in with_line if rows[t]["candidate"]["gate"] is None}
-    assert ungated == {"0189.HK", "600096.SH"}
-    assert all(rows[t]["candidate"]["background"] for t in with_line if t not in ungated)
-    tencent = rows["0700.HK"]["candidate"]
-    assert tencent["gate"] == "A1c"
-    assert tencent["background"].startswith("**候选带（FY2028E·汇丰单家）**")
+    # Every gated band resolves its assumption row; which tickers are gated is research content.
+    assert all(rows[t]["candidate"]["background"] for t in with_line if rows[t]["candidate"]["gate"])
 
 
 OPTION_ASSUMPTIONS = """
