@@ -70,6 +70,8 @@ _RULES = """\
 在用户明确说可以写（例如「可以落盘」）之前，不要创建或修改框架内容（frameworks/*.md 以及 axes/、eval/ 目录）。
 - 临时演算不用等许可：一次性脚本和笔记放 frameworks/_local/tmp/ 下运行，或用 Bash 直接跑 Python。\
 永远不要 stage 或提交 frameworks/_local/。
+- WebFetch 读不出的 PDF：用 Read 按页直接读它在 ~/.claude/ 下的缓存文件，或用 curl 从原网址下载到 \
+frameworks/_local/tmp/ 再处理；不要用 cp 复制 ~/.claude/ 下的缓存（Claude Code 把那里当敏感目录，一定会被拒绝）。
 - 改 sediment-framework skill（frameworks/.claude/skills/sediment-framework/）和改框架一样，要用户明确同意；\
 同意后，每次 Edit 或 Write 都会把 diff 推到用户手机上，等用户答复。白名单外的其他调用一律拒绝。
 - 行情用 Bash 跑 longbridge 命令行，例如 `longbridge quote AAPL.US --format json`；`longbridge help` 列出全部命令。\

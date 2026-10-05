@@ -127,6 +127,13 @@ def test_prompt_frees_scratch_but_not_framework_content():
     assert "「可以落盘」" in p
 
 
+def test_prompt_steers_unreadable_pdfs_away_from_the_cache():
+    # Claude Code treats any `cp` touching ~/.claude/ as editing a sensitive file and asks; the app refuses, so
+    # copying a WebFetch-cached PDF always cost a denial and a workaround (2026-10-05, CCJ and HOYA chats).
+    p = system_prompt(conv(kind="research", ticker=None))
+    assert "不要用 cp 复制 ~/.claude/ 下的缓存" in p and "curl" in p
+
+
 def test_prompt_asks_for_chinese_replies():
     # Without it a short first message (a bare company name) got English replies: nothing else in the run says
     # which language to answer in.
