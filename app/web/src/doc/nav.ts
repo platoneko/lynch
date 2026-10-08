@@ -21,12 +21,24 @@ export function currentIndex(tops: { index: number; top: number }[], threshold: 
   return current;
 }
 
-/** Jumping to a section must also open its h2, or an h3 target stays hidden. */
+/** Jumping to a section must also open its ancestors, or a nested target stays hidden. */
 export function openIdsFor(sections: DocSection[], index: number): string[] {
-  const s = sections[index];
-  return s.parentId === null ? [s.id] : [s.id, s.parentId];
+  return [sections[index].id, ...ancestorIds(sections, index)];
 }
 
-export function isVisible(s: DocSection, open: ReadonlySet<string>): boolean {
-  return s.parentId === null || open.has(s.parentId);
+/** A section shows only while every section above it is open. */
+export function isVisible(s: DocSection, open: ReadonlySet<string>, sections: DocSection[]): boolean {
+  return ancestorIds(sections, s.index).every((id) => open.has(id));
+}
+
+/** Parent first, h2 last. */
+export function ancestorIds(sections: DocSection[], index: number): string[] {
+  const ids: string[] = [];
+  let p = sections[index].parentId;
+  while (p !== null) {
+    ids.push(p);
+    const id = p;
+    p = sections.find((s) => s.id === id)!.parentId;
+  }
+  return ids;
 }

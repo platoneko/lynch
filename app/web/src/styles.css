@@ -131,7 +131,8 @@ button { font: inherit; color: inherit; }
 .sec-head { scroll-margin-top: var(--bar-h); cursor: pointer; margin: 0; padding: 12px 0; border-bottom: 1px solid var(--line); display: flex; gap: 6px; }
 .sec-2 > .sec-head { font-size: 18px; }
 .sec-3 > .sec-head { font-size: 15px; padding-left: 14px; color: var(--text); }
-.sec-3 > .md { padding-left: 14px; }
+.sec-3 > .md, .sec-4 > .md { padding-left: 14px; }
+.sec-anchor { scroll-margin-top: var(--bar-h); }
 .sec-caret { flex: none; width: 1em; color: var(--muted); }
 
 /* Reading typography: CJK prose mixed with Latin and inline math needs more

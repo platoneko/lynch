@@ -71,6 +71,40 @@ describe('buildDoc', () => {
   });
 });
 
+describe('table labels', () => {
+  const doc = buildDoc([
+    '**表0 · 不在小节里**', '',
+    '## 3. 可演算块', '', '**表9 · 直属章节**', '',
+    '### Outputs — 锚点', '', '- L = 1', '',
+    '**表1 · 档位构造**（CNY / 股）', '', '| a |', '|---|', '| 1 |', '',
+    'text **表5 · 句中**', '', '1. **表2′ 带边 r**：步骤', '',
+    '**表2′ · 并列价带（非主尺：带边 r 9.60%）**', '', '| b |', '|---|', '| 2 |', '',
+    '## 4. Changelog', '', '**表3 · 换章后**', '',
+  ].join('\n'), TARGETS);
+
+  it('makes each table label under an h3 a jump point inside it', () => {
+    expect(doc.sections.map((s) => [s.title, s.level, s.parentId])).toEqual([
+      ['3. 可演算块', 2, null],
+      ['Outputs — 锚点', 3, 's0'],
+      ['表1 · 档位构造', 4, 's1'],
+      ['表2′ · 并列价带', 4, 's1'],
+      ['4. Changelog', 2, null],
+    ]);
+  });
+
+  it('keeps the label paragraph in the table section body', () => {
+    expect(doc.sections[1].bodyHtml).toContain('L = 1');
+    expect(doc.sections[1].bodyHtml).not.toContain('表1');
+    expect(doc.sections[2].bodyHtml).toContain('<strong>表1 · 档位构造</strong>（CNY / 股）');
+    expect(doc.sections[2].bodyHtml).toContain('表5 · 句中');
+    expect(doc.sections[3].bodyHtml).toContain('非主尺');
+  });
+
+  it('labels a table under its chapter', () => {
+    expect(sectionLabel(doc.sections[2], doc.sections)).toBe('§3 › 表1 · 档位构造');
+  });
+});
+
 describe('table layout', () => {
   const long = (s: string) => s.repeat(100);
   const render = (lines: string[]) => buildDoc(['## 0. x', '', ...lines, ''].join('\n'), TARGETS).sections[0].bodyHtml;

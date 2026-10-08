@@ -2,14 +2,15 @@ import katex from 'katex';
 import MarkdownIt from 'markdown-it';
 import texmath from 'markdown-it-texmath';
 import { axisHash, docHash } from '../route';
+import { ancestorIds } from './nav';
 
 export interface DocSection {
   id: string;
-  index: number; // position in the flat h2/h3 order the jump bars walk
-  level: 2 | 3;
+  index: number; // position in the flat order the jump bars walk
+  level: 2 | 3 | 4; // 4: a table label inside an h3 (`**表1 · …**`), a jump point that never folds
   title: string;
-  parentId: string | null; // the enclosing h2 for an h3
-  bodyHtml: string; // content up to the next h2/h3, children excluded
+  parentId: string | null; // the enclosing h2 for an h3, the enclosing h3 for a table label
+  bodyHtml: string; // content up to the next section, children excluded
 }
 
 export interface BuiltDoc {
@@ -153,29 +154,50 @@ export function buildDoc(source: string, targets: LinkTargets): BuiltDoc {
   const tokens = md.parse(source, env);
   const render = (from: number, to: number) => md.renderer.render(tokens.slice(from, to), md.options, env);
 
-  // Step 1: find the section boundaries (h2/h3 openings).
-  const starts = tokens.flatMap((t, i) =>
-    t.type === 'heading_open' && (t.tag === 'h2' || t.tag === 'h3') ? [i] : [],
-  );
+  // Step 1: find the section boundaries: h2/h3 openings, and table labels inside an h3.
+  const boundaries: { start: number; level: 2 | 3 | 4; title: string; bodyFrom: number }[] = [];
+  let inH3 = false;
+  tokens.forEach((t, i) => {
+    if (t.type === 'heading_open' && (t.tag === 'h2' || t.tag === 'h3')) {
+      inH3 = t.tag === 'h3';
+      // A heading is open/inline/close; its body starts after it.
+      boundaries.push({ start: i, level: inH3 ? 3 : 2, title: headingText(tokens[i + 1]), bodyFrom: i + 3 });
+      return;
+    }
+    const label = inH3 ? tableLabel(tokens, i) : null;
+    // The label paragraph stays in the body: it is the table's caption.
+    if (label !== null) boundaries.push({ start: i, level: 4, title: label, bodyFrom: i });
+  });
 
-  // Step 2: slice the token stream at those boundaries; each heading is open/inline/close.
-  let currentH2: string | null = null;
-  const sections = starts.map((start, i): DocSection => {
-    const level = tokens[start].tag === 'h2' ? 2 : 3;
+  // Step 2: slice the token stream at those boundaries; a section's parent is the latest one a level up.
+  const latest = new Map<number, string>(); // level → id
+  const sections = boundaries.map((b, i): DocSection => {
     const id = `s${i}`;
-    if (level === 2) currentH2 = id;
-    const end = i + 1 < starts.length ? starts[i + 1] : tokens.length;
+    latest.set(b.level, id);
+    const end = i + 1 < boundaries.length ? boundaries[i + 1].start : tokens.length;
     return {
       id,
       index: i,
-      level,
-      title: headingText(tokens[start + 1]),
-      parentId: level === 3 ? currentH2 : null,
-      bodyHtml: render(start + 3, end),
+      level: b.level,
+      title: b.title,
+      parentId: b.level === 2 ? null : latest.get(b.level - 1) ?? null,
+      bodyHtml: render(b.bodyFrom, end),
     };
   });
 
-  return { headerHtml: render(0, starts[0] ?? tokens.length), sections };
+  return { headerHtml: render(0, boundaries[0]?.start ?? tokens.length), sections };
+}
+
+/**
+ * A top-level paragraph opening with `**表2′ · 并列价带（…）**` → `表2′ · 并列价带`; anything else → null.
+ * A list item opening that way cites a table (a method step), it does not caption one.
+ */
+function tableLabel(tokens: Token[], i: number): string | null {
+  if (tokens[i].type !== 'paragraph_open' || tokens[i].level !== 0) return null;
+  // markdown-it leads a paragraph that opens with emphasis with an empty text token.
+  const [open, text] = (tokens[i + 1].children ?? []).filter((c) => !(c.type === 'text' && c.content === ''));
+  if (open?.type !== 'strong_open' || text?.type !== 'text' || !/^表\d/.test(text.content)) return null;
+  return text.content.split(/[（(]/)[0].trim();
 }
 
 /** A fragment lifted out of a framework (e.g. an Assumptions cell), rendered like the document body. */
@@ -191,14 +213,14 @@ function headingText(inline: Token): string {
     .trim();
 }
 
-/** Bar text: "§3 可演算块" for an h2, "§3 › Inputs" for an h3. */
+/** Bar text: "§3 可演算块" for an h2, "§3 › Inputs" for anything under it. */
 export function sectionLabel(s: DocSection, sections: DocSection[]): string {
   const chapter = /^(\d+)\.\s*(.*)$/;
   if (s.parentId === null) {
     const m = chapter.exec(s.title);
     return m ? `§${m[1]} ${m[2]}` : s.title;
   }
-  const parent = sections.find((p) => p.id === s.parentId);
-  const m = parent ? chapter.exec(parent.title) : null;
-  return `${m ? `§${m[1]}` : parent?.title ?? ''} › ${s.title}`;
+  const top = sections.find((p) => p.id === ancestorIds(sections, s.index).at(-1));
+  const m = top ? chapter.exec(top.title) : null;
+  return `${m ? `§${m[1]}` : top?.title ?? ''} › ${s.title}`;
 }

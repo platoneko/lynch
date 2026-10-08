@@ -154,7 +154,16 @@ export function DocPage({ load: fetchSource, targets, head, onBack, barExtra }: 
           {head}
           <div className="md" dangerouslySetInnerHTML={{ __html: doc.headerHtml }} />
         </div>
-        {sections.filter((s) => isVisible(s, open)).map((s) => {
+        {sections.filter((s) => isVisible(s, open, sections)).map((s) => {
+          // A table label folds nothing: an empty anchor marks the jump point and its caption stays in the body.
+          if (s.level === 4) {
+            return (
+              <section key={s.id} className="sec sec-4">
+                <div className="sec-anchor" data-sec={s.index} />
+                <div className="md" dangerouslySetInnerHTML={{ __html: s.bodyHtml }} />
+              </section>
+            );
+          }
           const Heading = s.level === 2 ? 'h2' : 'h3';
           const isOpen = open.has(s.id);
           return (
@@ -184,8 +193,12 @@ export function DocPage({ load: fetchSource, targets, head, onBack, barExtra }: 
   );
 }
 
-/** A heading as shown (and searched): a chapter by its § label, a subsection by its own title. */
+/**
+ * A heading as shown (and searched): a chapter by its § label, a subsection by its own title;
+ * a table label shows no heading, its caption is searched as body.
+ */
 function headingText(s: DocSection, sections: DocSection[]): string {
+  if (s.level === 4) return '';
   return s.level === 2 ? sectionLabel(s, sections) : s.title;
 }
 
