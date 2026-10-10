@@ -58,18 +58,18 @@
 - `GET /api/earnings` →
   ```json
   {
-    "fetched_at": "2026-10-11T09:02:11+08:00",
+    "fetched_day": "2026-10-11",
     "error": null,
     "items": [{
-      "ticker": "TSM.US", "name": "台积电",
+      "ticker": "TSM.US",
       "status": "released",
-      "date": "2026-10-14", "slot": "after", "release_at": "2026-10-14T16:00:00-04:00",
+      "date": "2026-10-14", "day_offset": -1, "slot": "after", "release_at": "2026-10-14T16:00:00-04:00",
       "period": "2026 财年第 3 季度",
       "researched": false, "ignored": false
     }]
   }
   ```
-  `status`：`released` | `upcoming`；`slot`：`before` | `during` | `after` | `unknown`；`period` 为 `content` 去掉「业绩披露」。排序：已出按发布时刻倒序，即将发布按发布时刻正序。
+  `fetched_day`：最近一次成功全量查询的北京日期（从未查成功为 `null`）。`day_offset`：发布日减去该市场当地今天的天数，前端据此显示「今天 / 明天 / 昨天」。`status`：`released` | `upcoming`；`slot`：`before` | `during` | `after` | `unknown`；`period` 为 `content` 去掉「业绩披露」。名字不在这里返回：前端已有框架列表，按代码取名字。排序：已出按发布时刻倒序，即将发布按发布时刻正序。
 - `POST /api/earnings/ignore`、`POST /api/earnings/unignore`，body `{ticker, date}`，走现有 `_guarded`（CSRF）；票须在框架池里。
 - 日历拉取放 `eval/lib/earnings_lb.py`：改为返回每票事件列表（日期、时段、期别）；删掉 `fetch_latest_period(s)` 和按窗口挑日期的逻辑；`normalize_symbol` 从将删除的 `earnings_available.py` 移入。
 
