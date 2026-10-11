@@ -52,6 +52,13 @@ def test_todays_open_bar_is_left_out():
     assert b.sigma == pytest.approx(0.01, rel=1e-6) and b.volume == 1000.0
 
 
+def test_todays_bar_counts_once_settled():
+    bars = us_bars(61) + [DailyBar(datetime(2026, 9, 21, 4, tzinfo=timezone.utc), 500.0, 9e9)]
+    before = baseline_from_bars("AAA.US", bars, datetime(2026, 9, 21, 16, 22, tzinfo=MARKET_TZ["US"]))
+    after = baseline_from_bars("AAA.US", bars, datetime(2026, 9, 21, 16, 23, tzinfo=MARKET_TZ["US"]))
+    assert before.sigma == pytest.approx(0.01, rel=1e-6) and after.sigma > 0.1
+
+
 def test_fewer_than_61_closed_bars_is_no_baseline():
     assert baseline_from_bars("AAA.US", us_bars(60), NY_NOW) is None
 
@@ -61,9 +68,9 @@ def test_hk_bars_are_dated_in_hong_kong():
     days = weekdays_until(date(2026, 9, 18), 61)
     bars = [DailyBar(datetime(d.year, d.month, d.day, tzinfo=MARKET_TZ["HK"]).astimezone(timezone.utc),
                      100.0 * (1.01 if i % 2 else 1.0), 5.0) for i, d in enumerate(days)]
-    # Friday 09-18 in Hong Kong is still "today" until its midnight: judged on Sat 01:00 HK, all 61 count.
-    assert baseline_from_bars("0700.HK", bars, datetime(2026, 9, 19, 1, tzinfo=MARKET_TZ["HK"])) is not None
-    assert baseline_from_bars("0700.HK", bars, datetime(2026, 9, 18, 23, tzinfo=MARKET_TZ["HK"])) is None
+    # Friday's bar settles at 16:23 Hong Kong; dated in UTC it would read as Thursday's and count early.
+    assert baseline_from_bars("0700.HK", bars, datetime(2026, 9, 18, 16, 23, tzinfo=MARKET_TZ["HK"])) is not None
+    assert baseline_from_bars("0700.HK", bars, datetime(2026, 9, 18, 16, 22, tzinfo=MARKET_TZ["HK"])) is None
 
 
 class FakeBars:
@@ -80,7 +87,7 @@ class FakeBars:
 def test_baseline_cache_once_per_day_and_records_too_short(tmp_path):
     fake = FakeBars(us_bars())
     cache = BaselineCache(tmp_path / "baseline.json", fetch=fake, wall=lambda: NOW, sleep=lambda s: None)
-    got, day, error = cache.get(["AAA.US", "BBB.US"])
+    got, error = cache.get(["AAA.US", "BBB.US"])
     assert got["AAA.US"].sigma == pytest.approx(0.01, rel=1e-6) and error is None
     assert [c[1] for c in fake.calls] == [62, 62]
     cache.get(["AAA.US", "BBB.US"])
@@ -93,9 +100,30 @@ def test_baseline_cache_once_per_day_and_records_too_short(tmp_path):
 def test_baseline_cache_failure_keeps_others(tmp_path):
     fake = FakeBars(us_bars())
     fake.fail = {"BBB.US"}
-    got, _, error = BaselineCache(tmp_path / "baseline.json", fetch=fake, wall=lambda: NOW,
-                                  sleep=lambda s: None).get(["AAA.US", "BBB.US"])
+    got, error = BaselineCache(tmp_path / "baseline.json", fetch=fake, wall=lambda: NOW,
+                               sleep=lambda s: None).get(["AAA.US", "BBB.US"])
     assert "AAA.US" in got and "BBB.US" not in got and "token expired" in error
+
+
+def test_each_market_is_refetched_after_its_own_close(tmp_path):
+    fake = FakeBars(us_bars())
+    now = [datetime(2026, 9, 21, 15, 0, tzinfo=MARKET_TZ["A"]).timestamp()]  # Monday
+    cache = BaselineCache(tmp_path / "baseline.json", fetch=fake, wall=lambda: now[0], sleep=lambda s: None)
+    pool = ["600036.SH", "0700.HK", "AAA.US"]
+
+    def fetched_at(t: datetime) -> list[str]:
+        now[0] = t.timestamp()
+        done = len(fake.calls)
+        cache.get(pool)
+        return [symbol for symbol, _ in fake.calls[done:]]
+    assert fetched_at(datetime(2026, 9, 21, 15, 0, tzinfo=MARKET_TZ["A"])) == pool  # nothing cached yet
+    assert fetched_at(datetime(2026, 9, 21, 15, 22, tzinfo=MARKET_TZ["A"])) == []
+    assert fetched_at(datetime(2026, 9, 21, 15, 23, tzinfo=MARKET_TZ["A"])) == ["600036.SH"]
+    assert fetched_at(datetime(2026, 9, 21, 16, 23, tzinfo=MARKET_TZ["HK"])) == ["0700.HK"]
+    assert fetched_at(datetime(2026, 9, 22, 0, 1, tzinfo=MARKET_TZ["A"])) == []  # Beijing midnight is no trigger
+    assert fetched_at(datetime(2026, 9, 21, 16, 23, tzinfo=MARKET_TZ["US"])) == ["AAA.US"]
+    assert fetched_at(datetime(2026, 9, 25, 16, 23, tzinfo=MARKET_TZ["US"])) == pool  # Friday: every market due
+    assert fetched_at(datetime(2026, 9, 26, 16, 23, tzinfo=MARKET_TZ["US"])) == []  # Saturday: no session
 
 
 def test_reads_do_not_wait_on_a_fetch_in_flight(tmp_path):
@@ -111,7 +139,7 @@ def test_reads_do_not_wait_on_a_fetch_in_flight(tmp_path):
     upkeep.start()
     assert started.wait(5)
     t = time.monotonic()
-    assert cache.get(["AAA.US"], refresh=False) == ({}, None, None)
+    assert cache.get(["AAA.US"], refresh=False) == ({}, None)
     assert time.monotonic() - t < 1
     release.set()
     upkeep.join(5)
@@ -212,7 +240,7 @@ def test_corrupt_files_start_empty(tmp_path):
     (tmp_path / "baseline.json").write_text("[1, 2", encoding="utf-8")
     assert AnomalyStore(tmp_path / "events.json", wall=lambda: NOW).events() == []
     cache = BaselineCache(tmp_path / "baseline.json", fetch=FakeBars(us_bars()), wall=lambda: NOW, sleep=lambda s: None)
-    assert cache.get(["AAA.US"], refresh=False) == ({}, None, None)
+    assert cache.get(["AAA.US"], refresh=False) == ({}, None)
 
 
 # ---- the facade

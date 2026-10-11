@@ -1,8 +1,9 @@
 """When each market's quotes can move, by weekday trading hours (holidays not modelled).
 
-Two readers: the quote cache skips a Longbridge call when no market in the pool has
-traded since the last one, and a US row dates its regular price (which has no trade
-time) at the latest regular close to pick the newest price across sessions. A holiday counts as a trading day: it costs
+Three readers: the quote cache skips a Longbridge call when no market in the pool has
+traded since the last one, a US row dates its regular price (which has no trade
+time) at the latest regular close to pick the newest price across sessions, and the anomaly baselines read each
+market's daily bars once its session's bar settles. A holiday counts as a trading day: it costs
 extra fetches, and on a US holiday the prior day's after-hours price is not shown.
 """
 from __future__ import annotations
@@ -25,6 +26,9 @@ LIVE_HOURS = {
 SETTLE_GRACE = timedelta(minutes=15)
 US_OPEN = clock(9, 30)
 US_CLOSE = clock(16, 0)
+# A session's daily bar is read 23 minutes after the regular close: past the closing auction and late
+# prints, and off the hour and half hour.
+DAILY_BAR_SETTLED = {"A": clock(15, 23), "HK": clock(16, 23), "US": clock(16, 23)}
 
 
 def traded_between(market: str | None, t0: float, t1: float) -> bool:
@@ -52,6 +56,16 @@ def us_regular_close(t: float) -> datetime:
     while not (_is_weekday(d) and datetime.combine(d, US_OPEN, now.tzinfo) <= now):
         d -= timedelta(days=1)
     return datetime.combine(d, US_CLOSE, now.tzinfo)
+
+
+def daily_bar_settled(market: str, t: float) -> datetime:
+    """When the latest weekday session whose daily bar had settled by `t` settled; its local date is the bar's."""
+    tz = MARKET_TZ[market]
+    now = datetime.fromtimestamp(t, tz)
+    d = now.date()
+    while not (_is_weekday(d) and datetime.combine(d, DAILY_BAR_SETTLED[market], tz) <= now):
+        d -= timedelta(days=1)
+    return datetime.combine(d, DAILY_BAR_SETTLED[market], tz)
 
 
 def _is_weekday(d: date) -> bool:

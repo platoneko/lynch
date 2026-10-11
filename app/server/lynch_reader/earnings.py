@@ -33,6 +33,9 @@ EARNINGS_DIR = REPO_ROOT / "output" / "earnings"
 CALENDAR_FILE = EARNINGS_DIR / "calendar.json"
 IGNORED_FILE = EARNINGS_DIR / "ignored.json"
 LOOKAHEAD_DAYS = 30  # passed as --end; the CLI returns later releases anyway
+# Beijing, every day: A and HK have closed, the US regular session is hours away, and the HK baselines' 16:23
+# kline run is done, so the two never hit longbridge together.
+CALENDAR_RUN = clock(16, 37)
 
 Fetch = Callable[[list[str], date, date], CalendarFetch]
 
@@ -89,8 +92,19 @@ class CalendarCache(DailyTickerCache[list[CalendarEvent]]):
 
     def get(self, pool: list[str], *,
             refresh: bool = True) -> tuple[dict[str, list[CalendarEvent]], str | None, str | None]:
-        events, day, error = super().get(pool, refresh=refresh)
+        """(events per pool ticker, Beijing day of the last full fetch, last error)."""
+        events, error = super().get(pool, refresh=refresh)
+        at = self._last_full_fetch("all")
+        day = None if at is None else datetime.fromtimestamp(at, BJT).date().isoformat()
         return {t: events.get(t, []) for t in pool}, day, error
+
+    def _group(self, ticker: str) -> str:
+        return "all"
+
+    def _run_at(self, group: str, now: float) -> float:
+        t = datetime.fromtimestamp(now, BJT)
+        run = datetime.combine(t.date(), CALENDAR_RUN, BJT)
+        return (run if run <= t else run - timedelta(days=1)).timestamp()
 
     def _fetch(self, tickers: list[str], today: date) -> TickerFetch[list[CalendarEvent]]:
         # One extra day back: a US market's local day trails Beijing's, so its 7th day is Beijing's 8th.

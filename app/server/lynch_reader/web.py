@@ -125,7 +125,7 @@ def create_app(frameworks_dir: Path, web_dist: Path, quotes: QuoteCache, devices
         return Response(path.read_text(encoding="utf-8"), media_type="text/markdown; charset=utf-8")
 
     def earnings_list(request: Request) -> Response:
-        # Sync: the first request of a Beijing day waits on the longbridge calendar in the thread pool.
+        # Sync: the first request after the daily calendar run falls due may wait on longbridge in the thread pool.
         tag = anomalies.earnings_tag if anomalies is not None else (lambda t: None)
         return JSONResponse(earnings.snapshot(pool(), chat.ticker_chat_starts() if chat is not None else [], tag))
 

@@ -4,7 +4,7 @@ from datetime import datetime
 
 import pytest
 
-from lynch_reader.market_hours import MARKET_TZ, traded_between, us_regular_close
+from lynch_reader.market_hours import MARKET_TZ, daily_bar_settled, traded_between, us_regular_close
 
 # 2026-09-21 is a Monday; 09-25 a Friday; 09-27 a Sunday.
 
@@ -40,3 +40,18 @@ def test_unknown_market_always_counts_as_traded():
 ])
 def test_us_regular_close(now, close_day):
     assert us_regular_close(at("US", *now)) == datetime(2026, 9, close_day, 16, 0, tzinfo=MARKET_TZ["US"])
+
+
+@pytest.mark.parametrize("market, now, settled_day", [
+    ("A", (21, 15, 22), 18),  # Monday before 15:23: Friday's bar is the latest settled
+    ("A", (21, 15, 23), 21),
+    ("HK", (21, 16, 22), 18),
+    ("HK", (21, 16, 23), 21),
+    ("US", (21, 16, 22), 18),
+    ("US", (21, 16, 23), 21),
+    ("US", (27, 12, 0), 25),  # Sunday
+])
+def test_daily_bar_settled(market, now, settled_day):
+    hh, mm = {"A": (15, 23), "HK": (16, 23), "US": (16, 23)}[market]
+    expected = datetime(2026, 9, settled_day, hh, mm, tzinfo=MARKET_TZ[market])
+    assert daily_bar_settled(market, at(market, *now)) == expected

@@ -2,8 +2,9 @@
 
 A price counts when its move from its own session's base close is MOVE_MULT× the ticker's usual daily move, or,
 in the regular session, VOLUME_MOVE_MULT× on VOLUME_MULT× its usual volume. Prices come from the one quote copy
-(catalog.QuoteCache), judged on each new batch; the usual move and volume come from daily bars fetched once per
-Beijing day. Only the price at fetch time is judged: a spike that reverts between fetches is a stray print.
+(catalog.QuoteCache), judged on each new batch; the usual move and volume come from daily bars, each market's
+fetched once its session's bar settles (market_hours.DAILY_BAR_SETTLED). Only the price at fetch time is judged:
+a spike that reverts between fetches is a stray print.
 """
 from __future__ import annotations
 
@@ -22,7 +23,7 @@ from typing import Any
 from lynch_reader.catalog import REPO_ROOT, QuoteBatch  # also puts the repo root on sys.path for eval.lib
 from lynch_reader.daily_cache import BJT, DailyTickerCache, TickerFetch, write_json
 from lynch_reader.earnings import CalendarCache, judge
-from lynch_reader.market_hours import MARKET_TZ
+from lynch_reader.market_hours import DAILY_BAR_SETTLED, MARKET_TZ, daily_bar_settled
 
 from eval.lib.frameworks import market_bucket  # noqa: E402
 from eval.lib.price import DailyBar, Quote, fetch_daily_bars  # noqa: E402
@@ -49,12 +50,13 @@ class Baseline:
 
 
 def baseline_from_bars(ticker: str, bars: list[DailyBar], now: datetime) -> Baseline | None:
-    """From closed sessions only: the bar dated the market's local today may still be open."""
-    tz = MARKET_TZ.get(market_bucket(ticker))
-    if tz is None:
+    """From settled sessions only: today's bar counts once it settles, before that it may still be moving."""
+    market = market_bucket(ticker)
+    if market not in DAILY_BAR_SETTLED:
         return None
-    today = now.astimezone(tz).date()
-    closed = [b for b in bars if b.at.astimezone(tz).date() < today]
+    tz = MARKET_TZ[market]
+    settled = daily_bar_settled(market, now.timestamp()).date()
+    closed = [b for b in bars if b.at.astimezone(tz).date() <= settled]
     if len(closed) < LOOKBACK + 1:
         return None
     window = closed[-(LOOKBACK + 1):]
@@ -67,13 +69,22 @@ def baseline_from_bars(ticker: str, bars: list[DailyBar], now: datetime) -> Base
 
 
 class BaselineCache(DailyTickerCache[Baseline | None]):
-    """Each ticker's usual move and volume, refreshed by the policy in daily_cache.py. A ticker fetched with too
-    few bars holds None: judged never, refetched only on the next full fetch."""
+    """Each ticker's usual move and volume, refreshed by the policy in daily_cache.py: each market's tickers once
+    its session's bar settles. A ticker fetched with too few bars holds None: judged never, refetched only on its
+    market's next full fetch."""
 
     def __init__(self, path: Path, fetch: Callable[[str, int], list[DailyBar]] = fetch_daily_bars,
                  wall: Callable[[], float] = time.time, sleep: Callable[[float], None] = time.sleep) -> None:
         self._bars, self._sleep = fetch, sleep
         super().__init__(path, wall)
+
+    def _group(self, ticker: str) -> str:
+        return market_bucket(ticker) or "other"
+
+    def _run_at(self, group: str, now: float) -> float:
+        if group not in DAILY_BAR_SETTLED:
+            return -math.inf  # no session clock and never judged: fetched once, as a new ticker
+        return daily_bar_settled(group, now).timestamp()
 
     def _fetch(self, tickers: list[str], today: date) -> TickerFetch[Baseline | None]:
         out: TickerFetch[Baseline | None] = TickerFetch()
@@ -200,7 +211,7 @@ class Anomalies:
 
     def observe(self, batch: QuoteBatch, pool: list[str]) -> None:
         """Judge a new batch. `pool` leaves archived tickers out. Reads caches only: never waits on longbridge."""
-        bases, _, _ = self._baselines.get(pool, refresh=False)
+        bases, _ = self._baselines.get(pool, refresh=False)
         calendar, _, _ = self._calendar.get(pool, refresh=False)
         now = datetime.fromtimestamp(self._wall(), BJT)
         found = [(t, ref, hit) for t in pool
@@ -209,7 +220,7 @@ class Anomalies:
         self._store.record(found, lambda t: judge(t, calendar.get(t, []), now) is not None)
 
     def upkeep(self, pool: list[str]) -> None:
-        """The poller's daily fetches, off the request path: baselines, and the calendar `observe` reads."""
+        """The poller's scheduled fetches, off the request path: baselines, and the calendar `observe` reads."""
         self._baselines.get(pool)
         self._calendar.get(pool)
 
@@ -222,7 +233,7 @@ class Anomalies:
                 continue
             if e.ticker not in latest or e.first_at > latest[e.ticker].first_at:
                 latest[e.ticker] = e
-        _, _, baseline_error = self._baselines.get(pool, refresh=False)
+        _, baseline_error = self._baselines.get(pool, refresh=False)
         return {
             "error": quote_error or baseline_error,
             "items": [{**_hit_json(e),

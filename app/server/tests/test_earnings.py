@@ -127,7 +127,7 @@ def cal():
     return FakeCalendar({"TSM.US": [ev("2026-10-14", "after")], "0700.HK": [ev("2026-11-12", "after")]})
 
 
-def test_one_full_fetch_per_beijing_day(tmp_path, cal):
+def test_one_full_fetch_a_day_at_1637_beijing(tmp_path, cal):
     clk = Clock(at("A", 10, 14, 8))
     cache = CalendarCache(tmp_path / "calendar.json", fetch=cal, wall=clk)
     events, day, error = cache.get(["TSM.US", "0700.HK"])
@@ -135,12 +135,18 @@ def test_one_full_fetch_per_beijing_day(tmp_path, cal):
     assert events["TSM.US"] == [ev("2026-10-14", "after")]
     _, start, end = cal.calls[0]
     assert (start.isoformat(), end.isoformat()) == ("2026-10-06", "2026-11-13")  # 8 days back: see the US test
-    clk.set(at("A", 10, 14, 23, 59))
+    clk.set(at("A", 10, 14, 16, 36))
     cache.get(["TSM.US", "0700.HK"])
     assert len(cal.calls) == 1
-    clk.set(at("A", 10, 15, 0, 1))
+    clk.set(at("A", 10, 14, 16, 37))
     cache.get(["TSM.US", "0700.HK"])
     assert len(cal.calls) == 2 and cal.calls[1][0] == ["TSM.US", "0700.HK"]
+    clk.set(at("A", 10, 15, 0, 1))  # Beijing midnight is no trigger
+    cache.get(["TSM.US", "0700.HK"])
+    assert len(cal.calls) == 2
+    clk.set(at("A", 10, 17, 16, 40))  # a Saturday counts too: no session is involved
+    cache.get(["TSM.US", "0700.HK"])
+    assert len(cal.calls) == 3
 
 
 def test_new_ticker_is_fetched_alone_and_removed_one_filtered(tmp_path, cal):
@@ -316,6 +322,6 @@ def test_read_only_get_never_fetches(tmp_path, cal):
     assert cache.get(["TSM.US"], refresh=False) == ({"TSM.US": []}, None, None)
     assert cal.calls == []
     cache.get(["TSM.US"])
-    clk.set(at("A", 10, 15, 8))  # a new Beijing day: a refreshing get would refetch
+    clk.set(at("A", 10, 15, 8))  # past 10-14 16:37: a refreshing get would refetch
     events, day, _ = cache.get(["TSM.US"], refresh=False)
     assert len(cal.calls) == 1 and day == "2026-10-14" and events["TSM.US"]
