@@ -7,7 +7,8 @@ export type Route =
   | { page: 'chat-new'; ticker: string | null }
   | { page: 'chat-new-discover' }
   | { page: 'candidates' }
-  | { page: 'earnings' };
+  | { page: 'earnings' }
+  | { page: 'anomalies' };
 
 export function parseRoute(hash: string): Route {
   const doc = /^#\/doc\/([^/?#]+)$/.exec(hash);
@@ -17,6 +18,7 @@ export function parseRoute(hash: string): Route {
   if (hash === '#/chats') return { page: 'chats' };
   if (hash === '#/candidates') return { page: 'candidates' };
   if (hash === '#/earnings') return { page: 'earnings' };
+  if (hash === '#/anomalies') return { page: 'anomalies' };
   // Checked before chat ids: `new-discover` would otherwise read as one (ids are uuids).
   if (hash === '#/chat/new-discover') return { page: 'chat-new-discover' };
   // `new` is not a conversation id: ids are uuids.
@@ -57,4 +59,8 @@ export function candidatesHash(): string {
 
 export function earningsHash(): string {
   return '#/earnings';
+}
+
+export function anomaliesHash(): string {
+  return '#/anomalies';
 }

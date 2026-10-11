@@ -1,7 +1,14 @@
+import { AlertRow } from '../alerts/AlertRow';
+import { moveText, SESSION_CN } from '../anomalies/model';
 import { loadDraft, saveDraft } from '../chat/drafts';
 import { doneTag, isPending, whenText } from './model';
 import { earningsPrompt, withPrompt } from './prompts';
 import type { EarningsItem, EarningsList } from './types';
+
+/** " 盘后" after a filed anomaly's move; nothing for the regular session. */
+function anomalySession(it: EarningsItem): string {
+  return it.anomaly && SESSION_CN[it.anomaly.session] ? ` ${SESSION_CN[it.anomaly.session]}` : '';
+}
 
 /** Pool tickers that just released or are about to release earnings, each a tap away from a research chat. */
 export function EarningsPage({ list, error, label, onBack, onResearch, onIgnore, onUnignore, onOpenDoc }: {
@@ -22,22 +29,13 @@ export function EarningsPage({ list, error, label, onBack, onResearch, onIgnore,
     onResearch(it.ticker);
   };
 
-  const row = (it: EarningsItem) => {
-    const tag = doneTag(it);
-    return (
-      <div key={it.ticker} className={`cand-row ${tag ? 'earn-done' : ''}`}>
-        <button className="chat-row-main earn-main" onClick={() => onOpenDoc(it.ticker)}>
-          <span className="chat-row-title">{label(it.ticker)}</span>
-          <span className="earn-sub">{it.period} · {whenText(it)}{tag ? ` · ${tag}` : ''}</span>
-        </button>
-        <button className="text-btn" onClick={() => research(it)}>调研</button>
-        {isPending(it) && <button className="x-btn" aria-label={`忽略 ${label(it.ticker)}`} onClick={() => onIgnore(it)}>×</button>}
-        {it.status === 'released' && it.ignored && !it.researched && (
-          <button className="text-btn" onClick={() => onUnignore(it)}>恢复</button>
-        )}
-      </div>
-    );
-  };
+  const row = (it: EarningsItem) => (
+    <AlertRow key={it.ticker} title={label(it.ticker)}
+      sub={`${it.period} · ${whenText(it)}${it.anomaly ? ` · 异动 ${moveText(it.anomaly)}${anomalySession(it)}` : ''}`}
+      done={doneTag(it)} pending={isPending(it)} canRestore={it.status === 'released' && it.ignored && !it.researched}
+      onOpen={() => onOpenDoc(it.ticker)} onResearch={() => research(it)}
+      onIgnore={() => onIgnore(it)} onRestore={() => onUnignore(it)} />
+  );
 
   return (
     <div className="chats">

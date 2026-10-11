@@ -4,7 +4,8 @@ import type { EarningsItem } from './types';
 
 const item = (o: Partial<EarningsItem> = {}): EarningsItem => ({
   ticker: 'TSM.US', status: 'released', date: '2026-10-14', day_offset: 0, slot: 'after',
-  release_at: '2026-10-14T16:00:00-04:00', period: '2026 财年第 3 季度', researched: false, ignored: false, ...o,
+  release_at: '2026-10-14T16:00:00-04:00', period: '2026 财年第 3 季度', researched: false, ignored: false,
+  anomaly: null, ...o,
 });
 
 describe('earnings model', () => {

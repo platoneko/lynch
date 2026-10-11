@@ -1,4 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { AnomaliesPage } from './anomalies/AnomaliesPage';
+import { fetchAnomalies, ignoreAnomaly, unignoreAnomaly } from './anomalies/api';
+import { pendingCount as anomalyPendingCount } from './anomalies/model';
+import type { AnomalyList } from './anomalies/types';
 import { archiveFramework, fetchAxis, fetchCatalog, fetchFramework, restoreFramework } from './api';
 import {
   archiveCandidate, archiveChat, archiveTicker, fetchCandidates, fetchChatOptions, fetchChats, restoreCandidate,
@@ -19,12 +23,13 @@ import type { EarningsList } from './earnings/types';
 import { HomePage } from './home/HomePage';
 import { DEFAULT_FILTER, type HomeFilter } from './home/listModel';
 import {
-  axisHash, candidatesHash, chatHash, chatsHash, docHash, earningsHash, newChatHash, newDiscoverHash, parseRoute,
-  type Route,
+  anomaliesHash, axisHash, candidatesHash, chatHash, chatsHash, docHash, earningsHash, newChatHash, newDiscoverHash,
+  parseRoute, type Route,
 } from './route';
 import type { Catalog } from './types';
 
-const EARNINGS_POLL_MS = 5 * 60_000;
+// The server refetches quotes every 5 minutes; the home list, earnings and anomalies are re-read at that pace.
+const ALERT_POLL_MS = 5 * 60_000;
 
 export function zoneLabels(catalog: Catalog): Map<string, string> {
   return new Map(catalog.zones.map((z) => [z.id, z.label]));
@@ -70,11 +75,26 @@ export function App() {
   useEffect(() => {
     if (route.page !== 'home' && route.page !== 'earnings') return;
     loadEarnings();
-    const timer = window.setInterval(loadEarnings, EARNINGS_POLL_MS);
+    const timer = window.setInterval(loadEarnings, ALERT_POLL_MS);
     return () => window.clearInterval(timer);
   }, [route.page, loadEarnings]);
   const dismiss = (p: Promise<unknown>) =>
     p.then(loadEarnings, (e: unknown) => setEarningsError(String(e instanceof Error ? e.message : e)));
+  const [anomalies, setAnomalies] = useState<AnomalyList | null>(null);
+  const [anomaliesError, setAnomaliesError] = useState<string | null>(null);
+  const loadAnomalies = useCallback(() => {
+    fetchAnomalies().then((l) => { setAnomalies(l); setAnomaliesError(null); },
+      (e: unknown) => setAnomaliesError(String(e instanceof Error ? e.message : e)));
+  }, []);
+  // Anomalies are judged on the server's 5-minute quote batches; poll at the same pace.
+  useEffect(() => {
+    if (route.page !== 'home' && route.page !== 'anomalies') return;
+    loadAnomalies();
+    const timer = window.setInterval(loadAnomalies, ALERT_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [route.page, loadAnomalies]);
+  const dismissAnomaly = (p: Promise<unknown>) =>
+    p.then(loadAnomalies, (e: unknown) => setAnomaliesError(String(e instanceof Error ? e.message : e)));
   const [chatOptions, setChatOptions] = useState<ChatOptions | null>(null);
   // A new conversation's first message, handed from its blank page to its own page.
   const [firstMessage, setFirstMessage] = useState<{ id: string; text: string } | null>(null);
@@ -98,6 +118,12 @@ export function App() {
   }, []);
 
   useEffect(() => load(false), [load]);
+  // The server refetches quotes every 5 minutes; re-read the list at that pace while it is on screen.
+  useEffect(() => {
+    if (route.page !== 'home') return;
+    const timer = window.setInterval(() => load(false), ALERT_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [route.page, load]);
   const reload = () => load(true);
 
   useEffect(() => {
@@ -191,6 +217,15 @@ export function App() {
         onOpenDoc={(t) => { window.location.hash = docHash(t); }} />
     );
   }
+  if (route.page === 'anomalies') {
+    return (
+      <AnomaliesPage list={anomalies} error={anomaliesError} label={(t) => labels.get(t) ?? t} onBack={goBack}
+        onResearch={(t) => { window.location.hash = newChatHash(t); }}
+        onIgnore={(it) => dismissAnomaly(ignoreAnomaly(it.ticker, it.ref))}
+        onUnignore={(it) => dismissAnomaly(unignoreAnomaly(it.ticker, it.ref))}
+        onOpenDoc={(t) => { window.location.hash = docHash(t); }} />
+    );
+  }
   if (route.page === 'doc') {
     const labels = zoneLabels(catalog);
     const { ticker } = route;
@@ -222,7 +257,8 @@ export function App() {
       <HomePage catalog={catalog} filter={filter} onFilter={setFilter} onOpen={openDoc} onOpenAxis={openAxis}
         onRefreshQuotes={reload} onRefreshFrameworks={() => load(false)} refreshing={loading}
         chatCount={chatList?.running_count ?? 0} onOpenChats={() => openFromHome(chatsHash())}
-        earningsPending={pendingCount(earnings)} onOpenEarnings={() => openFromHome(earningsHash())} />
+        earningsPending={pendingCount(earnings)} onOpenEarnings={() => openFromHome(earningsHash())}
+        anomaliesPending={anomalyPendingCount(anomalies)} onOpenAnomalies={() => openFromHome(anomaliesHash())} />
     </>
   );
 }

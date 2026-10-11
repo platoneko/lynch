@@ -20,8 +20,4 @@ export function whenText(it: EarningsItem): string {
   return `${NEAR_DAY[it.day_offset] ?? it.date.slice(5)}${SLOT_CN[it.slot]}`;
 }
 
-export function doneTag(it: EarningsItem): string | null {
-  if (it.researched) return '已调研';
-  if (it.ignored) return '已忽略';
-  return null;
-}
+export { doneTag } from '../alerts/model';

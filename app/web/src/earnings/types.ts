@@ -1,3 +1,5 @@
+import type { AnomalyHit } from '../anomalies/types';
+
 export type EarningsSlot = 'before' | 'during' | 'after' | 'unknown';
 
 /** One pool ticker's earnings row, judged by the server from the calendar and the market clock. */
@@ -11,6 +13,7 @@ export interface EarningsItem {
   period: string; // the calendar's wording, e.g. "2026 财年第 3 季度"
   researched: boolean; // a 讨论 chat on the ticker was started after the release
   ignored: boolean;
+  anomaly: AnomalyHit | null; // the ticker's anomaly filed under this row rather than the anomaly page
 }
 
 export interface EarningsList {

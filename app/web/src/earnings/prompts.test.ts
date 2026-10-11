@@ -1,10 +1,37 @@
 import { describe, expect, it } from 'vitest';
-import { earningsPrompt, withPrompt } from './prompts';
+import type { AnomalyItem } from '../anomalies/types';
+import { anomalyPrompt, earningsPrompt, withPrompt } from './prompts';
 import type { EarningsItem } from './types';
 
 const item = (o: Partial<EarningsItem> = {}): EarningsItem => ({
   ticker: 'TSM.US', status: 'released', date: '2026-10-14', day_offset: 0, slot: 'after',
-  release_at: '2026-10-14T16:00:00-04:00', period: '2026 财年第 3 季度', researched: false, ignored: false, ...o,
+  release_at: '2026-10-14T16:00:00-04:00', period: '2026 财年第 3 季度', researched: false, ignored: false,
+  anomaly: null, ...o,
+});
+
+// A local factory: importing another test file would re-run its tests here.
+const anomaly = (o: Partial<AnomalyItem> = {}): AnomalyItem => ({
+  ticker: 'WOLF.US', ref: '31.37', first_at: '2026-10-08T04:05:00+08:00',
+  move: 0.291, mult: 4.13, session: 'post', at: '2026-10-08T04:20:00+08:00',
+  reason: 'move', volume_mult: null, researched: false, ignored: false, ...o,
+});
+
+describe('anomaly prompts', () => {
+  it('anomaly prompt names the move, its base and the no-write rule', () => {
+    const p = anomalyPrompt(anomaly());
+    expect(p).toContain('WOLF.US 在 10-08 04:20 盘后 出现异动：相对基准收盘 31.37 +29.1%（约平时波动的 4.1 倍）');
+    expect(anomalyPrompt(anomaly({ session: 'regular' }))).toContain('WOLF.US 在 10-08 04:20 出现异动');
+    expect(p).toContain('frameworks/WOLF.US.md');
+    expect(p).toContain('落盘等我说「可以落盘」');
+  });
+  it('a volume anomaly states the volume multiple', () => {
+    expect(anomalyPrompt(anomaly({ reason: 'volume', volume_mult: 5.34, session: 'regular' })))
+      .toContain('；当天成交量是平时的 5.3 倍');
+  });
+  it('post-earnings prompt carries a filed anomaly', () => {
+    const p = earningsPrompt(item({ anomaly: anomaly() }));
+    expect(p.split('\n')[1]).toBe('财报前后出现异动：10-08 04:20 盘后 相对基准收盘 31.37 +29.1%（约平时波动的 4.1 倍），请一并解释。');
+  });
 });
 
 describe('earnings prompts', () => {
