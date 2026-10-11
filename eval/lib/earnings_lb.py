@@ -1,24 +1,52 @@
-"""Longbridge CLI fetchers for earnings calendar + latest report period."""
+"""Longbridge finance-calendar fetcher: every known earnings release of the given tickers.
+
+The app's earnings list judges released / upcoming from these events and the clock
+(app/server/lynch_reader/earnings.py); nothing here reads report periods.
+"""
 from __future__ import annotations
 
 import json
 import logging
 import shutil
 import subprocess
-from datetime import date, timedelta
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
-
-from eval.lib.earnings_available import calendar_lookup_key, normalize_symbol
 
 log = logging.getLogger(__name__)
 
-_CAL_BATCH = 10
+_CAL_BATCH = 10  # --symbol flags per call
+_CAL_COUNT = 100  # the CLI's maximum rows per call
+_BATCH_PAUSE_S = 0.5  # back-to-back calls trip Longbridge's per-second cap (code 429002)
 _HTTP_TIMEOUT_S = 60.0
+_SLOTS = ("before", "during", "after")  # anything else ("U", missing) is unknown
+_PERIOD_SUFFIX = "业绩披露"
 
 
-def _require_cli() -> None:
-    if not shutil.which("longbridge"):
-        raise RuntimeError("longbridge CLI not found on PATH")
+@dataclass(frozen=True)
+class CalendarEvent:
+    date: str  # market-local ISO date of the release
+    slot: str  # before | during | after | unknown
+    period: str  # the calendar's own wording, e.g. "2026 财年第 3 季度"
+
+
+@dataclass
+class CalendarFetch:
+    events: dict[str, list[CalendarEvent]] = field(default_factory=dict)  # every ticker of a batch that answered
+    failed: list[str] = field(default_factory=list)  # tickers of batches that did not
+    error: str | None = None  # the first failure, for the page's banner
+
+
+def normalize_symbol(ticker: str) -> str:
+    """Align framework tickers with Longbridge calendar symbols (0700.HK → 700.HK)."""
+    if "." not in ticker:
+        return ticker
+    code, mkt = ticker.rsplit(".", 1)
+    if mkt == "HK" and code.isdigit():
+        return f"{int(code)}.{mkt}"
+    return ticker
 
 
 def _parse_json_stdout(raw: str) -> Any:
@@ -31,20 +59,14 @@ def _parse_json_stdout(raw: str) -> Any:
         start = text.find("[")
     if start < 0:
         raise RuntimeError(f"longbridge stdout has no JSON: {text[:200]!r}")
-    dec = json.JSONDecoder()
-    data, _ = dec.raw_decode(text[start:])
+    data, _ = json.JSONDecoder().raw_decode(text[start:])
     return data
 
 
 def _run_json(cmd: list[str], *, timeout_s: float = _HTTP_TIMEOUT_S) -> Any:
-    _require_cli()
-    proc = subprocess.run(
-        cmd,
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=timeout_s,
-    )
+    if not shutil.which("longbridge"):
+        raise RuntimeError("longbridge CLI not found on PATH")
+    proc = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=timeout_s)
     if proc.returncode != 0:
         raise RuntimeError(
             f"longbridge failed (exit {proc.returncode}): "
@@ -53,123 +75,64 @@ def _run_json(cmd: list[str], *, timeout_s: float = _HTTP_TIMEOUT_S) -> Any:
     return _parse_json_stdout(proc.stdout)
 
 
-def fetch_latest_period(symbol: str, *, timeout_s: float = _HTTP_TIMEOUT_S) -> str | None:
-    """Return report period id (e.g. '2026.H1') or None."""
-    data = _run_json(
-        ["longbridge", "financial-report", symbol, "--latest", "--format", "json"],
-        timeout_s=timeout_s,
-    )
-    if not isinstance(data, dict):
-        return None
-    report = data.get("report")
-    if report is None:
-        return None
-    s = str(report).strip()
-    return s or None
-
-
-def fetch_latest_periods(
-    tickers: list[str],
-    *,
-    timeout_s: float = _HTTP_TIMEOUT_S,
-) -> dict[str, str]:
-    """Map framework ticker → latest period. Failures are omitted (logged)."""
-    out: dict[str, str] = {}
-    for t in tickers:
-        try:
-            period = fetch_latest_period(t, timeout_s=timeout_s)
-        except Exception as e:  # noqa: BLE001
-            log.warning("latest period failed %s: %s", t, e)
-            continue
-        if period:
-            out[t] = period
+def parse_calendar(payload: Any) -> dict[str, list[CalendarEvent]]:
+    """Events keyed by normalized calendar symbol; an entry without an ISO local date is dropped."""
+    out: dict[str, list[CalendarEvent]] = {}
+    days = payload.get("list") if isinstance(payload, dict) else None
+    for day in days if isinstance(days, list) else []:
+        for info in (day.get("infos") or []) if isinstance(day, dict) else []:
+            if not isinstance(info, dict):
+                continue
+            sym = str(info.get("symbol") or "").strip()
+            event = _event(info)
+            if sym and event is not None:
+                out.setdefault(normalize_symbol(sym), []).append(event)
     return out
 
 
-def _iter_calendar_infos(payload: Any) -> list[dict[str, Any]]:
-    if not isinstance(payload, dict):
-        return []
-    infos: list[dict[str, Any]] = []
-    for day in payload.get("list") or []:
-        if not isinstance(day, dict):
-            continue
-        for info in day.get("infos") or []:
-            if isinstance(info, dict):
-                infos.append(info)
-    return infos
-
-
-def _info_local_date(info: dict[str, Any]) -> date | None:
+def _event(info: dict[str, Any]) -> CalendarEvent | None:
     ext = info.get("ext") if isinstance(info.get("ext"), dict) else {}
-    raw = ext.get("local_date") or info.get("widget_short_display_date")
-    if not raw:
+    raw = str(ext.get("local_date") or "").strip()
+    try:
+        day = date.fromisoformat(raw[:10])
+    except ValueError:  # missing, or the widget's MM/DD form
         return None
-    s = str(raw).strip()
-    # local_date is YYYY-MM-DD; widget form is MM/DD — skip non-ISO.
-    if len(s) >= 10 and s[4] == "-" and s[7] == "-":
-        try:
-            return date.fromisoformat(s[:10])
-        except ValueError:
-            return None
-    return None
+    report = ext.get("financial_report") if isinstance(ext.get("financial_report"), dict) else {}
+    slot = report.get("market_time")
+    period = str(info.get("content") or "").strip().removesuffix(_PERIOD_SUFFIX).strip()
+    return CalendarEvent(day.isoformat(), slot if slot in _SLOTS else "unknown", period)
 
 
-def fetch_earn_dates_in_window(
+def fetch_calendar(
     tickers: list[str],
+    start: date,
+    end: date,
     *,
-    today: date,
-    max_d: int,
-    timeout_s: float = _HTTP_TIMEOUT_S,
-) -> dict[str, str]:
-    """For each ticker, pick earn local_date E with 0 <= today-E <= max_d (smallest d wins).
+    run: Callable[[list[str]], Any] = _run_json,
+    sleep: Callable[[float], None] = time.sleep,
+) -> CalendarFetch:
+    """Every release from `start` on, keyed by framework ticker. A batch that fails is reported, not raised.
 
-    Keys are framework tickers. Calendar may return zero-stripped HK codes.
+    `end` is passed along, but the CLI has been seen to return later releases too; callers must not rely on it.
     """
-    if not tickers:
-        return {}
-
-    start = today - timedelta(days=max_d)
-    end = today  # only past+today; upcoming (d<0) is outside notify window
-    by_norm: dict[str, list[date]] = {}
-
+    out = CalendarFetch()
     for i in range(0, len(tickers), _CAL_BATCH):
-        batch = tickers[i : i + _CAL_BATCH]
-        cmd = [
-            "longbridge",
-            "finance-calendar",
-            "report",
-            "--format",
-            "json",
-            "--start",
-            start.isoformat(),
-            "--end",
-            end.isoformat(),
-            "--count",
-            "100",
-        ]
+        batch = tickers[i: i + _CAL_BATCH]
+        if i:
+            sleep(_BATCH_PAUSE_S)
+        cmd = ["longbridge", "finance-calendar", "report", "--format", "json",
+               "--start", start.isoformat(), "--end", end.isoformat(), "--count", str(_CAL_COUNT)]
         for t in batch:
-            cmd.extend(["--symbol", t])
+            cmd += ["--symbol", t]
         try:
-            payload = _run_json(cmd, timeout_s=timeout_s)
-        except Exception as e:  # noqa: BLE001
+            by_symbol = parse_calendar(run(cmd))
+        except Exception as e:  # noqa: BLE001 — external CLI: missing, logged out, rate-limited, bad JSON
             log.warning("finance-calendar batch failed %s: %s", batch, e)
+            out.failed += batch
+            out.error = out.error or str(e)
             continue
-        for info in _iter_calendar_infos(payload):
-            sym = str(info.get("symbol") or "").strip()
-            if not sym:
-                continue
-            ed = _info_local_date(info)
-            if ed is None:
-                continue
-            by_norm.setdefault(normalize_symbol(sym), []).append(ed)
-
-    out: dict[str, str] = {}
-    for t in tickers:
-        dates = by_norm.get(calendar_lookup_key(t)) or []
-        in_window = [e for e in dates if 0 <= (today - e).days <= max_d]
-        if not in_window:
-            continue
-        # Prefer most recent earnings day still in window (smallest d).
-        best = max(in_window)
-        out[t] = best.isoformat()
+        if sum(len(v) for v in by_symbol.values()) >= _CAL_COUNT:
+            log.warning("finance-calendar batch hit the row cap; later releases may be missing: %s", batch)
+        for t in batch:
+            out.events[t] = by_symbol.get(normalize_symbol(t), [])
     return out
