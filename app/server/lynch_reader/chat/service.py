@@ -127,6 +127,11 @@ class ChatService:
         rows.sort(key=lambda r: r["updated_at"], reverse=True)
         return {"chats": rows, "running_count": sum(r["state"] in BUSY for r in rows), "usage": self.usage}
 
+    def ticker_chat_starts(self) -> list[tuple[str, float]]:
+        """(ticker, created_at) of every 讨论 chat, archived ones included: the earnings list counts any chat on a
+        ticker started after its release as research on it."""
+        return [(c.ticker, c.created_at) for c in self._index.all() if c.kind == "ticker" and c.ticker]
+
     def snapshot(self, conv_id: str) -> dict:
         conv = self._conv(conv_id)
         live = self._live.get(conv_id) or Live()

@@ -4,18 +4,65 @@ from starlette.testclient import TestClient
 
 from lynch_reader.archive import FrameworkArchive
 from lynch_reader.catalog import QUOTE_REFRESH_MAX_AGE_S, QuoteCache
+from lynch_reader.earnings import CalendarCache, Earnings, IgnoreStore
 from lynch_reader.web import create_app
-from tests.conftest import FakeFetch, paired_devices
+from eval.lib.earnings_lb import CalendarEvent, CalendarFetch  # after lynch_reader, which puts the repo root on sys.path
+from tests.conftest import NOW, FakeFetch, paired_devices
 
 
-def client(repo, tmp_path, quotes, with_dist=True):
+def fake_calendar(tickers, start, end):
+    events = {"AAA.US": [CalendarEvent("2026-09-21", "before", "2026 财年第 3 季度")]}
+    return CalendarFetch({t: events.get(t, []) for t in tickers}, [], None)
+
+
+def client(repo, tmp_path, quotes, with_dist=True, calendar=fake_calendar):
     dist = tmp_path / "dist"
     if with_dist:
         dist.mkdir()
         (dist / "index.html").write_text("<!doctype html><title>lynch</title>", encoding="utf-8")
     devices, cookies = paired_devices(tmp_path)
     archive = FrameworkArchive(tmp_path / "archive" / "frameworks.json")
-    return TestClient(create_app(repo, dist, quotes, devices, archive), cookies=cookies)
+    wall = lambda: NOW  # noqa: E731 — Mon 2026-09-21 10:13 New York: AAA's before-open release is out
+    earnings = Earnings(CalendarCache(tmp_path / "earnings" / "calendar.json", fetch=calendar, wall=wall),
+                        IgnoreStore(tmp_path / "earnings" / "ignored.json", wall=wall), wall=wall)
+    return TestClient(create_app(repo, dist, quotes, devices, archive, earnings=earnings), cookies=cookies)
+
+
+def test_earnings_lists_pool_tickers(repo, tmp_path, quotes):
+    body = client(repo, tmp_path, quotes).get("/api/earnings").json()
+    assert body["error"] is None and body["fetched_day"] == "2026-09-21"
+    assert [(i["ticker"], i["status"]) for i in body["items"]] == [("AAA.US", "released")]
+
+
+def test_earnings_skip_archived_tickers(repo, tmp_path, quotes):
+    seen: list[list[str]] = []
+
+    def calendar(tickers, start, end):
+        seen.append(list(tickers))
+        return fake_calendar(tickers, start, end)
+    c = client(repo, tmp_path, quotes, calendar=calendar)
+    c.post("/api/frameworks/AAA.US/archive", json={})
+    assert c.get("/api/earnings").json()["items"] == []
+    assert "AAA.US" not in seen[0]
+
+
+def test_ignore_and_unignore(repo, tmp_path, quotes):
+    c = client(repo, tmp_path, quotes)
+    assert c.post("/api/earnings/ignore", json={"ticker": "AAA.US", "date": "2026-09-21"}).status_code == 204
+    assert c.get("/api/earnings").json()["items"][0]["ignored"] is True
+    assert c.post("/api/earnings/unignore", json={"ticker": "AAA.US", "date": "2026-09-21"}).status_code == 204
+    assert c.get("/api/earnings").json()["items"][0]["ignored"] is False
+
+
+def test_ignore_refuses_bad_input(repo, tmp_path, quotes):
+    c = client(repo, tmp_path, quotes)
+    for body in ({"ticker": "NOPE.US", "date": "2026-09-21"}, {"ticker": "AAA.US", "date": "09/21"},
+                 {"ticker": "AAA.US"}, {"ticker": 1, "date": "2026-09-21"}):
+        r = c.post("/api/earnings/ignore", json=body)
+        assert r.status_code == 400 and r.json()["error"], body
+    r = c.post("/api/earnings/ignore", content="ticker=AAA.US", headers={"content-type": "text/plain"})
+    assert r.status_code == 415
+    assert not (tmp_path / "earnings" / "ignored.json").exists()
 
 
 def test_tickers_json(repo, tmp_path, quotes):

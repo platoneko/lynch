@@ -420,3 +420,15 @@ def test_options_lists_models_and_defaults(tmp_path):
     opts = svc.options()
     assert opts["default_model"] == "claude-opus-5-5" and opts["default_effort"] == "medium"
     assert {"id": "claude-haiku-4-5", "label": "Haiku 4.5"} in opts["models"]
+
+
+def test_ticker_chat_starts_include_archived_and_skip_other_kinds(tmp_path):
+    from lynch_reader.chat.index import ChatIndex
+    from tests.chat_helpers import conv
+    index = ChatIndex(tmp_path / "index.json")
+    index.put(conv(id="a", ticker="AAA.US", created_at=10.0))
+    index.put(conv(id="b", ticker="BBB.US", created_at=20.0, archived=True))
+    index.put(conv(id="c", kind="research", ticker=None, created_at=30.0))
+    index.put(conv(id="d", kind="discover", ticker=None, created_at=40.0))
+    svc, _ = make_service(tmp_path)
+    assert sorted(svc.ticker_chat_starts()) == [("AAA.US", 10.0), ("BBB.US", 20.0)]

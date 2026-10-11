@@ -3,7 +3,7 @@
 Only paired devices get in (lynch_reader.auth): a one-time code from `just app-pair` buys a long-lived cookie.
 Chats run Claude Code subprocesses that may write frameworks/ under a tool whitelist and the sediment-framework
 skill, and read-only grok subprocesses that search X (AGENTS.md「app 对话」). The server itself writes only
-output/chat/, output/candidates/ and output/archive/.
+output/chat/, output/candidates/, output/archive/ and output/earnings/.
 """
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import argparse
 import logging
 import os
 import shutil
+from datetime import date
 from pathlib import Path
 
 import uvicorn
@@ -30,9 +31,12 @@ from lynch_reader.chat.config import LaunchConfig
 from lynch_reader.chat.grok import GrokConfig
 from lynch_reader.chat.index import ChatIndex
 from lynch_reader.chat.kol import INVEST_ROOT
-from lynch_reader.chat.routes import _guarded, chat_lifespan, chat_routes
+from lynch_reader.chat.routes import _body, _guarded, chat_lifespan, chat_routes
 from lynch_reader.chat.service import ChatService, Invalid
 from lynch_reader.chat.transcript import projects_dir_for
+from lynch_reader.earnings import CALENDAR_FILE, IGNORED_FILE, CalendarCache, Earnings, IgnoreStore
+
+from eval.lib.frameworks import list_framework_paths  # noqa: E402 — after catalog, which puts the repo root on sys.path
 
 WEB_DIST = REPO_ROOT / "app" / "web" / "dist"
 # The personal tailnet address of this host; other local users must not reach it via 0.0.0.0.
@@ -56,7 +60,8 @@ class WebDist(StaticFiles):
 
 
 def create_app(frameworks_dir: Path, web_dist: Path, quotes: QuoteCache, devices: DeviceStore,
-               archive: FrameworkArchive, chat: ChatService | None = None) -> Starlette:
+               archive: FrameworkArchive, chat: ChatService | None = None,
+               earnings: Earnings | None = None) -> Starlette:
     def tickers(request: Request) -> Response:
         refresh = request.query_params.get("refresh") == "1"
         return JSONResponse(catalog(frameworks_dir, quotes, refresh, archive.tickers()))
@@ -85,6 +90,28 @@ def create_app(frameworks_dir: Path, web_dist: Path, quotes: QuoteCache, devices
             return PlainTextResponse("unknown axis", status_code=404)
         return Response(path.read_text(encoding="utf-8"), media_type="text/markdown; charset=utf-8")
 
+    def earnings_list(request: Request) -> Response:
+        # Sync: the first request of a Beijing day waits on the longbridge calendar in the thread pool.
+        hidden = archive.tickers()
+        pool = [p.stem for p in list_framework_paths(frameworks_dir) if p.stem not in hidden]
+        return JSONResponse(earnings.snapshot(pool, chat.ticker_chat_starts() if chat is not None else []))
+
+    def set_ignored(ignored: bool):
+        async def run(request: Request) -> Response:
+            body = await _body(request)
+            ticker, day = body.get("ticker"), body.get("date")
+            if not isinstance(ticker, str) or not isinstance(day, str):
+                raise Invalid("需要 ticker 和 date")
+            try:
+                date.fromisoformat(day)
+            except ValueError:
+                raise Invalid("date 须为 YYYY-MM-DD") from None
+            if framework_path(ticker, frameworks_dir) is None:
+                raise Invalid("没有这只票的框架")
+            (earnings.ignored.ignore if ignored else earnings.ignored.unignore)(ticker, day)
+            return Response(status_code=204)
+        return _guarded(run)  # its CSRF guard: a cross-site form must not dismiss anything
+
     routes = [
         *pair_routes(devices),
         Route("/api/tickers", tickers),
@@ -93,6 +120,12 @@ def create_app(frameworks_dir: Path, web_dist: Path, quotes: QuoteCache, devices
         Route("/api/frameworks/{ticker}/restore", set_archived(False), methods=["POST"]),
         Route("/api/axes/{name}", axis),
     ]
+    if earnings is not None:
+        routes += [
+            Route("/api/earnings", earnings_list),
+            Route("/api/earnings/ignore", set_ignored(True), methods=["POST"]),
+            Route("/api/earnings/unignore", set_ignored(False), methods=["POST"]),
+        ]
     if chat is not None:
         routes += chat_routes(chat, frameworks_dir)
     if web_dist.is_dir():
@@ -121,7 +154,8 @@ def main(argv: list[str] | None = None) -> None:
     # An open chat stream never ends by itself: without a graceful-shutdown timeout, SIGTERM waits on it
     # forever and the lifespan shutdown that stops the claude processes never runs.
     uvicorn.run(create_app(FRAMEWORKS_DIR, WEB_DIST, QuoteCache(), DeviceStore(DEVICES_FILE),
-                           FrameworkArchive(ARCHIVE_FILE), chat=chat),
+                           FrameworkArchive(ARCHIVE_FILE), chat=chat,
+                           earnings=Earnings(CalendarCache(CALENDAR_FILE), IgnoreStore(IGNORED_FILE))),
                 host=args.host, port=args.port, timeout_graceful_shutdown=5)
 
 
