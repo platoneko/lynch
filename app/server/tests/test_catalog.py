@@ -13,7 +13,7 @@ from eval.lib.frameworks import list_framework_paths
 from eval.lib.zones import zone_of
 from eval.lib.price import SessionQuote
 from lynch_reader.catalog import (
-    FRAMEWORKS_DIR, NO_QUOTE, QUOTE_BACKOFF_S, QUOTE_MAX_AGE_S, QUOTE_REFRESH_MAX_AGE_S, QuoteCache, axis_path_in, catalog, framework_path,
+    FRAMEWORKS_DIR, NO_QUOTE, QUOTE_REFRESH_MAX_AGE_S, QuotePoller, QuoteCache, axis_path_in, catalog, framework_path,
 )
 from tests.conftest import NOW, FakeClock, FakeFetch, framework_md
 
@@ -22,8 +22,8 @@ needs_content = pytest.mark.skipif(not FRAMEWORKS_DIR.is_dir(), reason="content 
 AS_OF = datetime.fromtimestamp(NOW, ZoneInfo("Asia/Shanghai")).isoformat(timespec="seconds")
 
 
-def rows_by_ticker(fw, quotes):
-    return {r["ticker"]: r for r in catalog(fw, quotes)["tickers"]}
+def rows_by_ticker(fw, quotes, refresh=False):
+    return {r["ticker"]: r for r in catalog(fw, quotes, refresh)["tickers"]}
 
 
 def test_labels_come_from_eval_lib(repo, quotes):
@@ -79,41 +79,40 @@ def test_parse_failure_is_one_row_not_whole_list(repo, quotes):
     assert row["name"] is None and row["band"] is None and row["market"] is None and row["quote_error"] is None
 
 
-def test_one_batched_fetch_for_parsed_rows(repo, fetch, quotes):
+def test_one_batched_fetch_for_every_framework(repo, fetch, quotes):
     catalog(repo, quotes)
-    assert fetch.calls == [["AAA.US", "BBB.US"]]
+    catalog(repo, quotes)  # a plain load only reads
+    assert fetch.calls == [["AAA.US", "BBB.US", "0001.HK"]]
 
 
-def test_quotes_are_reused_up_to_the_max_age(repo, fetch, clock, quotes):
-    catalog(repo, quotes)
-    clock.now += QUOTE_MAX_AGE_S - 1
-    catalog(repo, quotes)
-    assert len(fetch.calls) == 1
-    clock.now += 2
-    fetch.prices["AAA.US"] = 26.0
-    band = rows_by_ticker(repo, quotes)["AAA.US"]["band"]
-    assert len(fetch.calls) == 2
-    assert band["price"] == 26.0
-    assert band["as_of"] == datetime.fromtimestamp(clock.now, ZoneInfo("Asia/Shanghai")).isoformat(timespec="seconds")
-
-
-def test_refresh_refetches_quotes_older_than_the_refresh_max_age(repo, fetch, clock, quotes):
+def test_refresh_skips_a_fetch_younger_than_a_minute(repo, fetch, clock, quotes):
     catalog(repo, quotes)
     clock.now += QUOTE_REFRESH_MAX_AGE_S - 1
     catalog(repo, quotes, refresh=True)
     assert len(fetch.calls) == 1
     clock.now += 1
-    catalog(repo, quotes)  # a plain load still reuses the batch
-    assert len(fetch.calls) == 1
+    fetch.prices["AAA.US"] = 26.0
+    assert rows_by_ticker(repo, quotes)["AAA.US"]["band"]["price"] == 25.0  # a plain load never fetches
     catalog(repo, quotes, refresh=True)
     assert len(fetch.calls) == 2
+    band = rows_by_ticker(repo, quotes)["AAA.US"]["band"]
+    assert band["price"] == 26.0
+    assert band["as_of"] == datetime.fromtimestamp(clock.now, ZoneInfo("Asia/Shanghai")).isoformat(timespec="seconds")
 
 
-def test_a_changed_pool_is_refetched(repo, fetch, quotes):
+def test_poll_fetches_when_the_pool_gains_a_ticker(fetch, clock, quotes):
+    clock.now = ny(26, 12)  # Saturday: no market trades
+    quotes.poll(["AAA.US"])
+    quotes.poll(["AAA.US", "BBB.US"])
+    assert fetch.calls == [["AAA.US"], ["AAA.US", "BBB.US"]]
+
+
+def test_a_new_framework_waits_for_the_next_fetch(repo, fetch, quotes):
     catalog(repo, quotes)
     (repo / "CCC.US.md").write_text(framework_md("CCC.US", "Gamma", "`stalwart`"), encoding="utf-8")
-    catalog(repo, quotes)
-    assert len(fetch.calls) == 2
+    row = rows_by_ticker(repo, quotes)["CCC.US"]
+    assert row["band"] is None and row["quote_error"] == "等待下一次取价"
+    assert len(fetch.calls) == 1
 
 
 def test_missing_symbol_nulls_only_its_row(repo, fetch, quotes, caplog):
@@ -131,10 +130,10 @@ def test_no_usable_quote_is_logged_once_per_batch(repo, fetch, clock, quotes, ca
     del fetch.prices["AAA.US"]
     with caplog.at_level(logging.WARNING, logger="lynch_reader"):
         catalog(repo, quotes)
-        catalog(repo, quotes)  # cache hit: same batch, no new warning
+        catalog(repo, quotes)  # same batch, no new warning
         assert sum("AAA.US" in r.getMessage() for r in caplog.records) == 1
-        clock.now += QUOTE_MAX_AGE_S
-        catalog(repo, quotes)  # a new batch warns again
+        clock.now += QUOTE_REFRESH_MAX_AGE_S
+        catalog(repo, quotes, refresh=True)  # a new batch warns again
         assert sum("AAA.US" in r.getMessage() for r in caplog.records) == 2
 
 
@@ -159,27 +158,47 @@ def test_whole_call_failure_nulls_every_band(repo, clock, error):
     assert all(r["quote_error"] is None for r in out["tickers"])
 
 
-def test_whole_call_failure_backs_off_then_retries(repo, clock):
-    fetch = FakeFetch({"AAA.US": 25.0}, error=RuntimeError("boom"))
-    quotes = QuoteCache(fetch=fetch, monotonic=clock, wall=clock)
-    assert catalog(repo, quotes)["quote_error"] == "取价失败：boom"
-    # Within the back-off the failure is reused, even once the CLI would succeed.
-    fetch.error = None
-    clock.now += QUOTE_BACKOFF_S - 1
-    assert catalog(repo, quotes)["quote_error"] == "取价失败：boom"
-    assert len(fetch.calls) == 1
-    # Past it the call is retried; the failure is never served longer.
-    clock.now += 1
-    out = catalog(repo, quotes)
-    assert out["quote_error"] is None and len(fetch.calls) == 2
-
-
-def test_failure_after_a_good_batch_does_not_serve_the_old_batch(repo, fetch, clock, quotes):
+def test_failure_keeps_the_last_good_batch(repo, fetch, clock, quotes):
     catalog(repo, quotes)
-    clock.now += QUOTE_MAX_AGE_S
+    clock.now += QUOTE_REFRESH_MAX_AGE_S
     fetch.error = RuntimeError("boom")
-    out = catalog(repo, quotes)
-    assert out["quote_error"] and all(r["band"] is None for r in out["tickers"])
+    out = catalog(repo, quotes, refresh=True)
+    shown = datetime.fromtimestamp(NOW, ZoneInfo("Asia/Shanghai")).strftime("%H:%M")  # the first batch's time
+    assert out["quote_error"] == f"取价失败：boom（显示的是 {shown} 的现价）"
+    assert {r["ticker"]: r for r in out["tickers"]}["AAA.US"]["band"]["price"] == 25.0
+    fetch.error = None
+    clock.now += QUOTE_REFRESH_MAX_AGE_S
+    assert catalog(repo, quotes, refresh=True)["quote_error"] is None
+
+
+def test_listener_hears_each_new_batch_and_cannot_break_it(repo, fetch, clock, quotes):
+    heard = []
+    quotes.subscribe(lambda b: heard.append(b.quotes["AAA.US"].last))
+    quotes.subscribe(lambda b: 1 / 0)  # a broken listener is logged, not raised
+    catalog(repo, quotes)
+    catalog(repo, quotes)
+    assert heard == [25.0]
+    assert rows_by_ticker(repo, quotes)["AAA.US"]["band"]["price"] == 25.0
+
+
+def test_poller_round_polls_then_runs_upkeep_and_survives_errors(fetch, clock, quotes):
+    order = []
+    quotes.subscribe(lambda b: order.append("batch"))
+    poller = QuotePoller(quotes, lambda: ["AAA.US"], after=lambda: order.append("upkeep"))
+    poller.run_once()
+    assert order == ["batch", "upkeep"]
+    broken = QuotePoller(quotes, lambda: 1 / 0, after=lambda: order.append("upkeep"))
+    broken.run_once()  # a failing round is logged; upkeep still runs
+    assert order[-1] == "upkeep"
+
+
+def test_poller_thread_runs_a_round_at_start_and_stops(fetch, quotes):
+    ran = threading.Event()
+    poller = QuotePoller(quotes, lambda: ["AAA.US"], after=ran.set, interval_s=3600)
+    poller.start()
+    assert ran.wait(5)
+    poller.stop()
+    assert len(fetch.calls) == 1
 
 
 def test_requests_waiting_on_a_failing_call_reuse_its_failure(repo, clock):
@@ -206,15 +225,15 @@ def test_requests_waiting_on_a_failing_call_reuse_its_failure(repo, clock):
     assert results["first"]["quote_error"] == results["waiter"]["quote_error"] == "取价失败：boom"
 
 
-def test_max_age_follows_the_monotonic_clock_not_the_wall_clock(repo, fetch, clock):
+def test_refresh_age_follows_the_monotonic_clock_not_the_wall_clock(repo, fetch, clock):
     wall = FakeClock()
     quotes = QuoteCache(fetch=fetch, monotonic=clock, wall=wall)
     catalog(repo, quotes)
-    wall.now -= 3600  # the wall clock is set back an hour: no effect on the max age
-    catalog(repo, quotes)
+    wall.now += 3600  # the wall clock jumps an hour: no effect on the refresh age
+    catalog(repo, quotes, refresh=True)
     assert len(fetch.calls) == 1
-    clock.now += QUOTE_MAX_AGE_S
-    band = rows_by_ticker(repo, quotes)["AAA.US"]["band"]
+    clock.now += QUOTE_REFRESH_MAX_AGE_S
+    band = rows_by_ticker(repo, quotes, refresh=True)["AAA.US"]["band"]
     assert len(fetch.calls) == 2
     # `as_of` still reports wall time.
     assert band["as_of"] == datetime.fromtimestamp(wall.now, ZoneInfo("Asia/Shanghai")).isoformat(timespec="seconds")
@@ -388,15 +407,16 @@ def ny(day: int, hh: int, mm: int = 0) -> float:
     return datetime(2026, 9, day, hh, mm, tzinfo=ZoneInfo("America/New_York")).timestamp()
 
 
-def test_quotes_are_reused_while_no_market_has_traded(repo, fetch, clock, quotes):
-    # The pool is US-only: Friday's post-market has settled, Monday's overnight opens Sunday 20:00.
+def test_poll_fetches_only_after_a_market_traded(fetch, clock, quotes):
+    # US-only pool. Friday's post-market has settled; Monday's overnight opens Sunday 20:00.
+    pool = ["AAA.US", "BBB.US"]
     clock.now = ny(25, 20, 30)
-    catalog(repo, quotes)
+    quotes.poll(pool)
     clock.now = ny(26, 12)
-    catalog(repo, quotes, refresh=True)
+    quotes.poll(pool)
     assert len(fetch.calls) == 1
     clock.now = ny(27, 20, 30)
-    catalog(repo, quotes)
+    quotes.poll(pool)
     assert len(fetch.calls) == 2
 
 

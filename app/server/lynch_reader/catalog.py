@@ -33,7 +33,10 @@ from eval.lib.price import Quote, fetch_quotes  # noqa: E402
 from eval.lib.zones import ZONE_CN, ZONE_ORDER, credited_option_band, price_zones  # noqa: E402
 from lynch_reader.market_hours import traded_between, us_regular_close  # noqa: E402
 
-__all__ = ["FRAMEWORKS_DIR", "REPO_ROOT", "Quote", "QuoteCache", "axis_path_in", "catalog", "framework_path"]
+__all__ = [
+    "FRAMEWORKS_DIR", "REPO_ROOT", "Quote", "QuoteBatch", "QuoteCache", "QuotePoller", "QuoteSnapshot",
+    "axis_path_in", "catalog", "framework_path", "quote_failure", "quote_pool",
+]
 
 log = logging.getLogger("lynch_reader")
 
@@ -45,15 +48,13 @@ ROW_KEYS = (
 # and gives sensitivity readings, never anchors (AGENTS.md「r_f 读数行」).
 SCENARIO_AXIS = "shared_scenario_axis"
 
-# Quotes are reused up to this age: it bounds Longbridge CLI calls. Past it they are
-# still reused while no market in the pool has traded since (market_hours.py).
-QUOTE_MAX_AGE_S = 300.0
-# 刷新股价 asks for quotes this fresh; a shorter bound would only add CLI calls on repeated taps.
+# 刷新股价 fetches only when the last attempt is older than this; repeated taps add no CLI calls.
 QUOTE_REFRESH_MAX_AGE_S = 60.0
-# During an outage each call can take the whole timeout; requests in this window share one failure.
-QUOTE_BACKOFF_S = 5.0
+# The poller's pace; the home list and the anomaly checks follow the same 5 minutes (spec).
+QUOTE_POLL_S = 300.0
 QUOTE_TIMEOUT_S = 15
 NO_QUOTE = "无报价（停牌或代码变更）"
+WAITING_QUOTE = "等待下一次取价"
 # Same timestamp form as the daily digest's `_as_of_iso` (scripts/daily_bands.py).
 TZ = ZoneInfo("Asia/Shanghai")
 
@@ -67,24 +68,21 @@ _ASSUMPTION_ID = re.compile(r"(?<![0-9A-Za-z])A[0-9][0-9A-Za-z]*(?:-[0-9A-Za-z]+
 class QuoteBatch:
     symbols: tuple[str, ...]
     quotes: dict[str, Quote]
-    fetched_at: float  # wall clock, seconds since the epoch: only for `as_of`
-    fetched_mono: float  # monotonic clock: for the max age
+    fetched_at: float  # wall clock, seconds since the epoch: `as_of` and market-hours checks
 
 
 @dataclass(frozen=True)
-class QuoteFailure:
-    symbols: tuple[str, ...]
-    error: Exception
-    failed_mono: float
+class QuoteSnapshot:
+    batch: QuoteBatch | None  # the latest good batch; None until one has been fetched
+    error: Exception | None  # the latest attempt's failure; None once one succeeds
 
 
 class QuoteCache:
-    """One batched quote call for the whole pool, reused while younger than the caller's max age
-    or while no market in the pool has traded since.
+    """The one copy of the pool's quotes (AGENTS.md「app 对话」). Three things fetch: the poller (`poll`), a
+    刷新股价 tap (`refresh`), and the first read before any attempt (`read`); everything else only reads.
 
-    The lock makes concurrent requests wait for one CLI call instead of each
-    starting their own; those that waited get that call's batch or failure.
-    A failure is reused only for QUOTE_BACKOFF_S, and never replaced by an older batch.
+    A failed attempt keeps the last good batch and reports its error beside it. The lock makes concurrent
+    callers wait for one CLI call. Listeners hear every new batch on the fetching thread, under the lock.
     """
 
     def __init__(
@@ -100,40 +98,95 @@ class QuoteCache:
         self._wall = wall
         self._lock = threading.Lock()
         self._batch: QuoteBatch | None = None
-        self._failure: QuoteFailure | None = None
+        self._error: Exception | None = None
+        self._tried_mono: float | None = None
+        self._listeners: list[Callable[[QuoteBatch], None]] = []
 
-    def get(self, symbols: list[str], max_age_s: float) -> QuoteBatch:
-        key = tuple(symbols)
+    def subscribe(self, listener: Callable[[QuoteBatch], None]) -> None:
+        self._listeners.append(listener)
+
+    def read(self, symbols: list[str]) -> QuoteSnapshot:
         with self._lock:
-            # A pool that changed since (framework added or renamed) needs its own call.
-            f = self._failure
-            if f is not None and f.symbols == key and self._monotonic() - f.failed_mono < QUOTE_BACKOFF_S:
-                raise f.error
+            if self._tried_mono is None:  # just started: the first reader waits for the first batch
+                self._fetch_batch(symbols)
+            return QuoteSnapshot(self._batch, self._error)
+
+    def poll(self, symbols: list[str]) -> None:
+        with self._lock:
             b = self._batch
-            if b is None or b.symbols != key or not self._current(b, max_age_s):
-                b = self._fetch_batch(key)
-            return b
+            if b is None or set(symbols) - set(b.symbols) or self._traded_since(b, symbols):
+                self._fetch_batch(symbols)
 
-    def _current(self, b: QuoteBatch, max_age_s: float) -> bool:
-        if self._monotonic() - b.fetched_mono < max_age_s:
-            return True
-        # Market hours are wall-clock hours; the age above stays monotonic.
+    def refresh(self, symbols: list[str]) -> QuoteSnapshot:
+        with self._lock:
+            if self._tried_mono is None or self._monotonic() - self._tried_mono >= QUOTE_REFRESH_MAX_AGE_S:
+                self._fetch_batch(symbols)
+            return QuoteSnapshot(self._batch, self._error)
+
+    def _traded_since(self, b: QuoteBatch, symbols: list[str]) -> bool:
+        # Market hours are wall-clock hours.
         now = self._wall()
-        return not any(traded_between(m, b.fetched_at, now) for m in {market_bucket(s) for s in b.symbols})
+        return any(traded_between(m, b.fetched_at, now) for m in {market_bucket(s) for s in symbols})
 
-    def _fetch_batch(self, key: tuple[str, ...]) -> QuoteBatch:
+    def _fetch_batch(self, symbols: list[str]) -> None:
+        key = tuple(symbols)
         try:
             quotes = self._fetch(list(key))
-        except Exception as e:
-            # Stamped after the call returns, so requests queued behind it land inside the back-off.
-            self._failure = QuoteFailure(key, e, self._monotonic())
-            raise
-        self._failure = None
+        except Exception as e:  # noqa: BLE001 — external CLI: missing, non-zero exit, timeout, bad JSON
+            log.warning("quote fetch failed: %s", e)
+            self._error = e
+            return
+        finally:
+            # Stamped after the call returns, so callers queued behind it see a fresh attempt.
+            self._tried_mono = self._monotonic()
+        self._error = None
         for s in key:
             if not _usable(quotes.get(s)):
                 log.warning("no usable quote: %s: %s", s, quotes.get(s))
-        self._batch = QuoteBatch(key, quotes, self._wall(), self._monotonic())
-        return self._batch
+        self._batch = QuoteBatch(key, quotes, self._wall())
+        for listener in self._listeners:
+            try:
+                listener(self._batch)
+            except Exception:  # noqa: BLE001 — a listener (anomaly checks) must not cost the list its prices
+                log.exception("quote listener failed")
+
+
+class QuotePoller:
+    """The background thread behind the one quote copy: a round at start, then every `interval_s` it polls the
+    cache and runs `after` (the day's anomaly-baseline and calendar fetches). The app's lifespan starts and stops it.
+    """
+
+    def __init__(self, quotes: QuoteCache, symbols: Callable[[], list[str]],
+                 after: Callable[[], None] = lambda: None, interval_s: float = QUOTE_POLL_S) -> None:
+        self._quotes, self._symbols, self._after, self._interval_s = quotes, symbols, after, interval_s
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def run_once(self) -> None:
+        # Each half failing alone is logged; neither ends the thread.
+        try:
+            self._quotes.poll(self._symbols())
+        except Exception:  # noqa: BLE001
+            log.exception("quote poll failed")
+        try:
+            self._after()
+        except Exception:  # noqa: BLE001
+            log.exception("poll upkeep failed")
+
+    def start(self) -> None:
+        self._thread = threading.Thread(target=self._loop, name="quote-poller", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=5)  # a CLI call in flight is abandoned with the daemon thread
+
+    def _loop(self) -> None:
+        while True:
+            self.run_once()
+            if self._stop.wait(self._interval_s):
+                return
 
 
 def catalog(frameworks_dir: Path, quotes: QuoteCache, refresh: bool = False,
@@ -149,19 +202,15 @@ def catalog(frameworks_dir: Path, quotes: QuoteCache, refresh: bool = False,
         row["axes"] = [a.name for a in axes if meta.ticker in a.mounts]
         row["ref_axes"] = [a.name for a in axes if meta.ticker in a.refs]
 
-    # Step 2: one quote batch for every parsed row. When the whole call fails the list
-    # still loads with every band empty; an old snapshot is never shown in its place.
-    quote_error = None
-    max_age_s = QUOTE_REFRESH_MAX_AGE_S if refresh else QUOTE_MAX_AGE_S
-    try:
-        batch = quotes.get([meta.ticker for _, meta in priced], max_age_s)
-    except Exception as e:  # noqa: BLE001 — external CLI: missing, non-zero exit, timeout, bad JSON
-        log.warning("quote fetch failed: %s", e)
-        quote_error = _quote_failure(e)
-    else:
-        us_close = us_regular_close(batch.fetched_at)
+    # Step 2: the one quote batch, read (on 刷新股价, refreshed). A failed attempt keeps the last good batch,
+    # each row showing its own fetch time; with no batch at all every band stays empty.
+    pool = quote_pool(frameworks_dir)
+    snap = quotes.refresh(pool) if refresh else quotes.read(pool)
+    quote_error = None if snap.error is None else quote_failure(snap.error, snap.batch)
+    if snap.batch is not None:
+        us_close = us_regular_close(snap.batch.fetched_at)
         for row, meta in priced:
-            _price_row(row, meta, batch, us_close)
+            _price_row(row, meta, snap.batch, us_close)
 
     return {
         "zones": [{"id": z, "label": ZONE_CN[z]} for z in ZONE_ORDER],
@@ -170,6 +219,11 @@ def catalog(frameworks_dir: Path, quotes: QuoteCache, refresh: bool = False,
         "axes": [_axis_json(a) for a in axes],
         "tickers": [row for row, _ in parsed],
     }
+
+
+def quote_pool(frameworks_dir: Path) -> list[str]:
+    """Every framework, archived ones included (展示归档 shows their prices): the one symbol list quotes cover."""
+    return [p.stem for p in list_framework_paths(frameworks_dir)]
 
 
 def framework_path(ticker: str, frameworks_dir: Path) -> Path | None:
@@ -241,6 +295,9 @@ def _ticker_row(path: Path) -> tuple[dict[str, Any], FrameworkMeta | None]:
 
 def _price_row(row: dict[str, Any], meta: FrameworkMeta, batch: QuoteBatch, us_close: datetime) -> None:
     """The row's band: live price, fetch time, and zones by the daily digest's own rules."""
+    if meta.ticker not in batch.symbols:  # a framework added since the last fetch
+        row["quote_error"] = WAITING_QUOTE
+        return
     q = batch.quotes.get(meta.ticker)
     if not _usable(q):  # logged once when the batch was fetched
         row["quote_error"] = NO_QUOTE
@@ -286,13 +343,16 @@ def _is_trade_price(p: float) -> bool:
     return math.isfinite(p) and p > 0
 
 
-def _quote_failure(e: Exception) -> str:
+def quote_failure(e: Exception, batch: QuoteBatch | None) -> str:
     """One short banner line; a timeout's own message carries the whole symbol list."""
     if isinstance(e, subprocess.TimeoutExpired):
-        return f"取价超时（{QUOTE_TIMEOUT_S} 秒）"
-    text = str(e).strip()
-    first = text.splitlines()[0] if text else type(e).__name__
-    return f"取价失败：{first[:120]}"
+        text = f"取价超时（{QUOTE_TIMEOUT_S} 秒）"
+    else:
+        msg = str(e).strip()
+        text = f"取价失败：{(msg.splitlines()[0] if msg else type(e).__name__)[:120]}"
+    if batch is None:
+        return text
+    return f"{text}（显示的是 {datetime.fromtimestamp(batch.fetched_at, TZ):%H:%M} 的现价）"
 
 
 def _option(meta: FrameworkMeta, assumptions: dict[str, str]) -> dict[str, Any] | None:

@@ -75,7 +75,7 @@ def test_tickers_json(repo, tmp_path, quotes):
     assert body["tickers"][0]["band"]["price"] == 25.0
 
 
-def test_refresh_query_uses_the_refresh_max_age(repo, tmp_path, fetch, clock, quotes):
+def test_refresh_query_asks_for_a_fetch(repo, tmp_path, fetch, clock, quotes):
     c = client(repo, tmp_path, quotes)
     c.get("/api/tickers")
     clock.now += QUOTE_REFRESH_MAX_AGE_S
