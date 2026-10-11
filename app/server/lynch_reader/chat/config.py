@@ -27,11 +27,14 @@ MAX_PROCESSES = 8
 # the longbridge MCP, which needs a separate OAuth (user, 2026-09-28). Everything but queries is denied: the CLI
 # can also place orders, read the account, edit watchlists/alerts/DCA plans, post community topics, log out and
 # self-update, and nobody has confirmed its login is a paper account. A subcommand added by a later CLI version
-# is allowed until it is listed here.
+# is allowed until it is listed here (last reviewed against 0.29.0). `fund` goes whole: its fund orders and
+# positions sit beside the NAV queries, and the prefix also covers `fund-positions`. `serve` / `acp` / `agent` /
+# `ai` reach the account or trading through a long-lived or interactive process.
 LONGBRIDGE_BLOCKED_COMMANDS: tuple[str, ...] = (
     "auth", "init", "check", "update", "tui", "completion", "subscriptions", "topic", "watchlist", "statement",
-    "order", "assets", "cash-flow", "portfolio", "positions", "fund-positions", "margin-ratio", "max-qty", "alert",
+    "order", "assets", "cash-flow", "portfolio", "positions", "fund", "margin-ratio", "max-qty", "alert",
     "profit-analysis", "dca", "sharelist", "bank-cards", "withdrawals", "deposits", "ipo",
+    "grid", "serve", "acp", "agent", "ai",
 )
 # Git that moves or discards work the user may have in progress in frameworks/, or pushes it out. The middle
 # `*` also catches `git -C <dir> …`.

@@ -75,9 +75,10 @@ def test_bash_is_open_but_files_are_written_only_under_frameworks():
 def test_longbridge_is_the_cli_with_query_commands_only():
     # user, 2026-09-28: the CLI's own login instead of MCP OAuth; no orders, account data, login or self-update
     assert not [t for t in ALLOWED_TOOLS if t.startswith("mcp__longbridge")]
-    for c in ("order", "auth", "update", "positions", "assets", "watchlist", "alert", "dca", "topic", "sharelist"):
+    for c in ("order", "auth", "update", "positions", "assets", "watchlist", "alert", "dca", "topic", "sharelist",
+              "fund", "grid", "serve", "acp", "agent", "ai"):
         assert f"Bash(longbridge {c}*)" in DENIED_TOOLS, c
-    for c in ("quote", "financial-report", "kline", "help"):
+    for c in ("quote", "financial-report", "kline", "help", "signals", "facts"):
         assert not [t for t in DENIED_TOOLS if t.startswith(f"Bash(longbridge {c}")], c
 
 
