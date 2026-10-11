@@ -285,3 +285,14 @@ def test_released_newest_first_then_upcoming_soonest_first(tmp_path):
                  wall=clk)
     items = e.snapshot(["AAA.US", "BBB.US", "CCC.US", "DDD.US"], [])["items"]
     assert [i["ticker"] for i in items] == ["BBB.US", "AAA.US", "DDD.US", "CCC.US"]
+
+
+def test_read_only_get_never_fetches(tmp_path, cal):
+    clk = Clock(at("A", 10, 14, 8))
+    cache = CalendarCache(tmp_path / "calendar.json", fetch=cal, wall=clk)
+    assert cache.get(["TSM.US"], refresh=False) == ({"TSM.US": []}, None, None)
+    assert cal.calls == []
+    cache.get(["TSM.US"])
+    clk.set(at("A", 10, 15, 8))  # a new Beijing day: a refreshing get would refetch
+    events, day, _ = cache.get(["TSM.US"], refresh=False)
+    assert len(cal.calls) == 1 and day == "2026-10-14" and events["TSM.US"]
