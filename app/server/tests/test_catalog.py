@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import subprocess
 import threading
+import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -12,6 +14,7 @@ import pytest
 from eval.lib.frameworks import list_framework_paths
 from eval.lib.zones import zone_of
 from eval.lib.price import SessionQuote
+from lynch_reader import catalog as catalog_module
 from lynch_reader.catalog import (
     FRAMEWORKS_DIR, NO_QUOTE, QUOTE_POLL_S, QuotePoller, QuoteCache, axis_path_in, catalog, framework_path,
 )
@@ -112,12 +115,81 @@ def test_poll_fetches_when_the_pool_gains_a_ticker(fetch, clock, quotes):
     assert fetch.calls == [["AAA.US"], ["AAA.US", "BBB.US"]]
 
 
-def test_a_new_framework_waits_for_the_next_fetch(repo, fetch, quotes):
+def test_a_new_framework_is_fetched_by_the_next_read(repo, fetch, quotes):
     catalog(repo, quotes)
     (repo / "CCC.US.md").write_text(framework_md("CCC.US", "Gamma", "`stalwart`"), encoding="utf-8")
-    row = rows_by_ticker(repo, quotes)["CCC.US"]
+    fetch.prices["CCC.US"] = 30.0
+    assert rows_by_ticker(repo, quotes)["CCC.US"]["band"]["price"] == 30.0
+    assert len(fetch.calls) == 2 and "CCC.US" in fetch.calls[1]  # the whole pool, as the poll would ask
+    catalog(repo, quotes)
+    assert len(fetch.calls) == 2
+
+
+def test_a_failed_fetch_for_a_new_framework_is_left_to_the_poll(repo, fetch, clock, quotes):
+    catalog(repo, quotes)
+    (repo / "CCC.US.md").write_text(framework_md("CCC.US", "Gamma", "`stalwart`"), encoding="utf-8")
+    fetch.error = RuntimeError("boom")
+    catalog(repo, quotes)
+    row = rows_by_ticker(repo, quotes)["CCC.US"]  # reads do not retry the CLI on every request
     assert row["band"] is None and row["quote_error"] == "等待下一次取价"
-    assert len(fetch.calls) == 1
+    assert len(fetch.calls) == 2
+    fetch.error = None
+    fetch.prices["CCC.US"] = 30.0
+    clock.now += QUOTE_POLL_S
+    quotes.poll(list(fetch.calls[1]))
+    assert rows_by_ticker(repo, quotes)["CCC.US"]["band"]["price"] == 30.0
+
+
+def settle(path, seconds_ago: float = 60.0) -> None:
+    """Age a file's mtime past the window in which an edit could keep the same timestamp."""
+    t = time.time() - seconds_ago
+    os.utime(path, (t, t))
+
+
+def test_only_changed_files_are_parsed_again(repo, quotes, monkeypatch):
+    parsed: list[str] = []
+    real = catalog_module.load_framework
+    monkeypatch.setattr(catalog_module, "load_framework", lambda p: (parsed.append(p.stem), real(p))[1])
+    for p in repo.glob("*.md"):
+        settle(p)
+    catalog(repo, quotes)
+    assert sorted(parsed) == ["0001.HK", "AAA.US", "BBB.US"]
+
+    parsed.clear()
+    catalog(repo, quotes)
+    assert parsed == []
+
+    (repo / "AAA.US.md").write_text(framework_md("AAA.US", "Alpha Renamed", "`stalwart`"), encoding="utf-8")
+    settle(repo / "AAA.US.md", seconds_ago=30.0)
+    (repo / "BBB.US.md").unlink()
+    rows = rows_by_ticker(repo, quotes)
+    assert parsed == ["AAA.US"]
+    assert rows["AAA.US"]["name"] == "Alpha Renamed" and "BBB.US" not in rows
+
+
+def test_a_just_written_file_is_parsed_on_every_read(repo, quotes, monkeypatch):
+    # A same-size rewrite inside one timestamp tick keeps mtime and size: a fresh file is never trusted.
+    parsed: list[str] = []
+    real = catalog_module.load_framework
+    monkeypatch.setattr(catalog_module, "load_framework", lambda p: (parsed.append(p.stem), real(p))[1])
+    for p in repo.glob("*.md"):
+        settle(p)
+    (repo / "AAA.US.md").write_text(framework_md("AAA.US", "Alpha Corp", "`stalwart`"), encoding="utf-8")
+    catalog(repo, quotes)
+    parsed.clear()
+    catalog(repo, quotes)
+    assert parsed == ["AAA.US"]
+
+
+def test_axis_files_are_parsed_again_only_when_changed(repo, quotes, monkeypatch):
+    _axis(repo, "al", ["AAA.US"])
+    parsed: list[str] = []
+    real = catalog_module.load_axis
+    monkeypatch.setattr(catalog_module, "load_axis", lambda p: (parsed.append(p.stem), real(p))[1])
+    settle(repo / "axes" / "al.md")
+    catalog(repo, quotes)
+    catalog(repo, quotes)
+    assert parsed == ["al"]
 
 
 def test_missing_symbol_nulls_only_its_row(repo, fetch, quotes, caplog):

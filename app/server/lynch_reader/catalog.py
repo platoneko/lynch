@@ -76,8 +76,9 @@ class QuoteSnapshot:
 
 
 class QuoteCache:
-    """The one copy of the pool's quotes (AGENTS.md「app 对话」). Two things fetch: the poller (`poll`) and the
-    first read before any attempt (`read`); everything else only reads.
+    """The one copy of the pool's quotes (AGENTS.md「app 对话」). Two things fetch: the poller (`poll`) and a read
+    asking for symbols no attempt has asked for yet (`read`: the first read, or a framework added since); everything
+    else only reads.
 
     A failed attempt keeps the last good batch and reports its error beside it. The lock makes concurrent
     callers wait for one CLI call. Listeners hear every new batch on the fetching thread, under the lock.
@@ -95,7 +96,7 @@ class QuoteCache:
         self._lock = threading.Lock()
         self._batch: QuoteBatch | None = None
         self._error: Exception | None = None
-        self._tried = False
+        self._asked: frozenset[str] | None = None  # the latest attempt's symbols; None before any attempt
         self._listeners: list[Callable[[QuoteBatch], None]] = []
 
     def subscribe(self, listener: Callable[[QuoteBatch], None]) -> None:
@@ -103,7 +104,9 @@ class QuoteCache:
 
     def read(self, symbols: list[str]) -> QuoteSnapshot:
         with self._lock:
-            if not self._tried:  # just started: the first reader waits for the first batch
+            # Just started, or a new framework: the reader waits for the poll's fetch, taken early. A failed
+            # attempt counts as asked, so reads never retry the CLI; the poll does.
+            if self._asked is None or not self._asked.issuperset(symbols):
                 self._fetch_batch(symbols)
             return QuoteSnapshot(self._batch, self._error)
 
@@ -127,7 +130,7 @@ class QuoteCache:
             self._error = e
             return
         finally:
-            self._tried = True  # a failed first attempt counts: readers do not each retry the CLI
+            self._asked = frozenset(key)
         self._error = None
         for s in key:
             if not _usable(quotes.get(s)):
@@ -178,10 +181,44 @@ class QuotePoller:
                 return
 
 
+class _ParsedFiles:
+    """Each file's parse, kept until its mtime or size changes: a list read parses again only the edited files.
+
+    Filesystem timestamps tick coarsely, so a same-size rewrite inside one tick keeps both; like git's racy-clean
+    rule, a file modified within `SETTLE_S` of being read is never kept and is parsed again on every read.
+    """
+
+    SETTLE_S = 2.0
+
+    def __init__(self, parse: Callable[[Path], Any]) -> None:
+        self._parse = parse
+        self._lock = threading.Lock()
+        self._kept: dict[Path, tuple[tuple[int, int], Any]] = {}
+
+    def __call__(self, paths: list[Path]) -> list[Any]:
+        with self._lock:
+            out, kept = [], {}
+            for p in paths:
+                try:
+                    st = p.stat()
+                except OSError:  # gone since listing: its parse reports the error
+                    out.append(self._parse(p))
+                    continue
+                key = (st.st_mtime_ns, st.st_size)
+                hit = self._kept.get(p)
+                value = hit[1] if hit is not None and hit[0] == key else self._parse(p)
+                if time.time() - st.st_mtime > self.SETTLE_S:
+                    kept[p] = (key, value)
+                out.append(value)
+            self._kept = kept  # files no longer listed drop out
+            return out
+
+
 def catalog(frameworks_dir: Path, quotes: QuoteCache, archived: Set[str] = frozenset()) -> dict[str, Any]:
     # Step 1: framework header fields; a bad file costs only its own row. Archived rows stay in the
-    # list, quotes included: the web hides them unless asked to show them.
-    parsed = [_ticker_row(p) for p in list_framework_paths(frameworks_dir)]
+    # list, quotes included: the web hides them unless asked to show them. Kept parses are shared, so each
+    # read fills its own copy of the row.
+    parsed = [(dict(row), meta) for row, meta in _framework_rows(list_framework_paths(frameworks_dir))]
     for row, _ in parsed:
         row["archived"] = row["ticker"] in archived
     priced = [(row, meta) for row, meta in parsed if meta is not None]
@@ -231,16 +268,16 @@ def axis_path_in(name: str, frameworks_dir: Path) -> Path | None:
 
 def _scenario_axes(frameworks_dir: Path) -> list[AxisMeta]:
     """Scenario axes by file name; a bad axis file costs only itself."""
-    out: list[AxisMeta] = []
-    for p in list_axis_paths(frameworks_dir / "axes"):
-        try:
-            axis = load_axis(p)
-        except Exception as e:  # noqa: BLE001 — one bad axis must not blank the list
-            log.warning("axis parse failed: %s: %s", p.name, e)
-            continue
-        if axis.kind == SCENARIO_AXIS:
-            out.append(axis)
-    return out
+    axes = _axis_files(list_axis_paths(frameworks_dir / "axes"))
+    return [a for a in axes if a is not None and a.kind == SCENARIO_AXIS]
+
+
+def _axis_or_none(path: Path) -> AxisMeta | None:
+    try:
+        return load_axis(path)
+    except Exception as e:  # noqa: BLE001 — one bad axis must not blank the list
+        log.warning("axis parse failed: %s: %s", path.name, e)
+        return None
 
 
 def _axis_json(a: AxisMeta) -> dict[str, Any]:
@@ -278,6 +315,11 @@ def _ticker_row(path: Path) -> tuple[dict[str, Any], FrameworkMeta | None]:
         consensus=_consensus_json(meta.consensus),
     )
     return row, meta
+
+
+# Kept across reads for every caller: a kept parse equals a fresh one.
+_framework_rows = _ParsedFiles(_ticker_row)
+_axis_files = _ParsedFiles(_axis_or_none)
 
 
 def _price_row(row: dict[str, Any], meta: FrameworkMeta, batch: QuoteBatch, us_close: datetime) -> None:

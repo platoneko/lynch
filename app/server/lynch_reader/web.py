@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import logging
 import os
 import shutil
@@ -65,6 +66,19 @@ class WebDist(StaticFiles):
         return response
 
 
+def unless_held(request: Request, response: Response) -> Response:
+    """Tag the body with a digest of itself; a client already holding that body gets an empty 304.
+
+    A content digest, not file times: it changes exactly when the answer does, whatever changed it
+    (a framework edit, an archive toggle, a new quote batch or its failure).
+    """
+    etag = f'"{hashlib.sha256(response.body).hexdigest()[:32]}"'
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={"ETag": etag})
+    response.headers["ETag"] = etag
+    return response
+
+
 def active_pool(frameworks_dir: Path, archive: FrameworkArchive) -> list[str]:
     """Frameworks the alerts cover: archived ones are left out."""
     hidden = archive.tickers()
@@ -97,13 +111,13 @@ def create_app(frameworks_dir: Path, web_dist: Path, quotes: QuoteCache, devices
         quotes.subscribe(lambda batch: anomalies.observe(batch, pool()))
 
     def tickers(request: Request) -> Response:
-        return JSONResponse(catalog(frameworks_dir, quotes, archive.tickers()))
+        return unless_held(request, JSONResponse(catalog(frameworks_dir, quotes, archive.tickers())))
 
     def framework(request: Request) -> Response:
         path = framework_path(request.path_params["ticker"], frameworks_dir)
         if path is None:
             return PlainTextResponse("unknown ticker", status_code=404)
-        return Response(path.read_text(encoding="utf-8"), media_type="text/markdown; charset=utf-8")
+        return unless_held(request, Response(path.read_text(encoding="utf-8"), media_type="text/markdown; charset=utf-8"))
 
     def set_archived(archived: bool):
         async def run(request: Request) -> Response:
@@ -121,7 +135,7 @@ def create_app(frameworks_dir: Path, web_dist: Path, quotes: QuoteCache, devices
         path = axis_path_in(request.path_params["name"], frameworks_dir)
         if path is None:
             return PlainTextResponse("unknown axis", status_code=404)
-        return Response(path.read_text(encoding="utf-8"), media_type="text/markdown; charset=utf-8")
+        return unless_held(request, Response(path.read_text(encoding="utf-8"), media_type="text/markdown; charset=utf-8"))
 
     def earnings_list(request: Request) -> Response:
         # Sync: the first request after the daily calendar run falls due may wait on longbridge in the thread pool.

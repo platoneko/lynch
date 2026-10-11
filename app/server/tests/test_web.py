@@ -171,6 +171,30 @@ def test_framework_markdown(repo, tmp_path, quotes):
     assert r.text == (repo / "AAA.US.md").read_text(encoding="utf-8")
 
 
+def test_tickers_answer_304_while_the_list_is_unchanged(repo, tmp_path, quotes):
+    c = client(repo, tmp_path, quotes)
+    etag = c.get("/api/tickers").headers["etag"]
+    held = c.get("/api/tickers", headers={"If-None-Match": etag})
+    assert held.status_code == 304 and held.content == b""
+    c.post("/api/frameworks/AAA.US/archive", json={})
+    changed = c.get("/api/tickers", headers={"If-None-Match": etag})
+    assert changed.status_code == 200 and changed.headers["etag"] != etag
+
+
+def test_documents_answer_304_until_the_file_changes(repo, tmp_path, quotes):
+    _axis = repo / "axes"
+    _axis.mkdir()
+    (_axis / "al.md").write_text("# _AXIS.al — AL 价格情景轴\n> 轴类型：`shared_scenario_axis` | 挂载票：AAA.US\n",
+                                 encoding="utf-8")
+    c = client(repo, tmp_path, quotes)
+    for path, file in (("/api/frameworks/AAA.US", repo / "AAA.US.md"), ("/api/axes/al", _axis / "al.md")):
+        etag = c.get(path).headers["etag"]
+        assert c.get(path, headers={"If-None-Match": etag}).status_code == 304
+        file.write_text(file.read_text(encoding="utf-8") + "\nedited\n", encoding="utf-8")
+        r = c.get(path, headers={"If-None-Match": etag})
+        assert r.status_code == 200 and r.text.endswith("edited\n")
+
+
 def test_framework_outside_pool_is_404(repo, tmp_path, quotes):
     c = client(repo, tmp_path, quotes)
     for path in ("/api/frameworks/_TEMPLATE", "/api/frameworks/NOPE.US",

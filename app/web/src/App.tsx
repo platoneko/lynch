@@ -18,6 +18,7 @@ import { AxisDocHead, DocPage, TickerDocHead } from './doc/DocPage';
 import { fetchEarnings, ignoreEarnings, unignoreEarnings } from './earnings/api';
 import { EarningsPage } from './earnings/EarningsPage';
 import type { EarningsList } from './earnings/types';
+import { useOnForeground } from './foreground';
 import { HomePage } from './home/HomePage';
 import { DEFAULT_FILTER, type HomeFilter } from './home/listModel';
 import {
@@ -29,6 +30,11 @@ import type { Catalog } from './types';
 // The server refetches quotes every 5 minutes; the home list, earnings and anomalies are re-read at that pace.
 const ALERT_POLL_MS = 5 * 60_000;
 
+/** Pages that show anchors from the list: only these ask the server for it again. */
+function showsAnchors(route: Route): boolean {
+  return route.page === 'home' || route.page === 'doc' || route.page === 'axis';
+}
+
 export function zoneLabels(catalog: Catalog): Map<string, string> {
   return new Map(catalog.zones.map((z) => [z.id, z.label]));
 }
@@ -37,7 +43,6 @@ export function App() {
   const [route, setRoute] = useState<Route>(() => parseRoute(window.location.hash));
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
   // Filter lives here, not in HomePage, so the query survives a trip into a doc.
   const [filter, setFilter] = useState<HomeFilter>(DEFAULT_FILTER);
   const [chatList, setChatList] = useState<ChatList | null>(null);
@@ -107,21 +112,29 @@ export function App() {
   const homeScroll = useRef(0);
   const openedFromHome = useRef(false);
 
+  // The list's tag: each read asks whether it changed since, and an unchanged list costs an empty 304.
+  const catalogTag = useRef<string | null>(null);
   const load = useCallback(() => {
-    setLoading(true);
-    setError(null);
-    fetchCatalog()
-      .then(setCatalog, (e: unknown) => setError(String(e instanceof Error ? e.message : e)))
-      .finally(() => setLoading(false));
+    fetchCatalog(catalogTag.current).then((fresh) => {
+      setError(null);
+      if (fresh === null) return;
+      catalogTag.current = fresh.etag;
+      setCatalog(fresh.value);
+    }, (e: unknown) => setError(String(e instanceof Error ? e.message : e)));
   }, []);
 
-  useEffect(() => load(), [load]);
-  // The server refetches quotes every 5 minutes; re-read the list at that pace while it is on screen.
+  // Each visit to a page showing anchors asks again, so a framework edited in a chat is current on the way back.
+  // The server refetches quotes every 5 minutes; the home list also asks at that pace while it is on screen.
   useEffect(() => {
+    if (showsAnchors(route) || catalogTag.current === null) load();
     if (route.page !== 'home') return;
     const timer = window.setInterval(load, ALERT_POLL_MS);
     return () => window.clearInterval(timer);
-  }, [route.page, load]);
+  }, [route, load]);
+  // Back in the foreground on such a page: edits made meanwhile (a terminal session, a git pull) show without a tap.
+  useOnForeground(() => {
+    if (showsAnchors(route)) load();
+  });
 
   useEffect(() => {
     const onHash = () => setRoute(parseRoute(window.location.hash));
@@ -233,7 +246,7 @@ export function App() {
         axes={axes} zoneLabel={(id) => labels.get(id) ?? id} onOpenAxis={(name) => { window.location.hash = axisHash(name); }} />
     );
     return (
-      <DocPage key={`doc:${ticker}`} load={() => fetchFramework(ticker)} targets={targets} head={head} onBack={goBack}
+      <DocPage key={`doc:${ticker}`} load={(held) => fetchFramework(ticker, held)} targets={targets} head={head} onBack={goBack}
         barExtra={<>
           {row && <ArchiveButton ticker={ticker} archived={row.archived}
             onToggle={() => (row.archived ? restoreFramework(ticker) : archiveFramework(ticker)).then(load)} />}
@@ -246,13 +259,12 @@ export function App() {
   if (route.page === 'axis') {
     const { name } = route;
     const head = <AxisDocHead axis={axes.get(name)} pool={pool} />;
-    return <DocPage key={`axis:${name}`} load={() => fetchAxis(name)} targets={targets} head={head} onBack={goBack} />;
+    return <DocPage key={`axis:${name}`} load={(held) => fetchAxis(name, held)} targets={targets} head={head} onBack={goBack} />;
   }
   return (
     <>
       {error && <div className="banner-error" onClick={load}>刷新失败：{error}（点此重试）</div>}
       <HomePage catalog={catalog} filter={filter} onFilter={setFilter} onOpen={openDoc} onOpenAxis={openAxis}
-        onRefreshFrameworks={load} refreshing={loading}
         chatCount={chatList?.running_count ?? 0} onOpenChats={() => openFromHome(chatsHash())}
         earnings={earnings} onOpenEarnings={() => openFromHome(earningsHash())}
         anomalies={anomalies} onOpenAnomalies={() => openFromHome(anomaliesHash())} />

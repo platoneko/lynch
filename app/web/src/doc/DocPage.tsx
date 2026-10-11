@@ -1,4 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import type { Tagged } from '../api';
+import { useOnForeground } from '../foreground';
 import { AxisLine } from '../home/AxisLine';
 import { consensusText, extraBands, rowZone, type ExtraBand } from '../home/listModel';
 import { fmt, priceDecimals } from '../home/PriceBar';
@@ -11,7 +13,7 @@ import { countHits, findHits, hitRanges, inertFragment, listMatches, paintHits, 
 
 /** A folding, jumpable markdown document: a ticker's framework or a shared axis. */
 export function DocPage({ load: fetchSource, targets, head, onBack, barExtra }: {
-  load: () => Promise<string>; // the page is keyed on its document, so this runs once per mount
+  load: (held: string | null) => Promise<Tagged<string> | null>; // null: unchanged since the `held` tag
   targets: LinkTargets;
   head: ReactNode; // shown above the document's own title block
   onBack: () => void;
@@ -27,12 +29,23 @@ export function DocPage({ load: fetchSource, targets, head, onBack, barExtra }: 
   const [pendingMatch, setPendingMatch] = useState(false);
   const topBar = useRef<HTMLElement>(null);
 
+  const tag = useRef<string | null>(null);
+  const read = (onError: (e: unknown) => void) => {
+    fetchSource(tag.current).then((fresh) => {
+      if (fresh === null) return;
+      tag.current = fresh.etag;
+      setSource(fresh.value);
+    }, onError);
+  };
   const load = () => {
     setError(null);
-    fetchSource().then(setSource, (e: unknown) => setError(String(e instanceof Error ? e.message : e)));
+    read((e) => setError(String(e instanceof Error ? e.message : e)));
   };
   // Once per document: the parent keys the page on it.
   useEffect(load, []);
+  // Back in the foreground, a document edited meanwhile is read again (unchanged costs an empty 304). A failure
+  // keeps the document on screen: the forward may still be waking up, and the next return asks again.
+  useOnForeground(() => read(() => {}));
 
   const doc: BuiltDoc | null = useMemo(() => (source ? buildDoc(source, targets) : null), [source, targets]);
 

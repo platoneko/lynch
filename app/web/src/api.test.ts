@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { get, post } from './api';
+import { get, getIfChanged, post } from './api';
 
 function answer(status: number, body: string): void {
   vi.stubGlobal('fetch', async () => new Response(body, { status }));
@@ -34,6 +34,34 @@ describe('post', () => {
     await expect(post('/x')).rejects.toThrow('409');
     answer(400, JSON.stringify({ error: '' }));
     await expect(post('/x')).rejects.toThrow('400');
+  });
+});
+
+describe('getIfChanged', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('asks with the held tag and gets null back when the server says unchanged', async () => {
+    const seen: (string | null)[] = [];
+    vi.stubGlobal('fetch', async (_: string, init: RequestInit) => {
+      seen.push(new Headers(init.headers).get('If-None-Match'));
+      return new Response(null, { status: 304 });
+    });
+    expect(await getIfChanged('/api/tickers', '"abc"')).toBeNull();
+    expect(seen).toEqual(['"abc"']);
+  });
+  it('asks plainly when nothing is held and returns a changed answer', async () => {
+    const seen: (string | null)[] = [];
+    vi.stubGlobal('fetch', async (_: string, init: RequestInit) => {
+      seen.push(new Headers(init.headers).get('If-None-Match'));
+      return new Response('body', { status: 200, headers: { ETag: '"new"' } });
+    });
+    const res = await getIfChanged('/api/tickers', null);
+    expect(res?.headers.get('ETag')).toBe('"new"');
+    expect(seen).toEqual([null]);
+  });
+  it('fails like get', async () => {
+    answer(500, 'boom');
+    await expect(getIfChanged('/x', '"abc"')).rejects.toThrow('500 boom');
   });
 });
 
