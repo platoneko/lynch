@@ -279,3 +279,11 @@ button { font: inherit; color: inherit; }
 .cand-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; border-bottom: 1px solid var(--line); }
 .cand-fold { width: 100%; border-bottom: 1px solid var(--line); }
 .cand-detail { flex-basis: 100%; padding: 0 0 8px 14px; display: flex; flex-direction: column; gap: 8px; }
+/* ---- earnings */
+/* A second, quieter line under the ticker: period and when. */
+.earn-main { flex-direction: column; align-items: flex-start; gap: 2px; }
+.earn-main .chat-row-title { width: 100%; }
+.earn-sub { color: var(--muted); font-size: 12px; }
+.earn-done .chat-row-main { opacity: 0.55; }
+/* Left of the ⋯ button, so the running-chats count keeps the right corner. */
+.badge-alert { right: auto; left: -6px; min-width: 18px; padding: 0; background: #e5484d; font-weight: 700; }

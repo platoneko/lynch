@@ -12,10 +12,19 @@ import { tickerLabel } from './chat/listModel';
 import type { ChatList, ChatOptions, SavedCandidate } from './chat/types';
 import { ArchiveButton } from './doc/ArchiveButton';
 import { AxisDocHead, DocPage, TickerDocHead } from './doc/DocPage';
+import { fetchEarnings, ignoreEarnings, unignoreEarnings } from './earnings/api';
+import { EarningsPage } from './earnings/EarningsPage';
+import { pendingCount } from './earnings/model';
+import type { EarningsList } from './earnings/types';
 import { HomePage } from './home/HomePage';
 import { DEFAULT_FILTER, type HomeFilter } from './home/listModel';
-import { axisHash, candidatesHash, chatHash, chatsHash, docHash, newChatHash, newDiscoverHash, parseRoute, type Route } from './route';
+import {
+  axisHash, candidatesHash, chatHash, chatsHash, docHash, earningsHash, newChatHash, newDiscoverHash, parseRoute,
+  type Route,
+} from './route';
 import type { Catalog } from './types';
+
+const EARNINGS_POLL_MS = 5 * 60_000;
 
 export function zoneLabels(catalog: Catalog): Map<string, string> {
   return new Map(catalog.zones.map((z) => [z.id, z.label]));
@@ -50,6 +59,22 @@ export function App() {
   useEffect(() => {
     if (route.page === 'chats' || route.page === 'candidates') loadCandidates();
   }, [route.page, loadCandidates]);
+  const [earnings, setEarnings] = useState<EarningsList | null>(null);
+  const [earningsError, setEarningsError] = useState<string | null>(null);
+  const loadEarnings = useCallback(() => {
+    fetchEarnings().then((l) => { setEarnings(l); setEarningsError(null); },
+      (e: unknown) => setEarningsError(String(e instanceof Error ? e.message : e)));
+  }, []);
+  // Released / upcoming follow the clock (a release flips at the open or close), so poll; the server answers
+  // from its day's calendar cache without calling longbridge.
+  useEffect(() => {
+    if (route.page !== 'home' && route.page !== 'earnings') return;
+    loadEarnings();
+    const timer = window.setInterval(loadEarnings, EARNINGS_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [route.page, loadEarnings]);
+  const dismiss = (p: Promise<unknown>) =>
+    p.then(loadEarnings, (e: unknown) => setEarningsError(String(e instanceof Error ? e.message : e)));
   const [chatOptions, setChatOptions] = useState<ChatOptions | null>(null);
   // A new conversation's first message, handed from its blank page to its own page.
   const [firstMessage, setFirstMessage] = useState<{ id: string; text: string } | null>(null);
@@ -157,6 +182,15 @@ export function App() {
         onOpenDoc={(t) => { window.location.hash = docHash(t); }} />
     );
   }
+  if (route.page === 'earnings') {
+    return (
+      <EarningsPage list={earnings} error={earningsError} label={(t) => labels.get(t) ?? t} onBack={goBack}
+        onResearch={(t) => { window.location.hash = newChatHash(t); }}
+        onIgnore={(it) => dismiss(ignoreEarnings(it.ticker, it.date))}
+        onUnignore={(it) => dismiss(unignoreEarnings(it.ticker, it.date))}
+        onOpenDoc={(t) => { window.location.hash = docHash(t); }} />
+    );
+  }
   if (route.page === 'doc') {
     const labels = zoneLabels(catalog);
     const { ticker } = route;
@@ -187,7 +221,8 @@ export function App() {
       {error && <div className="banner-error" onClick={reload}>刷新失败：{error}（点此重试）</div>}
       <HomePage catalog={catalog} filter={filter} onFilter={setFilter} onOpen={openDoc} onOpenAxis={openAxis}
         onRefreshQuotes={reload} onRefreshFrameworks={() => load(false)} refreshing={loading}
-        chatCount={chatList?.running_count ?? 0} onOpenChats={() => openFromHome(chatsHash())} />
+        chatCount={chatList?.running_count ?? 0} onOpenChats={() => openFromHome(chatsHash())}
+        earningsPending={pendingCount(earnings)} onOpenEarnings={() => openFromHome(earningsHash())} />
     </>
   );
 }
