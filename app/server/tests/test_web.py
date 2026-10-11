@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from starlette.testclient import TestClient
 
+from lynch_reader.anomalies import Anomalies, AnomalyStore, BaselineCache, Hit
 from lynch_reader.archive import FrameworkArchive
 from lynch_reader.catalog import QUOTE_REFRESH_MAX_AGE_S, QuoteCache
 from lynch_reader.earnings import CalendarCache, Earnings, IgnoreStore
 from lynch_reader.web import create_app
 from eval.lib.earnings_lb import CalendarEvent, CalendarFetch  # after lynch_reader, which puts the repo root on sys.path
 from tests.conftest import NOW, FakeFetch, paired_devices
+from tests.test_anomalies import FakeBars, us_bars
 
 
 def fake_calendar(tickers, start, end):
@@ -15,7 +17,7 @@ def fake_calendar(tickers, start, end):
     return CalendarFetch({t: events.get(t, []) for t in tickers}, [], None)
 
 
-def client(repo, tmp_path, quotes, with_dist=True, calendar=fake_calendar):
+def client(repo, tmp_path, quotes, with_dist=True, calendar=fake_calendar, bars=None, poller=None):
     dist = tmp_path / "dist"
     if with_dist:
         dist.mkdir()
@@ -23,9 +25,77 @@ def client(repo, tmp_path, quotes, with_dist=True, calendar=fake_calendar):
     devices, cookies = paired_devices(tmp_path)
     archive = FrameworkArchive(tmp_path / "archive" / "frameworks.json")
     wall = lambda: NOW  # noqa: E731 — Mon 2026-09-21 10:13 New York: AAA's before-open release is out
-    earnings = Earnings(CalendarCache(tmp_path / "earnings" / "calendar.json", fetch=calendar, wall=wall),
-                        IgnoreStore(tmp_path / "earnings" / "ignored.json", wall=wall), wall=wall)
-    return TestClient(create_app(repo, dist, quotes, devices, archive, earnings=earnings), cookies=cookies)
+    cal = CalendarCache(tmp_path / "earnings" / "calendar.json", fetch=calendar, wall=wall)
+    earnings = Earnings(cal, IgnoreStore(tmp_path / "earnings" / "ignored.json", wall=wall), wall=wall)
+    baselines = BaselineCache(tmp_path / "anomalies" / "baseline.json", fetch=bars or FakeBars(us_bars()),
+                              wall=wall, sleep=lambda s: None)
+    anomalies = Anomalies(AnomalyStore(tmp_path / "anomalies" / "events.json", wall=wall), baselines, cal, wall=wall)
+    app = create_app(repo, dist, quotes, devices, archive, earnings=earnings, anomalies=anomalies, poller=poller)
+    c = TestClient(app, cookies=cookies)
+    c.anomalies = anomalies  # tests reach the store and the upkeep through the client
+    return c
+
+
+def test_a_new_batch_is_judged_for_the_active_pool(repo, tmp_path, fetch, quotes):
+    c = client(repo, tmp_path, quotes)
+    c.anomalies.upkeep(["AAA.US", "BBB.US"])  # the poller's daily baseline fetch
+    # BBB at 5.0 on a 4.0 base close is +25%; AAA (on the earnings list in fake_calendar) has no base close.
+    fetch.prev["BBB.US"] = 4.0
+    c.get("/api/tickers")  # the first read fetches; the listener judges the batch
+    items = c.get("/api/anomalies").json()["items"]
+    assert [(i["ticker"], i["ref"], i["reason"]) for i in items] == [("BBB.US", "4.0", "move")]
+    c.post("/api/frameworks/BBB.US/archive", json={})
+    assert c.get("/api/anomalies").json()["items"] == []  # archived: not listed
+
+
+def test_anomaly_list_never_fetches_bars(repo, tmp_path, quotes):
+    bars = FakeBars(us_bars())
+    c = client(repo, tmp_path, quotes, bars=bars)
+    body = c.get("/api/anomalies").json()
+    assert body == {"error": None, "items": []} and bars.calls == []
+
+
+def test_anomaly_ignore_and_unignore(repo, tmp_path, quotes):
+    c = client(repo, tmp_path, quotes)
+    c.anomalies.store.record([("AAA.US", "20.0", Hit(0.25, 25.0, "regular", NOW, "move", None))], lambda t: False)
+    assert c.post("/api/anomalies/ignore", json={"ticker": "AAA.US", "ref": "20.0"}).status_code == 204
+    assert c.get("/api/anomalies").json()["items"][0]["ignored"] is True
+    assert c.post("/api/anomalies/unignore", json={"ticker": "AAA.US", "ref": "20.0"}).status_code == 204
+    assert c.get("/api/anomalies").json()["items"][0]["ignored"] is False
+
+
+def test_anomaly_ignore_refuses_bad_input(repo, tmp_path, quotes):
+    c = client(repo, tmp_path, quotes)
+    for body in ({"ticker": "NOPE.US", "ref": "20.0"}, {"ticker": "AAA.US", "ref": "1.0"},
+                 {"ticker": "AAA.US"}, {"ticker": 1, "ref": "20.0"}):
+        r = c.post("/api/anomalies/ignore", json=body)
+        assert r.status_code == 400 and r.json()["error"], body
+    r = c.post("/api/anomalies/ignore", content="x", headers={"content-type": "text/plain"})
+    assert r.status_code == 415
+
+
+def test_earnings_items_carry_their_anomaly(repo, tmp_path, quotes):
+    c = client(repo, tmp_path, quotes)
+    c.anomalies.store.record([("AAA.US", "20.0", Hit(0.25, 25.0, "post", NOW, "move", None))], lambda t: True)
+    [item] = c.get("/api/earnings").json()["items"]
+    assert item["anomaly"]["session"] == "post"
+    assert c.get("/api/anomalies").json()["items"] == []
+
+
+def test_lifespan_starts_and_stops_the_poller(repo, tmp_path, quotes):
+    class FakePoller:
+        started = stopped = False
+
+        def start(self):
+            self.started = True
+
+        def stop(self):
+            self.stopped = True
+    p = FakePoller()
+    with client(repo, tmp_path, quotes, poller=p) as c:
+        assert p.started and not p.stopped
+        c.get("/api/tickers")
+    assert p.stopped
 
 
 def test_earnings_lists_pool_tickers(repo, tmp_path, quotes):

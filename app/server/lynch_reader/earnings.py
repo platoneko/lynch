@@ -139,7 +139,8 @@ class Earnings:
     def __init__(self, calendar: CalendarCache, ignored: IgnoreStore, wall: Callable[[], float] = time.time) -> None:
         self.calendar, self.ignored, self._wall = calendar, ignored, wall
 
-    def snapshot(self, pool: list[str], chat_starts: list[tuple[str, float]]) -> dict[str, Any]:
+    def snapshot(self, pool: list[str], chat_starts: list[tuple[str, float]],
+                 tag: Callable[[str], dict[str, Any] | None] = lambda t: None) -> dict[str, Any]:
         events, day, error = self.calendar.get(pool)
         now = datetime.fromtimestamp(self._wall(), BJT)
         ignored = self.ignored.keys()
@@ -147,10 +148,11 @@ class Earnings:
         released = sorted((r for r in rows if r.status == "released"), key=lambda r: r.release_at, reverse=True)
         upcoming = sorted((r for r in rows if r.status == "upcoming"), key=lambda r: r.release_at)
         return {"fetched_day": day, "error": error,
-                "items": [_item(r, ignored, chat_starts) for r in released + upcoming]}
+                "items": [_item(r, ignored, chat_starts, tag(r.ticker)) for r in released + upcoming]}
 
 
-def _item(r: Row, ignored: set[tuple[str, str]], chat_starts: list[tuple[str, float]]) -> dict[str, Any]:
+def _item(r: Row, ignored: set[tuple[str, str]], chat_starts: list[tuple[str, float]],
+          anomaly: dict[str, Any] | None) -> dict[str, Any]:
     since = r.since.timestamp()
     return {
         "ticker": r.ticker, "status": r.status, "date": r.event.date, "day_offset": r.day_offset,
@@ -158,4 +160,5 @@ def _item(r: Row, ignored: set[tuple[str, str]], chat_starts: list[tuple[str, fl
         # Any 讨论 chat on the ticker started after the release counts, wherever it was opened from.
         "researched": any(t == r.ticker and created >= since for t, created in chat_starts),
         "ignored": any((r.ticker, d) in ignored for d in r.dates),
+        "anomaly": anomaly,  # the ticker's anomaly filed under earnings (anomalies.py), if any
     }

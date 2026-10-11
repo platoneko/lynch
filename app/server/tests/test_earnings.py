@@ -231,7 +231,7 @@ def test_snapshot_shape(tmp_path, cal):
     assert body["items"] == [{
         "ticker": "TSM.US", "status": "released", "date": "2026-10-14", "day_offset": 0, "slot": "after",
         "release_at": "2026-10-14T16:00:00-04:00", "period": "2026 财年第 3 季度",
-        "researched": False, "ignored": False,
+        "researched": False, "ignored": False, "anomaly": None,
     }]
 
 
@@ -285,6 +285,15 @@ def test_released_newest_first_then_upcoming_soonest_first(tmp_path):
                  wall=clk)
     items = e.snapshot(["AAA.US", "BBB.US", "CCC.US", "DDD.US"], [])["items"]
     assert [i["ticker"] for i in items] == ["BBB.US", "AAA.US", "DDD.US", "CCC.US"]
+
+
+def test_snapshot_carries_each_rows_anomaly_tag(tmp_path, cal):
+    clk = Clock(at("US", 10, 15, 10))
+    store = IgnoreStore(tmp_path / "ignored.json", wall=clk)
+    e = Earnings(CalendarCache(tmp_path / "calendar.json", fetch=cal, wall=clk), store, wall=clk)
+    [item] = e.snapshot(["TSM.US"], [], tag=lambda t: {"move": 0.1} if t == "TSM.US" else None)["items"]
+    assert item["anomaly"] == {"move": 0.1}
+    assert e.snapshot(["TSM.US"], [])["items"][0]["anomaly"] is None
 
 
 def test_read_only_get_never_fetches(tmp_path, cal):

@@ -49,6 +49,7 @@ python3 -m unittest discover -s eval/lib -t . -p 'test_*.py'
 - Grok 对话记录由服务端写在 `output/chat/grok/<id>.jsonl`（Claude 记录同格式）；上下文长度在新建时经 ACP 选定。
 - 框架归档：在 app 文档页顶栏点「归档 / 恢复」，归档清单只存 `output/archive/frameworks.json`（服务端唯一写者），只影响 app 首页——默认隐藏已归档标的，勾「展示归档」才显示；框架文档、每票演算脚本、日报、`just check` 都不受影响，也不写 `frameworks/`。
 - 财报提示：⋯ 菜单「财报」页列出框架池（不含已归档）里刚发布（发布日后 7 天内）和即将发布（3 天内）财报的票；待看（已出、没调研、没忽略）时 ⋯ 上亮「!」。日历只用 `longbridge finance-calendar`（`eval/lib/earnings_lb.py`），服务端每个北京日最多全量查一次、新加的框架单独查、失败 30 分钟内不重试，缓存与忽略清单在 `output/earnings/`（服务端唯一写者）；「已出」按发布时段与市场时钟判定（盘前按开盘，其余按收盘），不等财务数据入库。财报后开过该票讨论对话即算已调研。判定与缓存的唯一真源是 `app/server/lynch_reader/earnings.py`；调研提示词在 `app/web/src/earnings/prompts.ts`。飞书财报提醒已下线。
+- 现价与异动提示：现价只有一份——服务端后台每 5 分钟取一次全池现价（池里没有市场在交易、也没有新框架时不取；「刷新股价」让它立刻取一次，1 分钟内取过则不取），首页列表每 5 分钟读一次、异动判定在每批现价到达时做，都不自己取价。⋯ 菜单「异动」页每只票列出最新一条：现价（含盘前、盘后、夜盘）相对它所在时段对应的正式收盘，超过平时波动 4 倍，或正式时段超过 2 倍且当天成交量超过平时 5 倍（平时 = 近 60 个交易日的日涨跌幅标准差 / 成交量中位数，日线每个北京日由后台查一次）。首次触发时已在财报页上的票归财报，不进异动。判定与存储的唯一真源是 `app/server/lynch_reader/anomalies.py`，记录在 `output/anomalies/`（服务端唯一写者）；现价的唯一来源是 `catalog.py` 的 `QuoteCache` / `QuotePoller`。
 - 候选区 `output/candidates/candidates.json`：新候选只在用户明确选择时进入——app 里点「存入候选区」（只存 Grok 原话里出现过的候选），终端里经 `just candidates-save` 点名（只存给定回答文件候选块里的票）；待看和已入库的票都能手动「归档」、在已归档里「恢复」；归档满 30 天的票从文件删除，已归档的票再次存入则回到待看；每只票显示 5 个不同 KOL 各自最新的一条来源，这几条永不回收，其余存入超过 7 天的来源只在这只票再次存入时回收（天数可用环境变量 `LYNCH_CANDIDATE_SOURCE_DAYS` 改，服务端和 `just candidates-save` 都读它；展开卡片可看全部来源）；来源按 X 帖子编号去重；看空的观点不进候选。服务端与脚本共用 `CandidateStore`，加文件锁读改写。不写 invest。新建发现新票默认 grok-4.5、500k。
 
 ## 密钥与本地

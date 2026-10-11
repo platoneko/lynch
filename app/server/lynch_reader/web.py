@@ -3,14 +3,16 @@
 Only paired devices get in (lynch_reader.auth): a one-time code from `just app-pair` buys a long-lived cookie.
 Chats run Claude Code subprocesses that may write frameworks/ under a tool whitelist and the sediment-framework
 skill, and read-only grok subprocesses that search X (AGENTS.md「app 对话」). The server itself writes only
-output/chat/, output/candidates/, output/archive/ and output/earnings/.
+output/chat/, output/candidates/, output/archive/, output/earnings/ and output/anomalies/.
 """
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import os
 import shutil
+from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
 
@@ -22,10 +24,14 @@ from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
+from lynch_reader.anomalies import BASELINE_FILE, EVENTS_FILE, Anomalies, AnomalyStore, BaselineCache
 from lynch_reader.archive import ARCHIVE_FILE, FrameworkArchive
 from lynch_reader.auth.gate import DeviceAuth, pair_routes
 from lynch_reader.auth.store import DEVICES_FILE, DeviceStore
-from lynch_reader.catalog import FRAMEWORKS_DIR, REPO_ROOT, QuoteCache, axis_path_in, catalog, framework_path
+from lynch_reader.catalog import (
+    FRAMEWORKS_DIR, REPO_ROOT, QuoteCache, QuotePoller, axis_path_in, catalog, framework_path, quote_failure,
+    quote_pool,
+)
 from lynch_reader.chat.candidates import CANDIDATES_FILE, CandidateStore
 from lynch_reader.chat.config import LaunchConfig
 from lynch_reader.chat.grok import GrokConfig
@@ -59,9 +65,37 @@ class WebDist(StaticFiles):
         return response
 
 
+def active_pool(frameworks_dir: Path, archive: FrameworkArchive) -> list[str]:
+    """Frameworks the alerts cover: archived ones are left out."""
+    hidden = archive.tickers()
+    return [p.stem for p in list_framework_paths(frameworks_dir) if p.stem not in hidden]
+
+
+def app_lifespan(chat: ChatService | None, poller: QuotePoller | None):
+    @asynccontextmanager
+    async def lifespan(app):
+        if poller is not None:
+            poller.start()
+        try:
+            if chat is not None:
+                async with chat_lifespan(chat)(app):
+                    yield
+            else:
+                yield
+        finally:
+            if poller is not None:
+                await asyncio.to_thread(poller.stop)  # joins the thread: keep the event loop free meanwhile
+    return lifespan
+
+
 def create_app(frameworks_dir: Path, web_dist: Path, quotes: QuoteCache, devices: DeviceStore,
                archive: FrameworkArchive, chat: ChatService | None = None,
-               earnings: Earnings | None = None) -> Starlette:
+               earnings: Earnings | None = None, anomalies: Anomalies | None = None,
+               poller: QuotePoller | None = None) -> Starlette:
+    pool = lambda: active_pool(frameworks_dir, archive)  # noqa: E731
+    if anomalies is not None:
+        quotes.subscribe(lambda batch: anomalies.observe(batch, pool()))
+
     def tickers(request: Request) -> Response:
         refresh = request.query_params.get("refresh") == "1"
         return JSONResponse(catalog(frameworks_dir, quotes, refresh, archive.tickers()))
@@ -92,9 +126,8 @@ def create_app(frameworks_dir: Path, web_dist: Path, quotes: QuoteCache, devices
 
     def earnings_list(request: Request) -> Response:
         # Sync: the first request of a Beijing day waits on the longbridge calendar in the thread pool.
-        hidden = archive.tickers()
-        pool = [p.stem for p in list_framework_paths(frameworks_dir) if p.stem not in hidden]
-        return JSONResponse(earnings.snapshot(pool, chat.ticker_chat_starts() if chat is not None else []))
+        tag = anomalies.earnings_tag if anomalies is not None else (lambda t: None)
+        return JSONResponse(earnings.snapshot(pool(), chat.ticker_chat_starts() if chat is not None else [], tag))
 
     def set_ignored(ignored: bool):
         async def run(request: Request) -> Response:
@@ -112,6 +145,28 @@ def create_app(frameworks_dir: Path, web_dist: Path, quotes: QuoteCache, devices
             return Response(status_code=204)
         return _guarded(run)  # its CSRF guard: a cross-site form must not dismiss anything
 
+    def anomaly_list(request: Request) -> Response:
+        # Sync: right after start the first read waits on the first quote fetch, in the thread pool.
+        snap = quotes.read(quote_pool(frameworks_dir))
+        error = None if snap.error is None else quote_failure(snap.error, snap.batch)
+        starts = chat.ticker_chat_starts() if chat is not None else []
+        return JSONResponse(anomalies.snapshot(pool(), starts, error))
+
+    def set_anomaly_ignored(ignored: bool):
+        async def run(request: Request) -> Response:
+            body = await _body(request)
+            ticker, ref = body.get("ticker"), body.get("ref")
+            if not isinstance(ticker, str) or not isinstance(ref, str):
+                raise Invalid("需要 ticker 和 ref")
+            if framework_path(ticker, frameworks_dir) is None:
+                raise Invalid("没有这只票的框架")
+            try:
+                anomalies.store.set_ignored(ticker, ref, ignored)
+            except KeyError:
+                raise Invalid("没有这条异动") from None
+            return Response(status_code=204)
+        return _guarded(run)  # its CSRF guard: a cross-site form must not dismiss anything
+
     routes = [
         *pair_routes(devices),
         Route("/api/tickers", tickers),
@@ -126,12 +181,18 @@ def create_app(frameworks_dir: Path, web_dist: Path, quotes: QuoteCache, devices
             Route("/api/earnings/ignore", set_ignored(True), methods=["POST"]),
             Route("/api/earnings/unignore", set_ignored(False), methods=["POST"]),
         ]
+    if anomalies is not None:
+        routes += [
+            Route("/api/anomalies", anomaly_list),
+            Route("/api/anomalies/ignore", set_anomaly_ignored(True), methods=["POST"]),
+            Route("/api/anomalies/unignore", set_anomaly_ignored(False), methods=["POST"]),
+        ]
     if chat is not None:
         routes += chat_routes(chat, frameworks_dir)
     if web_dist.is_dir():
         routes.append(Mount("/", WebDist(directory=web_dist, html=True)))
     return Starlette(routes=routes, middleware=[Middleware(DeviceAuth, devices=devices)],
-                     lifespan=chat_lifespan(chat) if chat is not None else None)
+                     lifespan=app_lifespan(chat, poller))
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -153,9 +214,15 @@ def main(argv: list[str] | None = None) -> None:
     )
     # An open chat stream never ends by itself: without a graceful-shutdown timeout, SIGTERM waits on it
     # forever and the lifespan shutdown that stops the claude processes never runs.
-    uvicorn.run(create_app(FRAMEWORKS_DIR, WEB_DIST, QuoteCache(), DeviceStore(DEVICES_FILE),
-                           FrameworkArchive(ARCHIVE_FILE), chat=chat,
-                           earnings=Earnings(CalendarCache(CALENDAR_FILE), IgnoreStore(IGNORED_FILE))),
+    quotes = QuoteCache()
+    archive = FrameworkArchive(ARCHIVE_FILE)
+    calendar = CalendarCache(CALENDAR_FILE)
+    anomalies = Anomalies(AnomalyStore(EVENTS_FILE), BaselineCache(BASELINE_FILE), calendar)
+    poller = QuotePoller(quotes, lambda: quote_pool(FRAMEWORKS_DIR),
+                         after=lambda: anomalies.upkeep(active_pool(FRAMEWORKS_DIR, archive)))
+    uvicorn.run(create_app(FRAMEWORKS_DIR, WEB_DIST, quotes, DeviceStore(DEVICES_FILE), archive, chat=chat,
+                           earnings=Earnings(calendar, IgnoreStore(IGNORED_FILE)), anomalies=anomalies,
+                           poller=poller),
                 host=args.host, port=args.port, timeout_graceful_shutdown=5)
 
 

@@ -39,6 +39,7 @@ class FakeFetch:
 
     def __init__(self, prices: dict[str, float], error: Exception | None = None) -> None:
         self.prices = prices
+        self.prev: dict[str, float] = {}  # base closes; empty leaves prev_close None
         self.extended: dict[str, tuple[SessionQuote, ...]] = {}
         self.error = error
         self.calls: list[list[str]] = []
@@ -47,7 +48,8 @@ class FakeFetch:
         self.calls.append(list(symbols))
         if self.error is not None:
             raise self.error
-        return {s: Quote(symbol=s, last=p, prev_close=None, status="Normal", extended=self.extended.get(s, ()))
+        return {s: Quote(symbol=s, last=p, prev_close=self.prev.get(s), status="Normal",
+                         extended=self.extended.get(s, ()))
                 for s, p in self.prices.items() if s in symbols}
 
 
