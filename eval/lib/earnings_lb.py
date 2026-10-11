@@ -125,7 +125,11 @@ def fetch_calendar(
         for t in batch:
             cmd += ["--symbol", t]
         try:
-            by_symbol = parse_calendar(run(cmd))
+            payload = run(cmd)
+            # Even an empty answer carries `"list": []`; anything else must not overwrite yesterday's releases.
+            if not isinstance(payload, dict) or not isinstance(payload.get("list"), list):
+                raise RuntimeError(f"unexpected finance-calendar payload: {str(payload)[:200]}")
+            by_symbol = parse_calendar(payload)
         except Exception as e:  # noqa: BLE001 — external CLI: missing, logged out, rate-limited, bad JSON
             log.warning("finance-calendar batch failed %s: %s", batch, e)
             out.failed += batch

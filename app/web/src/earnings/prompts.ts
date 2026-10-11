@@ -29,7 +29,8 @@ export function earningsPrompt(it: EarningsItem): string {
   ].join('\n');
 }
 
-/** An unsent draft is the user's own text: keep it and put the prompt after it. */
+/** An unsent draft is the user's own text: keep it and put the prompt after it, once. */
 export function withPrompt(draft: string, prompt: string): string {
+  if (draft.includes(prompt)) return draft; // 调研 tapped again after backing out unsent
   return draft.trim() ? `${draft.trimEnd()}\n\n${prompt}` : prompt;
 }

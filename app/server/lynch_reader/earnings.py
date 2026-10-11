@@ -12,7 +12,7 @@ import os
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from datetime import time as clock
 from pathlib import Path
@@ -50,6 +50,10 @@ class Row:
     event: CalendarEvent
     release_at: datetime
     day_offset: int  # release date minus the market's local today
+    # Every released entry in the window is one release (the calendar pairs a quarter with its half-year report a
+    # day apart): research counts from the earliest of them, and an ignore on any of their dates covers the row.
+    since: datetime
+    dates: tuple[str, ...]
 
 
 def release_at(ticker: str, ev: CalendarEvent) -> datetime | None:
@@ -70,11 +74,13 @@ def judge(ticker: str, events: list[CalendarEvent], now: datetime) -> Row | None
             return None
         offset = (moment.date() - now.astimezone(moment.tzinfo).date()).days
         if moment <= now and -offset <= RELEASED_DAYS:
-            released.append(Row(ticker, "released", ev, moment, offset))
+            released.append(Row(ticker, "released", ev, moment, offset, moment, (ev.date,)))
         elif moment > now and offset <= UPCOMING_DAYS:
-            upcoming.append(Row(ticker, "upcoming", ev, moment, offset))
+            upcoming.append(Row(ticker, "upcoming", ev, moment, offset, moment, (ev.date,)))
     if released:
-        return max(released, key=lambda r: r.release_at)
+        latest = max(released, key=lambda r: r.release_at)
+        return replace(latest, since=min(r.release_at for r in released),
+                       dates=tuple(sorted(r.event.date for r in released)))
     if upcoming:
         return min(upcoming, key=lambda r: r.release_at)
     return None
@@ -114,7 +120,8 @@ class CalendarCache:
             return {t: self._events.get(t, []) for t in pool}, self._day, self._error
 
     def _refresh(self, tickers: list[str], today: date, now: float, *, full: bool) -> None:
-        start, end = today - timedelta(days=RELEASED_DAYS), today + timedelta(days=LOOKAHEAD_DAYS)
+        # One extra day back: a US market's local day trails Beijing's, so its 7th day is Beijing's 8th.
+        start, end = today - timedelta(days=RELEASED_DAYS + 1), today + timedelta(days=LOOKAHEAD_DAYS)
         try:
             got = self._fetch(tickers, start, end)
         except Exception as e:  # noqa: BLE001 — the fetcher reports CLI failures itself; this is the backstop
@@ -165,7 +172,9 @@ class IgnoreStore:
         self._write(self.keys() | {(ticker, day)})
 
     def unignore(self, ticker: str, day: str) -> None:
-        self._write(self.keys() - {(ticker, day)})
+        # The page sends its row's latest date; the ignore may sit on an earlier entry of the same release.
+        oldest = (date.fromisoformat(day) - timedelta(days=RELEASED_DAYS)).isoformat()
+        self._write({(t, d) for t, d in self.keys() if not (t == ticker and oldest <= d <= day)})
 
     def _write(self, keys: set[tuple[str, str]]) -> None:
         # A key past the released window can no longer match a listed row.
@@ -191,11 +200,11 @@ class Earnings:
 
 
 def _item(r: Row, ignored: set[tuple[str, str]], chat_starts: list[tuple[str, float]]) -> dict[str, Any]:
-    moment = r.release_at.timestamp()
+    since = r.since.timestamp()
     return {
         "ticker": r.ticker, "status": r.status, "date": r.event.date, "day_offset": r.day_offset,
         "slot": r.event.slot, "release_at": r.release_at.isoformat(), "period": r.event.period,
         # Any 讨论 chat on the ticker started after the release counts, wherever it was opened from.
-        "researched": any(t == r.ticker and created >= moment for t, created in chat_starts),
-        "ignored": (r.ticker, r.event.date) in ignored,
+        "researched": any(t == r.ticker and created >= since for t, created in chat_starts),
+        "ignored": any((r.ticker, d) in ignored for d in r.dates),
     }

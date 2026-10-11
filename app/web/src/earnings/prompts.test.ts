@@ -29,4 +29,8 @@ describe('earnings prompts', () => {
     expect(withPrompt('   \n', 'P')).toBe('P');
     expect(withPrompt('先看毛利率\n', 'P')).toBe('先看毛利率\n\nP');
   });
+  it('does not stack the prompt when 调研 is tapped again', () => {
+    expect(withPrompt('P', 'P')).toBe('P');
+    expect(withPrompt('先看毛利率\n\nP', 'P')).toBe('先看毛利率\n\nP');
+  });
 });

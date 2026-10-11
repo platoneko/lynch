@@ -116,7 +116,9 @@ class FakeCalendar:
         if self.error is not None:
             raise self.error
         failed = [t for t in tickers if t in self.fail]
-        return CalendarFetch({t: self.events.get(t, []) for t in tickers if t not in failed}, failed,
+        # Like the CLI: releases before `start` are not returned.
+        since = {t: [e for e in self.events.get(t, []) if e.date >= start.isoformat()] for t in tickers}
+        return CalendarFetch({t: since[t] for t in tickers if t not in failed}, failed,
                              "longbridge failed (exit 1): token expired" if failed else None)
 
 
@@ -132,7 +134,7 @@ def test_one_full_fetch_per_beijing_day(tmp_path, cal):
     assert (day, error) == ("2026-10-14", None)
     assert events["TSM.US"] == [ev("2026-10-14", "after")]
     _, start, end = cal.calls[0]
-    assert (start.isoformat(), end.isoformat()) == ("2026-10-07", "2026-11-13")
+    assert (start.isoformat(), end.isoformat()) == ("2026-10-06", "2026-11-13")  # 8 days back: see the US test
     clk.set(at("A", 10, 14, 23, 59))
     cache.get(["TSM.US", "0700.HK"])
     assert len(cal.calls) == 1
@@ -244,6 +246,33 @@ def test_chat_before_release_is_not_research(tmp_path, cal):
 def test_ignored_release_is_flagged(tmp_path, cal):
     body = snapshot(tmp_path, cal, at("US", 10, 14, 17), ignore=[("TSM.US", "2026-10-14")])
     assert body["items"][0]["ignored"] is True
+
+
+def test_us_release_is_fetched_through_its_seventh_local_day(tmp_path):
+    # Beijing 10-21 10:00 is New York 10-20 22:00: a 10-13 release is New York's 7th day, Beijing's 8th.
+    cal = FakeCalendar({"TSM.US": [ev("2026-10-13", "after")]})
+    clk = Clock(at("A", 10, 21, 10))
+    e = Earnings(CalendarCache(tmp_path / "c.json", fetch=cal, wall=clk), IgnoreStore(tmp_path / "i.json", wall=clk),
+                 wall=clk)
+    items = e.snapshot(["TSM.US"], [])["items"]
+    assert [(i["status"], i["day_offset"]) for i in items] == [("released", -7)]
+
+
+def test_paired_entries_keep_research_and_ignore(tmp_path):
+    # The quarter and the half-year report a day apart are one release: handling the first covers the second.
+    cal = FakeCalendar({"000933.SZ": [ev("2026-07-27", "after", "2026 财年第 2 季度"),
+                                      ev("2026-07-28", "after", "2026 财年半年报")]})
+    clk = Clock(at("A", 7, 28, 16))
+    store = IgnoreStore(tmp_path / "i.json", wall=clk)
+    e = Earnings(CalendarCache(tmp_path / "c.json", fetch=cal, wall=clk), store, wall=clk)
+    first = at("A", 7, 27, 15).timestamp()
+    item = e.snapshot(["000933.SZ"], [("000933.SZ", first + 60)])["items"][0]
+    assert (item["period"], item["researched"]) == ("2026 财年半年报", True)
+    store.ignore("000933.SZ", "2026-07-27")
+    item = e.snapshot(["000933.SZ"], [])["items"][0]
+    assert item["ignored"] is True
+    store.unignore("000933.SZ", item["date"])  # the page sends the row's own (latest) date
+    assert e.snapshot(["000933.SZ"], [])["items"][0]["ignored"] is False
 
 
 def test_released_newest_first_then_upcoming_soonest_first(tmp_path):

@@ -95,6 +95,13 @@ class FetchTests(unittest.TestCase):
         self.assertIn("token expired", got.error)
         self.assertEqual(set(got.events), {"T10.US", "T11.US"})
 
+    def test_unexpected_payload_fails_the_batch(self) -> None:
+        # A zero-exit answer without the day list (e.g. an auth notice) must not read as "no releases".
+        got = fetch_calendar(["AAA.US"], self.START, self.END, run=lambda c: {"message": "unauthorized"},
+                             sleep=lambda s: None)
+        self.assertEqual((got.events, got.failed), ({}, ["AAA.US"]))
+        self.assertIn("unauthorized", got.error)
+
     def test_passes_the_window_to_the_cli(self) -> None:
         seen: list[list[str]] = []
         fetch_calendar(["AAA.US"], self.START, self.END, run=lambda c: seen.append(c) or payload(),
