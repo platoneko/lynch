@@ -4,7 +4,7 @@ from starlette.testclient import TestClient
 
 from lynch_reader.anomalies import Anomalies, AnomalyStore, BaselineCache, Hit
 from lynch_reader.archive import FrameworkArchive
-from lynch_reader.catalog import QUOTE_REFRESH_MAX_AGE_S, QuoteCache
+from lynch_reader.catalog import QuoteCache
 from lynch_reader.earnings import CalendarCache, Earnings, IgnoreStore
 from lynch_reader.web import create_app
 from eval.lib.earnings_lb import CalendarEvent, CalendarFetch  # after lynch_reader, which puts the repo root on sys.path
@@ -145,16 +145,6 @@ def test_tickers_json(repo, tmp_path, quotes):
     assert body["tickers"][0]["band"]["price"] == 25.0
 
 
-def test_refresh_query_asks_for_a_fetch(repo, tmp_path, fetch, clock, quotes):
-    c = client(repo, tmp_path, quotes)
-    c.get("/api/tickers")
-    clock.now += QUOTE_REFRESH_MAX_AGE_S
-    c.get("/api/tickers")
-    assert len(fetch.calls) == 1
-    c.get("/api/tickers?refresh=1")
-    assert len(fetch.calls) == 2
-
-
 def test_non_finite_price_nulls_only_its_row(repo, tmp_path, fetch, quotes):
     # A NaN quote must not reach the JSON response, which cannot carry it.
     fetch.prices["AAA.US"] = float("nan")
@@ -166,9 +156,7 @@ def test_non_finite_price_nulls_only_its_row(repo, tmp_path, fetch, quotes):
 
 
 def test_quote_failure_is_200_with_top_level_error(repo, tmp_path, clock):
-    quotes = QuoteCache(
-        fetch=FakeFetch({}, error=RuntimeError("longbridge CLI not found on PATH")), monotonic=clock, wall=clock
-    )
+    quotes = QuoteCache(fetch=FakeFetch({}, error=RuntimeError("longbridge CLI not found on PATH")), wall=clock)
     r = client(repo, tmp_path, quotes).get("/api/tickers")
     assert r.status_code == 200
     body = r.json()

@@ -97,8 +97,7 @@ def create_app(frameworks_dir: Path, web_dist: Path, quotes: QuoteCache, devices
         quotes.subscribe(lambda batch: anomalies.observe(batch, pool()))
 
     def tickers(request: Request) -> Response:
-        refresh = request.query_params.get("refresh") == "1"
-        return JSONResponse(catalog(frameworks_dir, quotes, refresh, archive.tickers()))
+        return JSONResponse(catalog(frameworks_dir, quotes, archive.tickers()))
 
     def framework(request: Request) -> Response:
         path = framework_path(request.path_params["ticker"], frameworks_dir)

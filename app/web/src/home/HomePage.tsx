@@ -20,15 +20,14 @@ const MARKETS: { id: string; label: string }[] = [
   { id: 'US', label: '美股' },
 ];
 
-export function HomePage({ catalog, filter, onFilter, onOpen, onOpenAxis, onRefreshQuotes, onRefreshFrameworks,
+export function HomePage({ catalog, filter, onFilter, onOpen, onOpenAxis, onRefreshFrameworks,
   refreshing, chatCount, onOpenChats, earnings, onOpenEarnings, anomalies, onOpenAnomalies }: {
   catalog: Catalog;
   filter: HomeFilter;
   onFilter: (f: HomeFilter) => void;
   onOpen: (ticker: string) => void;
   onOpenAxis: (name: string) => void;
-  onRefreshQuotes: () => void;
-  onRefreshFrameworks: () => void; // re-reads the frameworks; quotes are reused while still fresh
+  onRefreshFrameworks: () => void; // re-reads the frameworks; quotes come from the server's 5-minute poll
   refreshing: boolean;
   chatCount: number;
   onOpenChats: () => void;
@@ -77,7 +76,6 @@ export function HomePage({ catalog, filter, onFilter, onOpen, onOpenAxis, onRefr
             <Menu onClose={() => setMenu(false)} items={[
               ...alertRows,
               { label: chatCount > 0 ? `对话 · ${chatCount} 个运行中` : '对话', onSelect: onOpenChats },
-              { label: '刷新股价', disabled: refreshing, onSelect: onRefreshQuotes },
               { label: '刷新估值', disabled: refreshing, onSelect: onRefreshFrameworks },
               {
                 label: filter.showArchived ? '隐藏归档' : `展示归档${archivedCount > 0 ? `（${archivedCount}）` : ''}`,

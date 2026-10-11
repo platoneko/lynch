@@ -48,8 +48,6 @@ ROW_KEYS = (
 # and gives sensitivity readings, never anchors (AGENTS.md「r_f 读数行」).
 SCENARIO_AXIS = "shared_scenario_axis"
 
-# 刷新股价 fetches only when the last attempt is older than this; repeated taps add no CLI calls.
-QUOTE_REFRESH_MAX_AGE_S = 60.0
 # The poller's pace; the home list and the anomaly checks follow the same 5 minutes (spec).
 QUOTE_POLL_S = 300.0
 QUOTE_TIMEOUT_S = 15
@@ -78,8 +76,8 @@ class QuoteSnapshot:
 
 
 class QuoteCache:
-    """The one copy of the pool's quotes (AGENTS.md「app 对话」). Three things fetch: the poller (`poll`), a
-    刷新股价 tap (`refresh`), and the first read before any attempt (`read`); everything else only reads.
+    """The one copy of the pool's quotes (AGENTS.md「app 对话」). Two things fetch: the poller (`poll`) and the
+    first read before any attempt (`read`); everything else only reads.
 
     A failed attempt keeps the last good batch and reports its error beside it. The lock makes concurrent
     callers wait for one CLI call. Listeners hear every new batch on the fetching thread, under the lock.
@@ -90,16 +88,14 @@ class QuoteCache:
         fetch: Callable[[list[str]], dict[str, Quote]] = partial(
             fetch_quotes, allow_missing=True, timeout_s=QUOTE_TIMEOUT_S
         ),
-        monotonic: Callable[[], float] = time.monotonic,
         wall: Callable[[], float] = time.time,
     ) -> None:
         self._fetch = fetch
-        self._monotonic = monotonic
         self._wall = wall
         self._lock = threading.Lock()
         self._batch: QuoteBatch | None = None
         self._error: Exception | None = None
-        self._tried_mono: float | None = None
+        self._tried = False
         self._listeners: list[Callable[[QuoteBatch], None]] = []
 
     def subscribe(self, listener: Callable[[QuoteBatch], None]) -> None:
@@ -107,7 +103,7 @@ class QuoteCache:
 
     def read(self, symbols: list[str]) -> QuoteSnapshot:
         with self._lock:
-            if self._tried_mono is None:  # just started: the first reader waits for the first batch
+            if not self._tried:  # just started: the first reader waits for the first batch
                 self._fetch_batch(symbols)
             return QuoteSnapshot(self._batch, self._error)
 
@@ -116,12 +112,6 @@ class QuoteCache:
             b = self._batch
             if b is None or set(symbols) - set(b.symbols) or self._traded_since(b, symbols):
                 self._fetch_batch(symbols)
-
-    def refresh(self, symbols: list[str]) -> QuoteSnapshot:
-        with self._lock:
-            if self._tried_mono is None or self._monotonic() - self._tried_mono >= QUOTE_REFRESH_MAX_AGE_S:
-                self._fetch_batch(symbols)
-            return QuoteSnapshot(self._batch, self._error)
 
     def _traded_since(self, b: QuoteBatch, symbols: list[str]) -> bool:
         # Market hours are wall-clock hours.
@@ -137,8 +127,7 @@ class QuoteCache:
             self._error = e
             return
         finally:
-            # Stamped after the call returns, so callers queued behind it see a fresh attempt.
-            self._tried_mono = self._monotonic()
+            self._tried = True  # a failed first attempt counts: readers do not each retry the CLI
         self._error = None
         for s in key:
             if not _usable(quotes.get(s)):
@@ -189,8 +178,7 @@ class QuotePoller:
                 return
 
 
-def catalog(frameworks_dir: Path, quotes: QuoteCache, refresh: bool = False,
-            archived: Set[str] = frozenset()) -> dict[str, Any]:
+def catalog(frameworks_dir: Path, quotes: QuoteCache, archived: Set[str] = frozenset()) -> dict[str, Any]:
     # Step 1: framework header fields; a bad file costs only its own row. Archived rows stay in the
     # list, quotes included: the web hides them unless asked to show them.
     parsed = [_ticker_row(p) for p in list_framework_paths(frameworks_dir)]
@@ -202,10 +190,9 @@ def catalog(frameworks_dir: Path, quotes: QuoteCache, refresh: bool = False,
         row["axes"] = [a.name for a in axes if meta.ticker in a.mounts]
         row["ref_axes"] = [a.name for a in axes if meta.ticker in a.refs]
 
-    # Step 2: the one quote batch, read (on 刷新股价, refreshed). A failed attempt keeps the last good batch,
-    # each row showing its own fetch time; with no batch at all every band stays empty.
-    pool = quote_pool(frameworks_dir)
-    snap = quotes.refresh(pool) if refresh else quotes.read(pool)
+    # Step 2: the one quote batch, read. A failed attempt keeps the last good batch, each row showing its own
+    # fetch time; with no batch at all every band stays empty.
+    snap = quotes.read(quote_pool(frameworks_dir))
     quote_error = None if snap.error is None else quote_failure(snap.error, snap.batch)
     if snap.batch is not None:
         us_close = us_regular_close(snap.batch.fetched_at)

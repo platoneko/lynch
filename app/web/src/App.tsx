@@ -107,22 +107,21 @@ export function App() {
   const homeScroll = useRef(0);
   const openedFromHome = useRef(false);
 
-  const load = useCallback((refresh: boolean) => {
+  const load = useCallback(() => {
     setLoading(true);
     setError(null);
-    fetchCatalog(refresh)
+    fetchCatalog()
       .then(setCatalog, (e: unknown) => setError(String(e instanceof Error ? e.message : e)))
       .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => load(false), [load]);
+  useEffect(() => load(), [load]);
   // The server refetches quotes every 5 minutes; re-read the list at that pace while it is on screen.
   useEffect(() => {
     if (route.page !== 'home') return;
-    const timer = window.setInterval(() => load(false), ALERT_POLL_MS);
+    const timer = window.setInterval(load, ALERT_POLL_MS);
     return () => window.clearInterval(timer);
   }, [route.page, load]);
-  const reload = () => load(true);
 
   useEffect(() => {
     const onHash = () => setRoute(parseRoute(window.location.hash));
@@ -158,7 +157,7 @@ export function App() {
         {error ? (
           <>
             <p>加载失败：{error}</p>
-            <button onClick={reload}>重试</button>
+            <button onClick={load}>重试</button>
           </>
         ) : (
           <p>加载中…</p>
@@ -237,7 +236,7 @@ export function App() {
       <DocPage key={`doc:${ticker}`} load={() => fetchFramework(ticker)} targets={targets} head={head} onBack={goBack}
         barExtra={<>
           {row && <ArchiveButton ticker={ticker} archived={row.archived}
-            onToggle={() => (row.archived ? restoreFramework(ticker) : archiveFramework(ticker)).then(() => load(false))} />}
+            onToggle={() => (row.archived ? restoreFramework(ticker) : archiveFramework(ticker)).then(load)} />}
           <ChatSheetButton ticker={ticker} chats={chatList?.chats ?? []}
             onOpen={(id) => { window.location.hash = chatHash(id); }}
             onNew={() => { window.location.hash = newChatHash(ticker); }} />
@@ -251,9 +250,9 @@ export function App() {
   }
   return (
     <>
-      {error && <div className="banner-error" onClick={reload}>刷新失败：{error}（点此重试）</div>}
+      {error && <div className="banner-error" onClick={load}>刷新失败：{error}（点此重试）</div>}
       <HomePage catalog={catalog} filter={filter} onFilter={setFilter} onOpen={openDoc} onOpenAxis={openAxis}
-        onRefreshQuotes={reload} onRefreshFrameworks={() => load(false)} refreshing={loading}
+        onRefreshFrameworks={load} refreshing={loading}
         chatCount={chatList?.running_count ?? 0} onOpenChats={() => openFromHome(chatsHash())}
         earnings={earnings} onOpenEarnings={() => openFromHome(earningsHash())}
         anomalies={anomalies} onOpenAnomalies={() => openFromHome(anomaliesHash())} />

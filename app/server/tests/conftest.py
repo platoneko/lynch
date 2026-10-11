@@ -73,8 +73,7 @@ def clock() -> FakeClock:
 
 @pytest.fixture
 def quotes(fetch: FakeFetch, clock: FakeClock) -> QuoteCache:
-    # One fake serves as both clocks unless a test needs them apart.
-    return QuoteCache(fetch=fetch, monotonic=clock, wall=clock)
+    return QuoteCache(fetch=fetch, wall=clock)
 
 
 def paired_devices(tmp_path: Path) -> tuple[DeviceStore, dict[str, str]]:

@@ -44,10 +44,9 @@ export async function post(path: string, body: unknown = {}): Promise<Response> 
   return res;
 }
 
-/** `refresh`: a tap on 刷新股价, which lets the server refetch quotes sooner than on a plain load.
- * Every load re-reads the frameworks, so 刷新估值 is a plain load. */
-export async function fetchCatalog(refresh: boolean): Promise<Catalog> {
-  return (await get(refresh ? '/api/tickers?refresh=1' : '/api/tickers')).json();
+/** Re-reads the frameworks (so 刷新估值 is a plain load) beside the server's latest polled quotes. */
+export async function fetchCatalog(): Promise<Catalog> {
+  return (await get('/api/tickers')).json();
 }
 
 export async function fetchFramework(ticker: string): Promise<string> {
