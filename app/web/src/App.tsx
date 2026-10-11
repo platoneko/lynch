@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AnomaliesPage } from './anomalies/AnomaliesPage';
 import { fetchAnomalies, ignoreAnomaly, unignoreAnomaly } from './anomalies/api';
-import { pendingCount as anomalyPendingCount } from './anomalies/model';
 import type { AnomalyList } from './anomalies/types';
 import { archiveFramework, fetchAxis, fetchCatalog, fetchFramework, restoreFramework } from './api';
 import {
@@ -18,7 +17,6 @@ import { ArchiveButton } from './doc/ArchiveButton';
 import { AxisDocHead, DocPage, TickerDocHead } from './doc/DocPage';
 import { fetchEarnings, ignoreEarnings, unignoreEarnings } from './earnings/api';
 import { EarningsPage } from './earnings/EarningsPage';
-import { pendingCount } from './earnings/model';
 import type { EarningsList } from './earnings/types';
 import { HomePage } from './home/HomePage';
 import { DEFAULT_FILTER, type HomeFilter } from './home/listModel';
@@ -257,8 +255,8 @@ export function App() {
       <HomePage catalog={catalog} filter={filter} onFilter={setFilter} onOpen={openDoc} onOpenAxis={openAxis}
         onRefreshQuotes={reload} onRefreshFrameworks={() => load(false)} refreshing={loading}
         chatCount={chatList?.running_count ?? 0} onOpenChats={() => openFromHome(chatsHash())}
-        earningsPending={pendingCount(earnings)} onOpenEarnings={() => openFromHome(earningsHash())}
-        anomaliesPending={anomalyPendingCount(anomalies)} onOpenAnomalies={() => openFromHome(anomaliesHash())} />
+        earnings={earnings} onOpenEarnings={() => openFromHome(earningsHash())}
+        anomalies={anomalies} onOpenAnomalies={() => openFromHome(anomaliesHash())} />
     </>
   );
 }

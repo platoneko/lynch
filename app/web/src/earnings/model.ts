@@ -12,8 +12,13 @@ export function pendingCount(list: EarningsList | null): number {
   return list ? list.items.filter(isPending).length : 0;
 }
 
-export function menuLabel(n: number): string {
-  return n > 0 ? `财报 · ${n} 待看` : '财报';
+/** The ⋯ row: what waits, then what is still to come; null drops it while the page would list nothing. */
+export function menuLabel(list: EarningsList | null): string | null {
+  if (!list || list.items.length === 0) return null;
+  const pending = pendingCount(list);
+  const upcoming = list.items.filter((it) => it.status === 'upcoming').length;
+  return ['财报', ...(pending > 0 ? [`${pending} 待看`] : []), ...(upcoming > 0 ? [`${upcoming} 将出`] : [])]
+    .join(' · ');
 }
 
 export function whenText(it: EarningsItem): string {

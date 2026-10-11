@@ -11,7 +11,10 @@ export function pendingCount(list: AnomalyList | null): number {
   return list ? list.items.filter(isPending).length : 0;
 }
 
-export function menuLabel(n: number): string {
+/** The ⋯ row; null drops it while the page would list nothing. */
+export function menuLabel(list: AnomalyList | null): string | null {
+  if (!list || list.items.length === 0) return null;
+  const n = pendingCount(list);
   return n > 0 ? `异动 · ${n} 待看` : '异动';
 }
 

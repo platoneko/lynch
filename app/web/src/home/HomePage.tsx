@@ -1,7 +1,9 @@
 import { useState } from 'react';
-import { Menu } from '../Menu';
-import { menuLabel as anomalyMenuLabel } from '../anomalies/model';
-import { menuLabel } from '../earnings/model';
+import { Menu, type MenuItem } from '../Menu';
+import { menuLabel as anomalyMenuLabel, pendingCount as anomalyPendingCount } from '../anomalies/model';
+import type { AnomalyList } from '../anomalies/types';
+import { menuLabel, pendingCount } from '../earnings/model';
+import type { EarningsList } from '../earnings/types';
 import type { Catalog } from '../types';
 import { applyFilter, inArchiveScope, latestAsOf, quoteTimeText, type HomeFilter, type SortKey } from './listModel';
 import { TickerCard } from './TickerCard';
@@ -19,7 +21,7 @@ const MARKETS: { id: string; label: string }[] = [
 ];
 
 export function HomePage({ catalog, filter, onFilter, onOpen, onOpenAxis, onRefreshQuotes, onRefreshFrameworks,
-  refreshing, chatCount, onOpenChats, earningsPending, onOpenEarnings, anomaliesPending, onOpenAnomalies }: {
+  refreshing, chatCount, onOpenChats, earnings, onOpenEarnings, anomalies, onOpenAnomalies }: {
   catalog: Catalog;
   filter: HomeFilter;
   onFilter: (f: HomeFilter) => void;
@@ -30,11 +32,18 @@ export function HomePage({ catalog, filter, onFilter, onOpen, onOpenAxis, onRefr
   refreshing: boolean;
   chatCount: number;
   onOpenChats: () => void;
-  earningsPending: number; // released earnings neither researched nor dismissed
+  earnings: EarningsList | null;
   onOpenEarnings: () => void;
-  anomaliesPending: number; // anomalies neither researched nor dismissed
+  anomalies: AnomalyList | null;
   onOpenAnomalies: () => void;
 }) {
+  const alertsPending = pendingCount(earnings) > 0 || anomalyPendingCount(anomalies) > 0;
+  const earningsLabel = menuLabel(earnings);
+  const anomaliesLabel = anomalyMenuLabel(anomalies);
+  const alertRows: MenuItem[] = [
+    ...(earningsLabel ? [{ label: earningsLabel, onSelect: onOpenEarnings }] : []),
+    ...(anomaliesLabel ? [{ label: anomaliesLabel, onSelect: onOpenAnomalies }] : []),
+  ];
   const zoneOrder = catalog.zones.map((z) => z.id);
   const labels = new Map([...catalog.zones, ...catalog.lynch_classes].map((x) => [x.id, x.label]));
   const rows = applyFilter(catalog.tickers, filter, zoneOrder);
@@ -62,12 +71,11 @@ export function HomePage({ catalog, filter, onFilter, onOpen, onOpenAxis, onRefr
           {/* Badges stay on the button so running chats and pending alerts show without opening the menu. */}
           <button className="icon-btn has-badge" onClick={() => setMenu(!menu)} aria-label="更多">
             ⋯{chatCount > 0 && <span className="badge">{chatCount}</span>}
-            {(earningsPending > 0 || anomaliesPending > 0) && <span className="badge badge-alert">!</span>}
+            {alertsPending && <span className="badge badge-alert">!</span>}
           </button>
           {menu && (
             <Menu onClose={() => setMenu(false)} items={[
-              { label: menuLabel(earningsPending), onSelect: onOpenEarnings },
-              { label: anomalyMenuLabel(anomaliesPending), onSelect: onOpenAnomalies },
+              ...alertRows,
               { label: chatCount > 0 ? `对话 · ${chatCount} 个运行中` : '对话', onSelect: onOpenChats },
               { label: '刷新股价', disabled: refreshing, onSelect: onRefreshQuotes },
               { label: '刷新估值', disabled: refreshing, onSelect: onRefreshFrameworks },

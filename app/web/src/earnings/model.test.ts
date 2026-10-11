@@ -15,9 +15,14 @@ describe('earnings model', () => {
     expect(pendingCount({ fetched_day: '2026-10-14', error: null, items })).toBe(1);
     expect(pendingCount(null)).toBe(0);
   });
-  it('labels the menu row', () => {
-    expect(menuLabel(0)).toBe('财报');
-    expect(menuLabel(2)).toBe('财报 · 2 待看');
+  it('labels the menu row, and drops it while the page would be empty', () => {
+    const list = (items: EarningsItem[]) => ({ fetched_day: '2026-10-14', error: null, items });
+    expect(menuLabel(list([item({ researched: true })]))).toBe('财报');
+    expect(menuLabel(list([item(), item({ ticker: 'AAPL.US' })]))).toBe('财报 · 2 待看');
+    expect(menuLabel(list([item({ status: 'upcoming' })]))).toBe('财报 · 1 将出');
+    expect(menuLabel(list([item(), item({ ticker: 'TSM.US', status: 'upcoming' })]))).toBe('财报 · 1 待看 · 1 将出');
+    expect(menuLabel(list([]))).toBeNull();
+    expect(menuLabel(null)).toBeNull();
   });
   it('says when, relative near today', () => {
     expect(whenText(item({ day_offset: 0, slot: 'after' }))).toBe('今天盘后');

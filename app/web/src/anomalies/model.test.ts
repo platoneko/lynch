@@ -16,9 +16,11 @@ describe('anomaly model', () => {
     expect(pendingCount({ error: null, items: [anomaly(), anomaly({ ignored: true })] })).toBe(1);
     expect(pendingCount(null)).toBe(0);
   });
-  it('menu label counts what waits', () => {
-    expect(menuLabel(2)).toBe('异动 · 2 待看');
-    expect(menuLabel(0)).toBe('异动');
+  it('menu label counts what waits, and drops the row while the page would be empty', () => {
+    expect(menuLabel({ error: null, items: [anomaly(), anomaly({ ticker: 'VST.US' })] })).toBe('异动 · 2 待看');
+    expect(menuLabel({ error: null, items: [anomaly({ researched: true })] })).toBe('异动');
+    expect(menuLabel({ error: null, items: [] })).toBeNull();
+    expect(menuLabel(null)).toBeNull();
   });
   it('hit text: move, session, Beijing time, multiple, volume', () => {
     expect(hitText(anomaly())).toBe('+29.1% 盘后 · 10-08 04:20 · 平时波动 4.1 倍');
