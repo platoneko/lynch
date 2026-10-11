@@ -1,4 +1,4 @@
-"""Fetch last regular-session prices via longbridge CLI."""
+"""Fetch quotes and daily bars via longbridge CLI."""
 from __future__ import annotations
 
 import json
@@ -6,6 +6,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 # US extended-hours blocks of a quote row, by the session id this module reports.
 EXTENDED_SESSIONS = {"pre": "pre_market", "post": "post_market", "overnight": "overnight"}
@@ -18,6 +19,7 @@ class SessionQuote:
     session: str  # a key of EXTENDED_SESSIONS
     last: float
     at: datetime
+    prev_close: float | None = None  # the regular close this session's moves are measured from
 
 
 @dataclass(frozen=True)
@@ -27,6 +29,14 @@ class Quote:
     prev_close: float | None
     status: str | None
     extended: tuple[SessionQuote, ...] = ()
+    volume: float | None = None  # today's regular-session volume, in the market's own unit (A shares: lots)
+
+
+@dataclass(frozen=True)
+class DailyBar:
+    at: datetime  # the bar's own time (aware): local midnight for HK / A shares, 04:00 UTC for US
+    close: float
+    volume: float  # same unit as Quote.volume
 
 
 def _parse_float(v: object) -> float | None:
@@ -36,6 +46,20 @@ def _parse_float(v: object) -> float | None:
         return float(str(v).replace(",", ""))
     except (TypeError, ValueError):
         return None
+
+
+def _run(cmd: list[str], timeout_s: float) -> Any:
+    if not shutil.which("longbridge"):
+        raise RuntimeError("longbridge CLI not found on PATH")
+    proc = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=timeout_s)
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"longbridge {cmd[1]} failed (exit {proc.returncode}): {proc.stderr.strip() or proc.stdout.strip()}"
+        )
+    raw = proc.stdout.strip()
+    if not raw:
+        raise RuntimeError(f"longbridge {cmd[1]} returned empty stdout")
+    return json.loads(raw)
 
 
 def fetch_quotes(
@@ -49,25 +73,7 @@ def fetch_quotes(
     """
     if not symbols:
         return {}
-    if not shutil.which("longbridge"):
-        raise RuntimeError("longbridge CLI not found on PATH")
-
-    cmd = ["longbridge", "quote", *symbols, "--format", "json"]
-    proc = subprocess.run(
-        cmd,
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=timeout_s,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"longbridge quote failed (exit {proc.returncode}): {proc.stderr.strip() or proc.stdout.strip()}"
-        )
-    raw = proc.stdout.strip()
-    if not raw:
-        raise RuntimeError("longbridge quote returned empty stdout")
-    data = json.loads(raw)
+    data = _run(["longbridge", "quote", *symbols, "--format", "json"], timeout_s)
     if not isinstance(data, list):
         raise RuntimeError(f"unexpected quote payload type: {type(data)}")
 
@@ -85,6 +91,7 @@ def fetch_quotes(
             prev_close=_parse_float(row.get("prev_close")),
             status=str(row.get("status")) if row.get("status") is not None else None,
             extended=_extended(row),
+            volume=_parse_float(row.get("volume")),
         )
     missing = [s for s in symbols if s not in out]
     if missing and not allow_missing:
@@ -103,5 +110,23 @@ def _extended(row: dict) -> tuple[SessionQuote, ...]:
         ts = block.get("timestamp")
         if last is None or not ts:
             continue
-        out.append(SessionQuote(session, last, datetime.fromisoformat(str(ts).replace("Z", "+00:00"))))
+        out.append(SessionQuote(session, last, datetime.fromisoformat(str(ts).replace("Z", "+00:00")),
+                                _parse_float(block.get("prev_close"))))
     return tuple(out)
+
+
+def fetch_daily_bars(symbol: str, count: int, *, timeout_s: float = 60.0) -> list[DailyBar]:
+    """The latest `count` regular-session daily bars, forward-adjusted, oldest first; the last may still be open."""
+    data = _run(["longbridge", "kline", symbol, "--period", "day", "--count", str(count),
+                 "--adjust", "forward", "--format", "json"], timeout_s)
+    if not isinstance(data, list):
+        raise RuntimeError(f"unexpected kline payload: {str(data)[:200]}")
+    out = []
+    for row in data:
+        if not isinstance(row, dict):
+            continue
+        close, volume, ts = _parse_float(row.get("close")), _parse_float(row.get("volume")), row.get("time")
+        if close is None or volume is None or not ts:
+            continue
+        out.append(DailyBar(datetime.fromisoformat(str(ts).replace("Z", "+00:00")), close, volume))
+    return out
