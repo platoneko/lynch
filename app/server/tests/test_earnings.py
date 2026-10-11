@@ -175,14 +175,14 @@ def test_corrupt_cache_file_starts_empty(tmp_path, cal):
     assert events["TSM.US"] and len(cal.calls) == 1
 
 
-def test_failure_keeps_old_events_and_backs_off(tmp_path, cal):
+def test_partial_failure_keeps_old_events_and_retries_only_the_failed(tmp_path, cal):
     clk = Clock(at("A", 10, 14, 8))
     cache = CalendarCache(tmp_path / "calendar.json", fetch=cal, wall=clk)
     cache.get(["TSM.US", "0700.HK"])
     clk.set(at("A", 10, 15, 8))
     cal.fail = {"TSM.US"}
     events, day, error = cache.get(["TSM.US", "0700.HK"])
-    assert day == "2026-10-14" and "token expired" in error
+    assert day == "2026-10-15" and "token expired" in error  # the rest of the pool answered: the day is done
     assert events["TSM.US"] == [ev("2026-10-14", "after")]  # yesterday's events kept
     clk.now += RETRY_S - 1
     cache.get(["TSM.US", "0700.HK"])
@@ -190,7 +190,21 @@ def test_failure_keeps_old_events_and_backs_off(tmp_path, cal):
     cal.fail = set()
     clk.now += 1
     events, day, error = cache.get(["TSM.US", "0700.HK"])
-    assert len(cal.calls) == 3 and (day, error) == ("2026-10-15", None)
+    assert cal.calls[-1][0] == ["TSM.US"] and (day, error) == ("2026-10-15", None)  # only the failed one again
+
+
+def test_total_failure_holds_the_day_for_a_full_refetch(tmp_path, cal):
+    clk = Clock(at("A", 10, 14, 8))
+    cache = CalendarCache(tmp_path / "calendar.json", fetch=cal, wall=clk)
+    cache.get(["TSM.US", "0700.HK"])
+    clk.set(at("A", 10, 15, 8))
+    cal.fail = {"TSM.US", "0700.HK"}  # e.g. logged out
+    _, day, _ = cache.get(["TSM.US", "0700.HK"])
+    assert day == "2026-10-14"
+    cal.fail = set()
+    clk.now += RETRY_S
+    _, day, error = cache.get(["TSM.US", "0700.HK"])
+    assert cal.calls[-1][0] == ["TSM.US", "0700.HK"] and (day, error) == ("2026-10-15", None)
 
 
 def test_fetch_that_raises_is_a_failure_not_a_crash(tmp_path, cal):

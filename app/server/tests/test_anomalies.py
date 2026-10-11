@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+import time
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -94,6 +96,26 @@ def test_baseline_cache_failure_keeps_others(tmp_path):
     got, _, error = BaselineCache(tmp_path / "baseline.json", fetch=fake, wall=lambda: NOW,
                                   sleep=lambda s: None).get(["AAA.US", "BBB.US"])
     assert "AAA.US" in got and "BBB.US" not in got and "token expired" in error
+
+
+def test_reads_do_not_wait_on_a_fetch_in_flight(tmp_path):
+    # The day's full kline fetch takes a minute or more; quote listeners and page reads must not queue behind it.
+    started, release = threading.Event(), threading.Event()
+
+    def slow_bars(symbol, count):
+        started.set()
+        release.wait(5)
+        return us_bars()
+    cache = BaselineCache(tmp_path / "baseline.json", fetch=slow_bars, wall=lambda: NOW, sleep=lambda s: None)
+    upkeep = threading.Thread(target=lambda: cache.get(["AAA.US"]))
+    upkeep.start()
+    assert started.wait(5)
+    t = time.monotonic()
+    assert cache.get(["AAA.US"], refresh=False) == ({}, None, None)
+    assert time.monotonic() - t < 1
+    release.set()
+    upkeep.join(5)
+    assert cache.get(["AAA.US"], refresh=False)[0]["AAA.US"] is not None
 
 
 # ---- judging one quote

@@ -2,7 +2,9 @@
 
 The earnings calendar (earnings.py) and the anomaly baselines (anomalies.py) share this policy: between full
 fetches, tickers never seen (a new framework) are fetched alone and tickers that left the pool are only filtered.
-Any failure keeps the old data, holds the day open for a full refetch, and is not retried for RETRY_S.
+A failure keeps the old data and is not retried for RETRY_S. When every ticker failed (logged out, CLI missing)
+the day stays open for a full refetch; when only some did (a renamed symbol), the day is done and only those
+tickers are retried, so one bad symbol does not refetch the whole pool every RETRY_S.
 """
 from __future__ import annotations
 
@@ -42,20 +44,27 @@ def write_json(path: Path, data: Any) -> None:
 
 
 class DailyTickerCache(Generic[T]):
-    """See the module docstring. The lock makes concurrent callers wait for one fetch."""
+    """See the module docstring.
+
+    Two locks: `_fetch_lock` makes concurrent refreshing callers wait for one fetch, which can take a minute;
+    `_lock` guards the state only briefly, so a read (`refresh=False`) never waits on a fetch in flight.
+    """
 
     def __init__(self, path: Path, wall: Callable[[], float] = time.time) -> None:
         self._path, self._wall = path, wall
+        self._fetch_lock = threading.Lock()
         self._lock = threading.Lock()
         self._day, self._data = self._load()
+        self._failed: set[str] = set()  # tickers to retry alone, once the back-off has passed
         self._failed_at: float | None = None
         self._error: str | None = None
 
     def get(self, pool: list[str], *, refresh: bool = True) -> tuple[dict[str, T], str | None, str | None]:
         """(data of the pool tickers it holds, last full fetch day, last error). `refresh=False` only reads."""
-        with self._lock:
-            if refresh:
+        if refresh:
+            with self._fetch_lock:
                 self._maybe_refresh(pool)
+        with self._lock:
             return {t: self._data[t] for t in pool if t in self._data}, self._day, self._error
 
     def _maybe_refresh(self, pool: list[str]) -> None:
@@ -65,24 +74,28 @@ class DailyTickerCache(Generic[T]):
             return
         if self._day != today.isoformat():
             self._refresh(pool, today, now, full=True)
-        elif new := [t for t in pool if t not in self._data]:
+        elif new := [t for t in pool if t not in self._data or t in self._failed]:
             self._refresh(new, today, now, full=False)
 
     def _refresh(self, tickers: list[str], today: date, now: float, *, full: bool) -> None:
+        # The fetch runs outside `_lock`; only `_fetch_lock` (held by the caller) keeps it single.
         try:
             got = self._fetch(tickers, today)
         except Exception as e:  # noqa: BLE001 — the fetcher reports CLI failures itself; this is the backstop
             log.warning("%s fetch raised: %s", type(self).__name__, e)
             got = TickerFetch({}, list(tickers), str(e))
-        self._data.update(got.data)
-        if got.failed:
-            self._failed_at = now
-            self._error = f"{got.error}（{len(got.failed)} 只票未更新）"
-        else:
-            self._failed_at, self._error = None, None
-            if full:
+        with self._lock:
+            self._data.update(got.data)
+            self._failed = (self._failed - set(tickers)) | set(got.failed)
+            if got.failed:
+                self._failed_at = now
+                self._error = f"{got.error}（{len(self._failed)} 只票未更新）"
+            else:
+                self._failed_at = None
+                self._error = None if not self._failed else self._error
+            if full and len(got.failed) < len(tickers):  # someone answered: not an outage
                 self._day = today.isoformat()
-        self._save()
+            self._save()
 
     def _load(self) -> tuple[str | None, dict[str, T]]:
         if not self._path.exists():
