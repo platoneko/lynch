@@ -9,7 +9,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Set
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from functools import partial
 from pathlib import Path
@@ -31,7 +31,7 @@ from eval.lib.frameworks import (  # noqa: E402
 )
 from eval.lib.price import Quote, fetch_quotes  # noqa: E402
 from eval.lib.zones import ZONE_CN, ZONE_ORDER, credited_option_band, price_zones  # noqa: E402
-from lynch_reader.market_hours import traded_between, us_regular_close  # noqa: E402
+from lynch_reader.market_hours import in_opening_auction, traded_between, us_regular_close  # noqa: E402
 
 __all__ = [
     "FRAMEWORKS_DIR", "REPO_ROOT", "Quote", "QuoteBatch", "QuoteCache", "QuotePoller", "QuoteSnapshot",
@@ -132,10 +132,12 @@ class QuoteCache:
         finally:
             self._asked = frozenset(key)
         self._error = None
+        now = self._wall()
+        quotes = {s: q for s, q0 in quotes.items() if (q := _traded_quote(s, q0, now)) is not None}
         for s in key:
             if not _usable(quotes.get(s)):
                 log.warning("no usable quote: %s: %s", s, quotes.get(s))
-        self._batch = QuoteBatch(key, quotes, self._wall())
+        self._batch = QuoteBatch(key, quotes, now)
         for listener in self._listeners:
             try:
                 listener(self._batch)
@@ -361,6 +363,14 @@ def _latest_price(q: Quote, us_close: datetime) -> tuple[float, str | None]:
         return q.last, None
     newest = max(later, key=lambda x: x.at)
     return newest.last, newest.session
+
+
+def _traded_quote(symbol: str, q: Quote, now: float) -> Quote | None:
+    """In the opening auction the last price is the auction's indicative price, not a trade: the last trade is
+    the previous close, so the list and the anomaly checks see that; without one there is no price yet."""
+    if not in_opening_auction(market_bucket(symbol), now):
+        return q
+    return None if q.prev_close is None else replace(q, last=q.prev_close)
 
 
 def _usable(q: Quote | None) -> bool:

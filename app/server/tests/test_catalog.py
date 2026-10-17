@@ -561,3 +561,21 @@ def test_axis_path_only_resolves_axis_files(repo):
     assert axis_path_in("al", repo) == repo / "axes" / "al.md"
     assert axis_path_in("../AAA.US", repo) is None
     assert axis_path_in("nope", repo) is None
+
+
+def hk(day: int, hh: int, mm: int = 0) -> float:
+    return datetime(2026, 9, day, hh, mm, tzinfo=ZoneInfo("Asia/Hong_Kong")).timestamp()
+
+
+@pytest.mark.parametrize("now, price", [
+    (hk(22, 9, 10), 10.0),  # pre-opening session: the last trade is still the previous close
+    (hk(22, 9, 30), 8.5),
+])
+def test_an_opening_auction_price_is_no_trade(clock, now, price):
+    fetch = FakeFetch({"0001.HK": 8.5, "0002.HK": 8.5, "AAA.US": 25.0})
+    fetch.prev = {"0001.HK": 10.0, "AAA.US": 24.0}
+    clock.now = now
+    batch = QuoteCache(fetch=fetch, wall=clock).read(["0001.HK", "0002.HK", "AAA.US"]).batch
+    assert batch.quotes["0001.HK"].last == price
+    assert ("0002.HK" in batch.quotes) is (price == 8.5)  # no previous close to fall back to: no price at all
+    assert batch.quotes["AAA.US"].last == 25.0
