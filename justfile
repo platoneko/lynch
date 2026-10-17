@@ -256,70 +256,82 @@ gen-index:
 # Separate from the neige instance above: its own port, pid and log.
 app_host := "100.93.210.104"
 app_port := "3151"
-app_pid := "_local/tmp/lynch-app.pid"
 app_log := "_local/tmp/lynch-app.log"
+# Its own systemd user unit, so it is not in the cgroup of whatever terminal started it
+# (systemd-oomd once killed neige.service and took a nohup'd server down with it).
+app_unit := "lynch-app.service"
+app_unit_file := home_directory() / ".config/systemd/user" / app_unit
 
 [doc('构建手机阅读 app 前端（app/web/dist）')]
 app-web:
     cd app/web && npm ci && npm run build
 
-[doc('后台启动手机阅读 app 服务端（只绑 tailnet 地址）')]
+[doc('安装 / 更新 systemd user 服务 lynch-app（开机自启）；改了 PATH、代理等环境变量后重跑')]
+app-install:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p _local/tmp "$(dirname "{{app_unit_file}}")"
+    repo={{quote(justfile_directory())}}
+    # The unit does not read the shell rc files: snapshot the variables the server and its
+    # claude / grok / longbridge children need from the shell running this recipe.
+    env_lines=$(env | grep -E '^(PATH|HOME|https?_proxy|HTTPS?_PROXY|all_proxy|ALL_PROXY|no_proxy|NO_PROXY|LONGBRIDGE_[A-Z_]*|GROK_[A-Z_]*|LYNCH_[A-Z_]*|FEISHU_[A-Z_]*)=' \
+        | sed -E 's/^(.*)$/Environment="\1"/')
+    cat >"{{app_unit_file}}" <<EOF
+    [Unit]
+    Description=lynch mobile reader app server
+    After=network-online.target
+
+    [Service]
+    WorkingDirectory=$repo
+    $env_lines
+    Environment=PYTHONPATH=app/server
+    ExecStart=$repo/app/server/.venv/bin/python -m lynch_reader.web --host {{app_host}} --port {{app_port}}
+    StandardOutput=append:$repo/{{app_log}}
+    StandardError=inherit
+    # SIGTERM only the server: it gives open chat streams 5 s, then stops its own claude processes.
+    KillMode=mixed
+    TimeoutStopSec=20
+    # Also covers boot, when the tailnet address may not exist yet.
+    Restart=on-failure
+    RestartSec=5
+
+    [Install]
+    WantedBy=default.target
+    EOF
+    systemctl --user daemon-reload
+    systemctl --user enable {{app_unit}}
+    echo "installed {{app_unit_file}} — start with: just app-start"
+
+[doc('启动（或重启）手机阅读 app 服务端（只绑 tailnet 地址）')]
 app-start:
     #!/usr/bin/env bash
     set -euo pipefail
-    mkdir -p _local/tmp
     if [ ! -f app/web/dist/index.html ]; then
       echo "missing app/web/dist — run: just app-web" >&2
       exit 1
     fi
-    if [ -f "{{app_pid}}" ] && kill -0 "$(cat "{{app_pid}}")" 2>/dev/null; then
-      echo "already running pid=$(cat {{app_pid}}) — http://{{app_host}}:{{app_port}}"
-      exit 0
-    fi
-    (cd app/server && uv sync --quiet)
-    # Run the venv python directly so the pid file holds the server, not a wrapper.
-    PYTHONPATH=app/server nohup app/server/.venv/bin/python -m lynch_reader.web \
-        --host {{app_host}} --port {{app_port}} >>"{{app_log}}" 2>&1 </dev/null &
-    echo $! >"{{app_pid}}"
-    sleep 1
-    if ! kill -0 "$(cat "{{app_pid}}")" 2>/dev/null; then
-      echo "failed to start — tail {{app_log}}" >&2
+    if [ ! -f "{{app_unit_file}}" ]; then
+      echo "missing {{app_unit_file}} — run: just app-install" >&2
       exit 1
     fi
-    echo "lynch-app pid=$(cat {{app_pid}})  http://{{app_host}}:{{app_port}}  log={{app_log}}"
+    (cd app/server && uv sync --quiet)
+    systemctl --user restart {{app_unit}}
+    sleep 1
+    if ! systemctl --user is-active --quiet {{app_unit}}; then
+      echo "failed to start — tail {{app_log}}; systemctl --user status {{app_unit}}" >&2
+      exit 1
+    fi
+    echo "lynch-app pid=$(systemctl --user show -p MainPID --value {{app_unit}})  http://{{app_host}}:{{app_port}}  log={{app_log}}"
 
 [doc('停止手机阅读 app 服务端')]
 app-stop:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [ -f "{{app_pid}}" ] && kill -0 "$(cat "{{app_pid}}")" 2>/dev/null; then
-      pid=$(cat "{{app_pid}}")
-      kill "$pid"
-      # The server gives open chat streams 5 s, then stops its claude processes; wait for that.
-      for _ in $(seq 30); do
-        kill -0 "$pid" 2>/dev/null || break
-        sleep 0.5
-      done
-      if kill -0 "$pid" 2>/dev/null; then
-        # Keep the pid file so app-start still sees it and does not start a second server.
-        echo "pid=$pid still running after 15 s — check {{app_log}}, or kill -9 $pid" >&2
-        exit 1
-      fi
-      echo "stopped pid=$pid"
-    else
-      echo "not running"
-    fi
-    rm -f "{{app_pid}}"
+    systemctl --user stop {{app_unit}}
 
 [doc('查看手机阅读 app 服务端状态')]
 app-status:
     #!/usr/bin/env bash
     set -euo pipefail
-    if [ -f "{{app_pid}}" ] && kill -0 "$(cat "{{app_pid}}")" 2>/dev/null; then
-      echo "pid=$(cat {{app_pid}})"
-    else
-      echo "pid: not running"
-    fi
+    echo "{{app_unit}}: $(systemctl --user is-active {{app_unit}} || true)  pid=$(systemctl --user show -p MainPID --value {{app_unit}})"
     code=$(curl --noproxy '*' -sS -o /dev/null -w '%{http_code}' "http://{{app_host}}:{{app_port}}/pair" || true)
     echo "GET /pair -> ${code:-unreachable}"
 
