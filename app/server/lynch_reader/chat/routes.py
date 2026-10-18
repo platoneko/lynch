@@ -14,6 +14,7 @@ from starlette.routing import Route
 
 from lynch_reader.catalog import framework_path
 from lynch_reader.chat.config import DEFAULT_EFFORT, DEFAULT_MODEL
+from lynch_reader.chat.opencode import DEFAULT_OPENCODE_MODEL, OPENCODE_EFFORT
 from lynch_reader.chat.service import ChatService, Conflict, Invalid, NotFound
 
 log = logging.getLogger(__name__)
@@ -92,9 +93,14 @@ def chat_routes(service: ChatService, frameworks_dir: Path) -> list[Route]:
         kind, ticker = body.get("kind"), body.get("ticker")
         if kind == "ticker" and framework_path(str(ticker or ""), frameworks_dir) is None:
             raise Invalid("unknown ticker")
-        # A Claude chat may leave model and effort to the defaults; a Grok chat names model, effort, window and
-        # how many days back to look.
-        model, effort = (None, None) if kind == "discover" else (DEFAULT_MODEL, DEFAULT_EFFORT)
+        # A Claude or opencode chat may leave model and effort to its agent's defaults; a Grok chat names model,
+        # effort, window and how many days back to look.
+        if kind == "discover":
+            model, effort = None, None
+        elif body.get("agent") == "opencode":
+            model, effort = DEFAULT_OPENCODE_MODEL, OPENCODE_EFFORT
+        else:
+            model, effort = DEFAULT_MODEL, DEFAULT_EFFORT
         conv = await service.create(kind, ticker, str(body.get("text", "")), body.get("model") or model,
                                     body.get("effort") or effort, body.get("context_window"), body.get("lookback_days"),
                                     body.get("agent"))

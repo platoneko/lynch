@@ -49,6 +49,15 @@ def test_default_model_and_effort(repo, tmp_path, quotes):
         assert row["agent"] == "claude"  # a client that does not send an agent gets Claude Code
 
 
+
+def test_opencode_chat_defaults_its_model_and_effort(repo, tmp_path, quotes):
+    c, svc = client(repo, tmp_path, quotes)
+    with c:
+        c.post("/api/chats", json={"kind": "research", "text": "hi", "agent": "opencode"}).raise_for_status()
+        row = c.get("/api/chats").json()["chats"][0]
+        assert (row["agent"], row["model"], row["effort"]) == ("opencode", "0g/deepseek-v4.1-flash", "default")
+
+
 def test_event_stream_starts_with_a_snapshot_then_live_events(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)

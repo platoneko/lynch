@@ -11,6 +11,7 @@ from pathlib import Path
 from lynch_reader.chat.config import LaunchConfig
 from lynch_reader.chat.grok import GrokConfig
 from lynch_reader.chat.index import ChatIndex, Conversation
+from lynch_reader.chat.opencode import OpencodeConfig
 
 FAKE = Path(__file__).with_name("fake_claude.py")
 FAKE_CMD = (sys.executable, str(FAKE))
@@ -29,8 +30,9 @@ async def until(pred: Callable[[], bool], timeout: float = 5.0) -> None:
     await asyncio.wait_for(poll(), timeout)
 
 
-def make_service(tmp_path: Path, **kwargs):
-    """A ChatService on the fake claude and the fake grok; returns it and claude's launch log path."""
+def make_service(tmp_path: Path, env: dict[str, str] | None = None, **kwargs):
+    """A ChatService on the fake claude, the fake grok and the fake opencode; returns it and claude's launch log
+    path. `env` adds to the fakes' environment."""
     from lynch_reader.chat.candidates import CandidateStore
     from lynch_reader.chat.service import ChatService
     projects = tmp_path / "projects"
@@ -38,9 +40,11 @@ def make_service(tmp_path: Path, **kwargs):
     (tmp_path / "frameworks").mkdir(exist_ok=True)
     log = tmp_path / "launches.jsonl"
     env = {**os.environ, "FAKE_CLAUDE_PROJECTS": str(projects), "FAKE_CLAUDE_LOG": str(log),
-           "ANTHROPIC_API_KEY": "must-not-leak", **fake_grok_env(tmp_path)}
+           "ANTHROPIC_API_KEY": "must-not-leak", **fake_grok_env(tmp_path), **fake_opencode_env(tmp_path),
+           **(env or {})}
     svc = ChatService(ChatIndex(tmp_path / "index.json"), LaunchConfig(FAKE_CMD, tmp_path), projects, env,
-                      grok=grok_config(tmp_path), candidates=CandidateStore(tmp_path / "candidates.json"), **kwargs)
+                      grok=grok_config(tmp_path), candidates=CandidateStore(tmp_path / "candidates.json"),
+                      opencode=OpencodeConfig(FAKE_OPENCODE_CMD, tmp_path, tmp_path / "oc-logs"), **kwargs)
     return svc, log
 
 
@@ -115,3 +119,16 @@ def grok_launches(tmp_path: Path) -> list[dict]:
 
 def grok_session_file(tmp_path: Path, sid: str) -> dict:
     return json.loads((tmp_path / "grok-sessions" / f"{sid}.json").read_text())
+
+
+FAKE_OPENCODE_CMD = (sys.executable, str(Path(__file__).with_name("fake_opencode.py")))
+
+
+def fake_opencode_env(tmp_path: Path) -> dict[str, str]:
+    return {"FAKE_OPENCODE_SESSIONS": str(tmp_path / "oc-sessions"), "FAKE_OPENCODE_LOG": str(tmp_path / "oc-log.jsonl")}
+
+
+def opencode_log(tmp_path: Path) -> list[dict]:
+    """The fake opencode's record: one line per launch, one per request method."""
+    log = tmp_path / "oc-log.jsonl"
+    return [json.loads(l) for l in log.read_text().splitlines()] if log.exists() else []

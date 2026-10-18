@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
-import sys
 from pathlib import Path
 
 import pytest
@@ -13,9 +11,7 @@ from lynch_reader.chat.app_log import AppLog
 from lynch_reader.chat.items import message_items
 from lynch_reader.chat.opencode import OpencodeConfig
 from lynch_reader.chat.opencode_link import LinkEvents, OpencodeLink, OpencodeSetupError
-from tests.chat_helpers import conv, until
-
-FAKE_OPENCODE_CMD = (sys.executable, str(Path(__file__).with_name("fake_opencode.py")))
+from tests.chat_helpers import FAKE_OPENCODE_CMD, conv, fake_opencode_env, opencode_log, until
 
 
 class Recorder:
@@ -46,14 +42,9 @@ def make_link(tmp_path: Path, c=None, rec: Recorder | None = None, env: dict | N
     (tmp_path / "frameworks" / ".claude" / "skills" / "sediment-framework").mkdir(parents=True, exist_ok=True)
     cfg = OpencodeConfig(FAKE_OPENCODE_CMD, tmp_path, tmp_path / "logs")
     c = c or oc_conv()
-    full_env = {**os.environ, "FAKE_OPENCODE_SESSIONS": str(tmp_path / "oc-sessions"),
-                "FAKE_OPENCODE_LOG": str(tmp_path / "oc-log.jsonl"), **(env or {})}
+    full_env = {**os.environ, **fake_opencode_env(tmp_path), **(env or {})}
     link = OpencodeLink(cfg, c, full_env, AppLog(cfg.logs / f"{c.id}.jsonl"), rec.events(), **kwargs)
     return link, rec
-
-
-def fake_log(tmp_path: Path) -> list[dict]:
-    return [json.loads(l) for l in (tmp_path / "oc-log.jsonl").read_text().splitlines()]
 
 
 def history(tmp_path: Path, conv_id: str = "c1"):
@@ -75,9 +66,9 @@ def run_turn(tmp_path, text, **kwargs):
 def test_start_creates_a_session_in_orchestrator_mode(tmp_path):
     sid, _ = run_turn(tmp_path, "hi", env={"FAKE_OPENCODE_MODE": "build"})
     assert sid.startswith("ses_")
-    sets = [r["params"] for r in fake_log(tmp_path) if r.get("method") == "session/set_config_option"]
+    sets = [r["params"] for r in opencode_log(tmp_path) if r.get("method") == "session/set_config_option"]
     assert sets == [{"sessionId": sid, "configId": "mode", "value": "orchestrator"}]  # the model already matched
-    new = next(r for r in fake_log(tmp_path) if r.get("method") == "session/new")
+    new = next(r for r in opencode_log(tmp_path) if r.get("method") == "session/new")
     assert new["params"]["cwd"] == str(tmp_path) and new["params"]["mcpServers"] == []
 
 
@@ -174,7 +165,7 @@ def test_resume_reuses_the_session_without_replay(tmp_path):
         return got, rec
     got, rec = asyncio.run(again())
     assert got == sid and rec.entries == [] and rec.deltas == []
-    assert [r["params"]["sessionId"] for r in fake_log(tmp_path) if r.get("method") == "session/resume"] == [sid]
+    assert [r["params"]["sessionId"] for r in opencode_log(tmp_path) if r.get("method") == "session/resume"] == [sid]
 
 
 def test_resume_of_a_lost_session_is_a_setup_error(tmp_path):

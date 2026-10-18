@@ -1,4 +1,4 @@
-"""Chats: one Claude Code process per active conversation, or one grok process per discover turn; their state, and fan-out to the app's event streams.
+"""Chats: one Claude Code or opencode process per active conversation, or one grok process per discover turn; their state, and fan-out to the app's event streams.
 
 Everything here runs on the server's event loop; nothing blocks it except small file reads.
 """
@@ -27,7 +27,9 @@ from lynch_reader.chat.items import (compact_item, context_tokens, framework_tic
                                      retry_text)
 from lynch_reader.chat.kol import (DEFAULT_LOOKBACK_DAYS, LOOKBACK_DAYS, KolSources, KolUnavailable, kol_brief,
                                    kol_sources)
-from lynch_reader.chat.opencode import DEFAULT_OPENCODE_MODEL, OPENCODE_MODELS
+from lynch_reader.chat.opencode import (DEFAULT_OPENCODE_MODEL, OPENCODE_EFFORT, OPENCODE_MODELS, OpencodeConfig,
+                                        opencode_env, write_rules)
+from lynch_reader.chat.opencode_link import LinkEvents, OpencodeLink, OpencodeSetupError
 from lynch_reader.chat.process import ChatProcess
 
 log = logging.getLogger(__name__)
@@ -67,7 +69,7 @@ class Invalid(Exception):
 class Live:
     """Runtime state of one conversation. No entry means dormant with nobody watching."""
     state: str = "dormant"  # running | compacting | idle | dormant
-    proc: ChatProcess | None = None
+    proc: ChatProcess | OpencodeLink | None = None
     last_used: float = 0.0
     partial: str = ""  # streamed text not yet closed by its full message
     retry: str | None = None  # the API request being retried, until the model answers or the turn ends
@@ -82,7 +84,7 @@ class Live:
     pending_cut: tuple[str, int] | None = None
     # Discover only: this turn's grok printed its `result`, so its exit is the normal end of the turn.
     result_seen: bool = False
-    # Skill edits claude is waiting on the phone to allow or deny, by control request id, in arrival order.
+    # Skill edits the agent is waiting on the phone to allow or deny, by request id, in arrival order.
     # They belong to `proc`: whatever ends it (exit, stop, edit, archive) drops them.
     approvals: dict[str, Approval] = field(default_factory=dict)
     # Held by public commands that spawn or stop this chat's own process (send, edit, archive),
@@ -95,6 +97,7 @@ class Live:
 class ChatService:
     def __init__(self, index: ChatIndex, launch: LaunchConfig, projects_dir: Path, base_env: Mapping[str, str], *,
                  grok: GrokConfig | None = None, candidates: CandidateStore | None = None,
+                 opencode: OpencodeConfig | None = None,
                  monotonic: Callable[[], float] = time.monotonic, wall: Callable[[], float] = time.time,
                  idle_timeout_s: float = IDLE_TIMEOUT_S, max_processes: int = MAX_PROCESSES) -> None:
         self._index = index
@@ -104,6 +107,8 @@ class ChatService:
         self._grok = grok
         self._grok_env = grok_env(base_env)
         self._grok_logs: dict[str, AppLog] = {}
+        self._opencode = opencode
+        self._opencode_env = dict(base_env)  # opencode bills its own providers; the Claude billing guard is moot
         self.candidates = candidates
         self._now, self._wall = monotonic, wall
         self._idle_timeout_s, self._max_processes = idle_timeout_s, max_processes
@@ -159,7 +164,7 @@ class ChatService:
             items.append({"kind": "notice", "key": "interrupted", "text": "上次回答被中断"})
         tokens = live.context_tokens if live.context_tokens is not None else hist.context_tokens
         return {"conv": self._summary(conv), "items": items, "partial": live.partial, "retry": live.retry,
-                "usage": None if conv.kind == "discover" else self.usage,
+                "usage": self.usage if conv.agent == "claude" else None,  # Claude's subscription, nobody else's
                 "context": {"tokens": tokens, "window": conv.context_window},
                 "approvals": [a.public() for a in live.approvals.values()]}
 
@@ -180,13 +185,16 @@ class ChatService:
         agent = agent or ("grok" if kind == "discover" else "claude")
         if agent not in (("grok",) if kind == "discover" else ("claude", "opencode")):
             raise Invalid(f"agent {agent!r} cannot run a {kind} chat")
-        if agent == "opencode":
-            raise Invalid("opencode 未配置")
-        conv = (await self._new_discover(text, model, effort, context_window, lookback_days) if kind == "discover"
-                else self._new_claude(kind, ticker, text, model, effort))
+        if agent == "grok":
+            conv = await self._new_discover(text, model, effort, context_window, lookback_days)
+        elif agent == "opencode":
+            conv = self._new_opencode(kind, ticker, text, model, effort)
+        else:
+            conv = self._new_claude(kind, ticker, text, model, effort)
         self._index.put(conv)
-        # Visible in the list before its transcript exists. Claude titles a chat after its first reply; grok cannot.
-        self._live[conv.id] = Live(title_from=None if kind == "discover" else text)
+        # Visible in the list before its transcript exists. Claude titles a chat after its first reply; the others
+        # keep the first message.
+        self._live[conv.id] = Live(title_from=text if agent == "claude" else None)
         await self.send(conv.id, text)
         return conv
 
@@ -204,6 +212,21 @@ class ChatService:
         return Conversation(id=str(uuid.uuid4()), kind=kind, ticker=ticker if kind == "ticker" else None,
                             title=make_title(text), model=model, effort=effort, created_at=now, updated_at=now,
                             context_window=window)
+
+    def _new_opencode(self, kind: str, ticker: str | None, text: str, model: str, effort: str) -> Conversation:
+        if self._opencode is None:
+            raise Invalid("opencode 未配置")
+        if kind == "ticker" and not ticker:
+            raise Invalid("a ticker conversation needs a ticker")
+        if model not in {m for m, _ in OPENCODE_MODELS}:
+            raise Invalid(f"unknown opencode model {model!r}")
+        if effort != OPENCODE_EFFORT:
+            raise Invalid(f"unknown effort {effort!r}")
+        now = self._wall()
+        # The window arrives with the first turn's usage.
+        return Conversation(id=str(uuid.uuid4()), kind=kind, ticker=ticker if kind == "ticker" else None,
+                            title=make_title(text), model=model, effort=effort, created_at=now, updated_at=now,
+                            agent="opencode")
 
     async def _new_discover(self, text: str, model: str, effort: str, window: object, days: object) -> Conversation:
         grok = self._require_grok()
@@ -236,8 +259,11 @@ class ChatService:
         live = self._live.setdefault(conv_id, Live())
         async with live.lock:
             self._check_not_archived(conv_id, live)
-            if conv.kind == "discover":
+            if conv.agent == "grok":
                 await self._start_grok_turn(conv, live, text)
+                return
+            if conv.agent == "opencode":
+                await self._send_opencode(conv, live, text)
                 return
             if text.lstrip().startswith(COMPACT_COMMAND) and live.state in BUSY:
                 raise Conflict("等这一轮结束再压缩")
@@ -250,19 +276,19 @@ class ChatService:
         live = self._live.get(conv_id)
         if not (live and live.proc and live.proc.alive and live.state in BUSY):
             return
-        if conv.kind == "discover":
+        if conv.agent == "grok":
             await self._stop_grok_turn(conv_id, live)
             return
         try:
-            await live.proc.interrupt()
+            await live.proc.interrupt()  # Claude's interrupt message, or opencode's session/cancel
         except (BrokenPipeError, ConnectionResetError) as e:  # it exited after the alive check
-            raise Conflict("Claude 进程已退出，原因见对话里的提示") from e
+            raise Conflict(f"{AGENT_LABELS[conv.agent]} 进程已退出，原因见对话里的提示") from e
 
     async def edit(self, conv_id: str, message_uuid: str, text: str) -> None:
         """Truncate the conversation before `message_uuid` and send `text` in its place. Files are not touched."""
         conv = self._conv(conv_id)
-        if conv.kind == "discover":
-            raise Invalid("发现新票对话不支持编辑消息")
+        if conv.agent != "claude":  # only Claude Code can resume a session at an earlier message
+            raise Invalid(f"{'发现新票' if conv.agent == 'grok' else AGENT_LABELS[conv.agent]} 对话不支持编辑消息")
         live = self._live.setdefault(conv_id, Live())
         async with live.lock:
             self._check_not_archived(conv_id, live)
@@ -317,7 +343,7 @@ class ChatService:
 
     async def answer_approval(self, conv_id: str, request_id: str, allow: object) -> None:
         """The phone's answer to one pending skill edit."""
-        self._conv(conv_id)
+        conv = self._conv(conv_id)
         if not isinstance(allow, bool):
             raise Invalid("allow must be true or false")
         live = self._live.get(conv_id)
@@ -326,12 +352,14 @@ class ChatService:
         if approval is None or live.proc is None:
             raise Conflict("这处改动已不在等待审批")
         self._broadcast(conv_id, "approval_done", {"request_id": request_id})
-        response = ({"behavior": "allow", "updatedInput": approval.tool_input} if allow
-                    else {"behavior": "deny", "message": USER_DENY_MESSAGE})
         try:
-            await live.proc.respond(request_id, response)
+            if conv.agent == "opencode":
+                await live.proc.answer(request_id, allow)
+            else:
+                await live.proc.respond(request_id, {"behavior": "allow", "updatedInput": approval.tool_input} if allow
+                                        else {"behavior": "deny", "message": USER_DENY_MESSAGE})
         except (BrokenPipeError, ConnectionResetError) as e:
-            raise Conflict("Claude 进程已退出，原因见对话里的提示") from e
+            raise Conflict(f"{AGENT_LABELS[conv.agent]} 进程已退出，原因见对话里的提示") from e
 
     def save_candidates(self, conv_id: str, key: object, tickers: object) -> list[str]:
         """The user's 存入候选区: only candidates Grok's own reply carries, looked up again in the transcript."""
@@ -453,6 +481,94 @@ class ChatService:
             if not answered:
                 self._broadcast_entry(conv_id, self._grok_log(conv_id).interrupted())
 
+    async def _send_opencode(self, conv: Conversation, live: Live, text: str) -> None:
+        """One session/prompt per turn on the chat's long-lived link. Called under the chat's lock."""
+        if live.state in BUSY:  # opencode takes no message mid-turn
+            raise Conflict("回答进行中，等这一轮结束或先停止")
+        if text.lstrip().startswith(COMPACT_COMMAND):
+            raise Invalid("opencode 对话不支持压缩上下文")
+        if live.proc is None or not live.proc.alive:
+            await self._spawn_opencode(conv)
+        link = live.proc
+        try:
+            await link.prompt(text)
+        except (BrokenPipeError, ConnectionResetError) as e:
+            raise Conflict("opencode 进程已退出，原因见对话里的提示") from e
+        self._index.update(conv.id, updated_at=self._wall())
+        if live.proc is link:  # else it exited while we wrote; its exit set dormant and said why
+            live.last_used = self._now()
+            self._set_state(conv.id, "running")
+
+    async def _spawn_opencode(self, conv: Conversation) -> None:
+        cfg = self._require_opencode()
+        await self._make_room()
+        live = self._live.setdefault(conv.id, Live())
+        env = opencode_env(self._opencode_env, write_rules(cfg, conv))
+        link = OpencodeLink(cfg, conv, env, AppLog(self._transcript(conv.id)), self._link_events(conv.id, lambda: link))
+        try:
+            session = await link.start()
+        except OpencodeSetupError as e:
+            raise Conflict(f"无法启动 opencode：{e}") from e
+        if conv.opencode_session != session:
+            self._index.update(conv.id, opencode_session=session)
+        self._clear_approvals(conv.id, live)  # as in _spawn: a dead predecessor's cards go now
+        live.proc = link
+        live.partial = ""
+        live.last_used = self._now()
+        self._set_state(conv.id, "idle")
+
+    def _link_events(self, conv_id: str, link: Callable[[], OpencodeLink]) -> LinkEvents:
+        """The link's callbacks, each ignored once the link is no longer the chat's (stopped or replaced)."""
+        def current(handler: Callable[..., None]) -> Callable[..., None]:
+            def run(*args) -> None:
+                live = self._live.get(conv_id)
+                if live is not None and live.proc is link():
+                    handler(live, *args)
+            return run
+
+        def on_delta(live: Live, text: str) -> None:
+            live.partial += text
+            self._broadcast(conv_id, "delta", {"text": text})
+
+        def on_usage(live: Live, used: int | None, window: int | None, cost: float | None) -> None:
+            live.context_tokens = used
+            conv = self._index.get(conv_id)
+            changes = {k: v for k, v in (("context_window", window), ("cost_usd", cost))
+                       if v and v != getattr(conv, k)}  # cost: the session's running total
+            if changes:
+                conv = self._index.update(conv_id, **changes)
+                self._broadcast(conv_id, "conv", self._summary(conv))
+            self._broadcast(conv_id, "context", self._context(conv_id))
+
+        def on_permission(live: Live, request_id: str, tool_use_id: str, name: str, tool_input: dict) -> None:
+            request = {"tool_name": name, "input": tool_input, "tool_use_id": tool_use_id}
+            approval = self._skill_approval(conv_id, request_id, request)
+            if approval is None:  # anything but a skill edit is refused at once, as in Claude chats
+                self._spawn_task(self._answer_link(conv_id, link(), request_id))
+                return
+            live.approvals[request_id] = approval
+            self._broadcast(conv_id, "approval", approval.public())
+
+        def on_turn_end(live: Live, stop: str | None, error: str | None) -> None:
+            if error is not None:
+                self._notice(conv_id, f"opencode 本轮出错：{error}")
+            self._index.update(conv_id, updated_at=self._wall())
+            live.partial = ""
+            live.last_used = self._now()
+            self._clear_approvals(conv_id, live)
+            self._set_state(conv_id, "idle")
+
+        return LinkEvents(on_delta=current(on_delta), on_entry=current(lambda live, e: self._show(conv_id, live, e)),
+                          on_usage=current(on_usage), on_permission=current(on_permission),
+                          on_turn_end=current(on_turn_end),
+                          on_exit=lambda expected, err: self._on_exit(conv_id, link(), expected, err))
+
+    async def _answer_link(self, conv_id: str, link: OpencodeLink, request_id: str) -> None:
+        try:
+            await link.answer(request_id, False)
+        except OSError as e:  # the process died: its exit already told the page
+            log.info("chat %s: permission answer not sent: %s", conv_id, e)
+
     def _discover_skill(self) -> str:
         path = self._require_grok().skill
         try:
@@ -493,20 +609,21 @@ class ChatService:
             return  # replaced by an edit or already stopped
         was_busy = live.state in BUSY
         conv = self._index.get(conv_id)
-        discover = conv is not None and conv.kind == "discover"
-        expected = expected or (discover and live.result_seen)  # grok exits by itself once its turn is done
+        agent = conv.agent if conv is not None else "claude"
+        expected = expected or (agent == "grok" and live.result_seen)  # grok exits by itself once its turn is done
         live.proc = None
         self._clear_approvals(conv_id, live)
         live.partial = ""
         live.pending_cut = None  # an edit whose process died unwritten is lost: the next resume sees the old tip
         self._set_state(conv_id, "dormant")
         if not expected:
-            text = f"{'Grok' if discover else 'Claude'} 进程意外退出" + ("，本轮中断" if was_busy else "")
+            text = f"{'Claude' if agent == 'claude' else AGENT_LABELS[agent]} 进程意外退出" + ("，本轮中断" if was_busy else "")
             self._notice(conv_id, f"{text}：{stderr_tail}" if stderr_tail else text)
 
     # ---- stream messages
 
     def _on_message(self, conv_id: str, proc: ChatProcess, msg: dict) -> None:
+        """One line of a Claude Code or grok process's stream-json."""
         live = self._live.get(conv_id)
         if live is None or live.proc is not proc:
             return  # a detached process still draining its output
@@ -537,7 +654,7 @@ class ChatService:
             self._broadcast(conv_id, "delta", {"text": delta["text"]})
 
     def _on_chat_message(self, conv_id: str, live: Live, msg: dict) -> None:
-        if self._is_discover(conv_id):
+        if self._agent(conv_id) == "grok":
             msg = self._grok_log(conv_id).message(msg)  # grok keeps no transcript the app can read
         if msg["type"] == "assistant":
             self._mark_busy(conv_id)
@@ -547,6 +664,10 @@ class ChatService:
             if tokens:
                 live.context_tokens = tokens
                 self._broadcast(conv_id, "context", self._context(conv_id))
+        self._show(conv_id, live, msg)
+
+    def _show(self, conv_id: str, live: Live, msg: dict) -> None:
+        """A transcript message's items to the open pages; tool results patch the call they answer."""
         for item in message_items(msg):
             if item["kind"] == "tool_result":
                 self._broadcast(conv_id, "tool_result", item)
@@ -573,7 +694,7 @@ class ChatService:
 
     def _on_result(self, conv_id: str, live: Live, msg: dict) -> None:
         conv = self._index.get(conv_id)
-        if conv.kind == "discover":
+        if conv.agent == "grok":
             live.result_seen = True  # even an error result: grok's exit after it is the normal end of the turn
             failure = _grok_failure(msg)
             if failure is not None:
@@ -589,7 +710,7 @@ class ChatService:
         self._clear_approvals(conv_id, live)  # an interrupted turn whose cancel never arrived
         # A discover turn ends when grok exits (`_on_exit`): until then it still writes its session, so a
         # second resume, an eviction or a reap must not start.
-        if conv.kind != "discover":
+        if conv.agent != "grok":
             self._set_state(conv_id, "idle")
         self._broadcast(conv_id, "context", self._context(conv_id))
         if "cost_usd" in changes:
@@ -628,14 +749,8 @@ class ChatService:
         request, request_id = msg.get("request") or {}, msg.get("request_id")
         if request.get("subtype") != "can_use_tool" or not isinstance(request_id, str):
             return
-        root = self._launch.repo_root
         # Every prompt gets an answer, even a malformed one: claude waits on it forever otherwise.
-        try:
-            path = approvable_path(str(request.get("tool_name", "")), request.get("input") or {}, root)
-            approval = new_approval(request_id, request, path, root) if path is not None else None
-        except Exception:
-            log.exception("chat %s: permission request %s not understood", conv_id, request_id)
-            approval = None
+        approval = self._skill_approval(conv_id, request_id, request)
         if approval is None:  # outside the whitelist and not a skill edit: refused as before the prompt tool
             # Claude Code's own reason names the rule hit (e.g. `cd … && git`), which the agent can adapt to.
             reason = request.get("decision_reason")
@@ -645,6 +760,16 @@ class ChatService:
             return
         live.approvals[request_id] = approval
         self._broadcast(conv_id, "approval", approval.public())
+
+    def _skill_approval(self, conv_id: str, request_id: str, request: dict) -> Approval | None:
+        """The phone card for a skill edit (`request` in Claude's can_use_tool shape); None for anything else."""
+        root = self._launch.repo_root
+        try:
+            path = approvable_path(str(request.get("tool_name", "")), request.get("input") or {}, root)
+            return new_approval(request_id, request, path, root) if path is not None else None
+        except Exception:
+            log.exception("chat %s: permission request %s not understood", conv_id, request_id)
+            return None
 
     async def _respond(self, conv_id: str, proc: ChatProcess, request_id: str, response: dict) -> None:
         try:
@@ -666,7 +791,7 @@ class ChatService:
                       "seven_day": (windows.get("seven_day") or {}).get("utilization"),
                       "status": info.get("status"), "resets_at": info.get("resetsAt")}
         for cid in self._live:
-            if not self._is_discover(cid):  # Claude's subscription windows say nothing about Grok
+            if self._agent(cid) == "claude":  # Claude's subscription windows say nothing about the other agents
                 self._broadcast(cid, "usage", self.usage)
         if info.get("isUsingOverage"):
             self._notice(conv_id, "检测到超额计费（usage credits），已停止本轮")
@@ -736,14 +861,19 @@ class ChatService:
         return {**asdict(conv), "state": live.state if live else "dormant", "agent_label": AGENT_LABELS[conv.agent],
                 "model_label": labels.get(conv.model, conv.model)}
 
-    def _is_discover(self, conv_id: str) -> bool:
+    def _agent(self, conv_id: str) -> str | None:
         conv = self._index.get(conv_id)
-        return conv is not None and conv.kind == "discover"
+        return conv.agent if conv is not None else None
 
     def _require_grok(self) -> GrokConfig:
         if self._grok is None:
             raise Invalid("Grok 未配置")
         return self._grok
+
+    def _require_opencode(self) -> OpencodeConfig:
+        if self._opencode is None:
+            raise Invalid("opencode 未配置")
+        return self._opencode
 
     def _grok_log(self, conv_id: str) -> AppLog:
         if conv_id not in self._grok_logs:
@@ -755,8 +885,11 @@ class ChatService:
             self._broadcast(conv_id, "item", item)
 
     def _transcript(self, conv_id: str) -> Path:
-        if self._is_discover(conv_id):
+        agent = self._agent(conv_id)
+        if agent == "grok":
             return self._require_grok().logs / f"{conv_id}.jsonl"
+        if agent == "opencode":
+            return self._require_opencode().logs / f"{conv_id}.jsonl"
         return self._projects / f"{conv_id}.jsonl"
 
     def _visible(self, conv: Conversation) -> bool:

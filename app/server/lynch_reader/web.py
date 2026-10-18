@@ -1,9 +1,9 @@
 """HTTP surface: ticker catalog with zones on live quotes, raw framework and axis markdown, chats, and the built web UI.
 
 Only paired devices get in (lynch_reader.auth): a one-time code from `just app-pair` buys a long-lived cookie.
-Chats run Claude Code subprocesses that may write frameworks/ under a tool whitelist and the sediment-framework
-skill, and read-only grok subprocesses that search X (AGENTS.md「app 对话」). The server itself writes only
-output/chat/, output/candidates/, output/archive/, output/earnings/ and output/anomalies/.
+Chats run Claude Code or opencode subprocesses that may write frameworks/ under a tool whitelist and the
+sediment-framework skill, and read-only grok subprocesses that search X (AGENTS.md「app 对话」). The server itself
+writes only output/chat/, output/candidates/, output/archive/, output/earnings/ and output/anomalies/.
 """
 from __future__ import annotations
 
@@ -36,6 +36,7 @@ from lynch_reader.catalog import (
 from lynch_reader.chat.candidates import CANDIDATES_FILE, CandidateStore
 from lynch_reader.chat.config import LaunchConfig
 from lynch_reader.chat.grok import GrokConfig
+from lynch_reader.chat.opencode import OpencodeConfig
 from lynch_reader.chat.index import ChatIndex
 from lynch_reader.chat.kol import INVEST_ROOT
 from lynch_reader.chat.routes import _body, _guarded, chat_lifespan, chat_routes
@@ -224,6 +225,7 @@ def main(argv: list[str] | None = None) -> None:
                         home=Path.home(), logs=output / "chat" / "grok", invest_root=INVEST_ROOT,
                         skill=REPO_ROOT / ".agents" / "skills" / "discover-kol" / "references" / "search.md"),
         candidates=CandidateStore(CANDIDATES_FILE),
+        opencode=OpencodeConfig((shutil.which("opencode") or "opencode",), REPO_ROOT, output / "chat" / "opencode"),
     )
     # An open chat stream never ends by itself: without a graceful-shutdown timeout, SIGTERM waits on it
     # forever and the lifespan shutdown that stops the claude processes never runs.
