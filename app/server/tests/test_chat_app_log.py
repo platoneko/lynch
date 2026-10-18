@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from lynch_reader.chat import transcript
-from lynch_reader.chat.grok_log import GrokLog
+from lynch_reader.chat.app_log import AppLog
 
 
 def grok_assistant(*content):
@@ -17,7 +17,7 @@ def replay(path):
 
 def test_turn_reads_back_like_a_claude_transcript(tmp_path):
     path = tmp_path / "grok" / "c1.jsonl"
-    log = GrokLog(path)
+    log = AppLog(path)
     log.user("看看")
     log.message(grok_assistant({"type": "tool_use", "id": "t1", "name": "X search:", "input": "{'v': 1}"}))
     log.message({"type": "user", "uuid": "r1", "message": {"role": "user", "content": [
@@ -32,18 +32,18 @@ def test_turn_reads_back_like_a_claude_transcript(tmp_path):
 
 def test_chain_continues_after_reopening_and_marks_a_stop(tmp_path):
     path = tmp_path / "c1.jsonl"
-    first = GrokLog(path).user("one")
-    entry = GrokLog(path).interrupted()  # a new GrokLog, as after a server restart
+    first = AppLog(path).user("one")
+    entry = AppLog(path).interrupted()  # a new AppLog, as after a server restart
     assert entry["parentUuid"] == first["uuid"]
     assert [(i["kind"], i["text"]) for i in replay(path).items] == [("user", "one"), ("notice", "已停止")]
 
 
 def test_a_line_torn_by_a_crash_does_not_swallow_the_next(tmp_path):
     path = tmp_path / "c1.jsonl"
-    GrokLog(path).user("one")
+    AppLog(path).user("one")
     with path.open("a", encoding="utf-8") as f:
         f.write('{"type": "assistant", "mess')  # the server died mid-write
-    log = GrokLog(path)
+    log = AppLog(path)
     log.user("two")
     log.message(grok_assistant({"type": "text", "text": "完"}))
     assert [(i["kind"], i.get("text")) for i in replay(path).items] == [("user", "one"), ("user", "two"),
@@ -52,5 +52,5 @@ def test_a_line_torn_by_a_crash_does_not_swallow_the_next(tmp_path):
 
 def test_a_turn_with_no_reply_is_unfinished(tmp_path):
     path = tmp_path / "c1.jsonl"
-    GrokLog(path).user("one")
+    AppLog(path).user("one")
     assert replay(path).unfinished is True

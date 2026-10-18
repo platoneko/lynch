@@ -55,7 +55,7 @@ class GrokConfig:
     grok_cmd: tuple[str, ...]  # ("grok",); tests put a fake script here
     workdir: Path  # every grok process runs here: an empty git root of its own
     home: Path  # holds ~/.grok/models_cache.json
-    logs: Path  # the app's own discover transcripts (chat/grok_log.py)
+    logs: Path  # the app's own discover transcripts (chat/app_log.py)
     invest_root: Path  # where the KOL list comes from (chat/kol.py)
     skill: Path  # .agents/skills/discover-kol/references/search.md, sent whole every turn (discover_prompt)
 

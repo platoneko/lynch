@@ -1,7 +1,8 @@
-"""The app's own record of a discover chat (output/chat/grok/<id>.jsonl, spec §3h).
+"""The app's own record of a chat whose agent keeps no transcript the app can read: Grok
+(output/chat/grok/<id>.jsonl, spec §3h) and opencode (output/chat/opencode/<id>.jsonl).
 
-grok prints neither the user's message nor parent links, and its session files use an internal format. So the
-app writes each turn here in Claude Code's transcript shape, each line chained to the one before, and
+Neither prints the user's message nor parent links, and their session files use internal formats. So the app
+writes each turn here in Claude Code's transcript shape, each line chained to the one before, and
 chat/transcript.py reads it back unchanged.
 """
 from __future__ import annotations
@@ -14,7 +15,7 @@ from lynch_reader.chat.items import INTERRUPT_PREFIX
 from lynch_reader.chat.transcript import read_entries
 
 
-class GrokLog:
+class AppLog:
     def __init__(self, path: Path) -> None:
         self._path = path
         entries = read_entries(path) if path.exists() else []
@@ -30,7 +31,7 @@ class GrokLog:
         return self.user(f"{INTERRUPT_PREFIX}]")
 
     def message(self, msg: dict) -> dict:
-        """One assistant line or tool-result user line of grok's stream; its own uuid is kept."""
+        """One assistant line or tool-result user line in Claude's shape; its own uuid is kept."""
         return self._append({"type": msg["type"], "uuid": msg.get("uuid"), "message": msg["message"]})
 
     def _append(self, entry: dict) -> dict:

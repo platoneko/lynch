@@ -21,7 +21,7 @@ from lynch_reader.chat.config import (CHAT_EFFORTS, CHAT_MODELS, DEFAULT_EFFORT,
                                       MAX_PROCESSES, LaunchConfig, launch_argv, launch_env)
 from lynch_reader.chat.grok import (DEFAULT_GROK_MODEL, DEFAULT_WINDOW, MAX_TURNS, GrokConfig, GrokSetupError,
                                     discover_prompt, grok_argv, grok_env, grok_models, new_session, prepare_workdir)
-from lynch_reader.chat.grok_log import GrokLog
+from lynch_reader.chat.app_log import AppLog
 from lynch_reader.chat.index import ChatIndex, Conversation, make_title
 from lynch_reader.chat.items import (compact_item, context_tokens, framework_ticker, message_items, notice_item,
                                      retry_text)
@@ -103,7 +103,7 @@ class ChatService:
         self._env = launch_env(base_env)
         self._grok = grok
         self._grok_env = grok_env(base_env)
-        self._grok_logs: dict[str, GrokLog] = {}
+        self._grok_logs: dict[str, AppLog] = {}
         self.candidates = candidates
         self._now, self._wall = monotonic, wall
         self._idle_timeout_s, self._max_processes = idle_timeout_s, max_processes
@@ -745,9 +745,9 @@ class ChatService:
             raise Invalid("Grok 未配置")
         return self._grok
 
-    def _grok_log(self, conv_id: str) -> GrokLog:
+    def _grok_log(self, conv_id: str) -> AppLog:
         if conv_id not in self._grok_logs:
-            self._grok_logs[conv_id] = GrokLog(self._transcript(conv_id))
+            self._grok_logs[conv_id] = AppLog(self._transcript(conv_id))
         return self._grok_logs[conv_id]
 
     def _broadcast_entry(self, conv_id: str, entry: dict) -> None:
