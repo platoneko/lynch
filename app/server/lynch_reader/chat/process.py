@@ -44,23 +44,23 @@ class ChatProcess:
         self._watcher = asyncio.create_task(self._watch())
 
     async def send_user(self, text: str) -> None:
-        await self._write({"type": "user", "message": {"role": "user", "content": text}})
+        await self.send_json({"type": "user", "message": {"role": "user", "content": text}})
 
     async def interrupt(self) -> None:
         self._requests += 1
-        await self._write({"type": "control_request", "request_id": f"interrupt-{self._requests}",
+        await self.send_json({"type": "control_request", "request_id": f"interrupt-{self._requests}",
                            "request": {"subtype": "interrupt"}})
 
     async def generate_title(self, request_id: str, description: str) -> None:
         """Claude Code's own session title (a Haiku call on this process's login), also written to the
         transcript as `ai-title`; the answer arrives as the control_response with this request id."""
-        await self._write({"type": "control_request", "request_id": request_id,
+        await self.send_json({"type": "control_request", "request_id": request_id,
                            "request": {"subtype": "generate_session_title", "description": description,
                                        "persist": True}})
 
     async def respond(self, request_id: str, response: dict) -> None:
         """Answers claude's own control_request (a permission prompt) with this request id."""
-        await self._write({"type": "control_response",
+        await self.send_json({"type": "control_response",
                            "response": {"subtype": "success", "request_id": request_id, "response": response}})
 
     async def close(self) -> None:
@@ -83,7 +83,7 @@ class ChatProcess:
         except ProcessLookupError:
             pass
 
-    async def _write(self, obj: dict) -> None:
+    async def send_json(self, obj: dict) -> None:
         stdin = self._proc.stdin
         stdin.write((json.dumps(obj, ensure_ascii=False) + "\n").encode())
         await stdin.drain()

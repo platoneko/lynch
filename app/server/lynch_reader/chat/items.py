@@ -16,6 +16,9 @@ DENIAL_MARKERS = (
     "requires approval",
     "haven't granted it yet",
     "changes directory before running a version-control command",
+    # opencode's (chat/opencode_link.py): a rule's deny, and a refused ask
+    "a rule which prevents you from using this specific tool call",
+    "rejected permission to use this specific tool call",
 )
 INTERRUPT_PREFIX = "[Request interrupted by user"
 # User-role entries Claude Code writes for itself: local-command echoes and the post-compaction summary.
