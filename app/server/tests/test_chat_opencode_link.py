@@ -134,6 +134,10 @@ def test_cancel_closes_open_tool_calls(tmp_path):
 def test_prompt_error_ends_the_turn_with_text(tmp_path):
     _, rec = run_turn(tmp_path, "fail")
     assert rec.turn_ends == [(None, "Internal error: Cannot connect to API")]
+    hist = history(tmp_path)  # kept in the record, so a reload still says why there is no answer
+    assert hist.items[-1] == {"kind": "text", "key": hist.items[-1]["key"],
+                              "text": "opencode 本轮出错：Internal error: Cannot connect to API"}
+    assert hist.unfinished is False
 
 
 def test_resume_reuses_the_session_without_replay(tmp_path):
@@ -149,13 +153,41 @@ def test_resume_reuses_the_session_without_replay(tmp_path):
     assert [r["params"]["sessionId"] for r in opencode_log(tmp_path) if r.get("method") == "session/resume"] == [sid]
 
 
-def test_resume_of_a_lost_session_is_a_setup_error(tmp_path):
+def test_a_lost_session_is_replaced_by_a_new_one(tmp_path):
+    # opencode's storage lost the session: the chat must stay usable, without its earlier context.
     async def main():
         link, _ = make_link(tmp_path, c=oc_conv(opencode_session="ses_gone"))
-        with pytest.raises(OpencodeSetupError, match="session not found"):
+        sid = await link.start()
+        await link.close()
+        return sid, link.session_lost
+    sid, lost = asyncio.run(main())
+    assert sid.startswith("ses_") and sid != "ses_gone" and lost is True
+
+
+def test_a_malformed_mcp_config_is_a_setup_error_and_leaves_no_process(tmp_path):
+    (tmp_path / ".mcp.json").write_text("{not json", encoding="utf-8")
+
+    async def main():
+        link, _ = make_link(tmp_path)
+        with pytest.raises(OpencodeSetupError):
             await link.start()
-        assert not link.alive
+        return link.alive
+    assert asyncio.run(main()) is False
+
+
+def test_a_turn_ending_on_a_refusal_is_closed_in_the_log(tmp_path):
+    # Else a reload after a reap shows 「上次回答被中断」 and loses the context count.
+    async def main():
+        link, rec = make_link(tmp_path)
+        await link.start()
+        await link.prompt("skill")
+        await until(lambda: rec.permissions)
+        await link.answer(rec.permissions[0][0], False)
+        await until(lambda: rec.turn_ends)
+        await link.close()
     asyncio.run(main())
+    hist = history(tmp_path)
+    assert hist.unfinished is False and hist.items[-1]["kind"] == "text" and hist.context_tokens == 1234
 
 
 @pytest.mark.parametrize("env,match", [({"FAKE_OPENCODE_HANG": "1"}, "没有响应"),

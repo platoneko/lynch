@@ -246,7 +246,7 @@ def test_edit_and_compact_are_refused(tmp_path):
         conv = await svc.create("discover", None, "one", "grok-4.6", "high", 256000)
         await settled(svc, conv.id)
         user_uuid = svc.snapshot(conv.id)["items"][0]["uuid"]
-        with pytest.raises(Invalid):
+        with pytest.raises(Invalid, match="^发现新票对话不支持编辑消息$"):
             await svc.edit(conv.id, user_uuid, "x")
         with pytest.raises(Invalid):
             await svc.send(conv.id, "/compact")

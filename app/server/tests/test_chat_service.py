@@ -98,7 +98,7 @@ def test_interrupt_on_a_process_that_just_died_is_a_conflict(tmp_path):
             raise BrokenPipeError
         svc._live[conv.id].proc.interrupt = dead_pipe
         try:
-            with pytest.raises(Conflict):
+            with pytest.raises(Conflict, match="^Claude 进程已退出"):
                 await svc.interrupt(conv.id)
         finally:
             await svc.shutdown()

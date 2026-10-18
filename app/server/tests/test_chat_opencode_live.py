@@ -29,6 +29,7 @@ pytestmark = pytest.mark.skipif(os.environ.get("LYNCH_LIVE_OPENCODE") != "1", re
 
 TURN_S = 300.0
 PROBE = REPO_ROOT / "frameworks/.claude/skills/sediment-framework/_live_probe.md"
+AST_PROBE = REPO_ROOT / "frameworks/_local/tmp/_live_ast_probe.py"  # scratch, never committed
 MARKER = "MANGO-3"
 
 
@@ -59,6 +60,8 @@ def tools(cfg: OpencodeConfig, conv_id: str) -> list[dict]:
 
 def test_guardrails_skill_approval_and_resume(tmp_path: Path):
     assert not PROBE.exists()
+    AST_PROBE.parent.mkdir(parents=True, exist_ok=True)
+    AST_PROBE.write_text("x = 1\n", encoding="utf-8")
     cfg = OpencodeConfig((shutil.which("opencode") or "opencode",), REPO_ROOT, tmp_path / "logs")
     c = conv(kind="research", ticker=None, agent="opencode", model=DEFAULT_OPENCODE_MODEL, effort=OPENCODE_EFFORT)
 
@@ -74,6 +77,9 @@ def test_guardrails_skill_approval_and_resume(tmp_path: Path):
                                   "git -C frameworks push --dry-run")
             await turn(link, rec, "Yourself, with your write tool (no bash, no subagent), create the file "
                                   f"{PROBE.relative_to(REPO_ROOT)} containing the single line x.")
+            await turn(link, rec, "Yourself, with your ast_grep_replace tool and dryRun false (no bash, no edit tool, "
+                                  f"no subagent), rewrite `x = 1` to `x = 2` in {AST_PROBE.relative_to(REPO_ROOT)}. "
+                                  "If you have no such tool, say so.")
         finally:
             await link.close()
         # A new process, as after an idle reap or a server restart.
@@ -102,3 +108,8 @@ def test_guardrails_skill_approval_and_resume(tmp_path: Path):
     assert not PROBE.exists()
     assert resumed == session and replayed == []
     assert MARKER in "".join(rec2.deltas)
+    # The plugin's AST rewrite writes without asking: denied, so the file stays as it was.
+    ast_text = AST_PROBE.read_text(encoding="utf-8")
+    AST_PROBE.unlink()
+    assert ast_text == "x = 1\n"
+    assert not any(t["name"] == "ast_grep_replace" and not t["is_error"] for t in calls)

@@ -36,6 +36,8 @@ def test_permission_writes_only_frameworks():
     perm = permission_config("deny")
     assert list(perm["edit"].items()) == [("*", "deny"), ("frameworks/**", "allow"), (SKILL, "deny")]
     assert perm["external_directory"] == "deny"
+    # oh-my-opencode-slim's AST rewrite writes files without asking and is not an `edit` tool.
+    assert perm["ast_grep_replace"] == "deny"
 
 
 def test_only_the_orchestrator_may_ask_for_skill_edits():

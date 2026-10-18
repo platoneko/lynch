@@ -11,6 +11,10 @@ What loads (2026-10-18):
   AGENTS.md. Accepted: skills are text, and the bash denies below still hold.
 - on, required: .claude/skills (sediment-framework). OPENCODE_DISABLE_CLAUDE_CODE and
   OPENCODE_DISABLE_CLAUDE_CODE_SKILLS would drop it, so neither is set.
+
+Files are written only through the `edit` rules below; a plugin tool that writes on its own permission key must be
+denied by name (oh-my-opencode-slim 2.2.8: ast_grep_replace; its acp_run exists only when acpAgents is configured,
+which the user's setup does not do). Bash stays open, as in the Claude chats: a guardrail, not a sandbox.
 """
 from __future__ import annotations
 
@@ -64,6 +68,8 @@ def permission_config(skill: str) -> dict:
         # Patterns are relative to the repo root; covers opencode's edit, write and patch tools.
         "edit": {"*": "deny", "frameworks/**": "allow", SKILL_PATTERN: skill},
         "external_directory": "deny",
+        # oh-my-opencode-slim's AST rewrite writes files on disk without asking and is not an `edit` tool.
+        "ast_grep_replace": "deny",
     }
 
 

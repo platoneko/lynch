@@ -21,10 +21,15 @@ log = logging.getLogger(__name__)
 
 PROTOCOL_VERSION = 1
 INTERRUPTED_OUTPUT = "已中断"  # a tool call the turn ended under, which opencode never finished
+TURN_ENDED_TEXT = "（opencode 结束了本轮）"
 
 
 class OpencodeSetupError(Exception):
     pass
+
+
+class _RpcError(OpencodeSetupError):
+    """opencode answered a setup request with a JSON-RPC error (as opposed to no answer or an exit)."""
 
 
 @dataclass
@@ -54,24 +59,33 @@ class OpencodeLink:
         self._text, self._message_id = "", None  # the reply streaming since the last tool call
         self._used: int | None = None  # context tokens from this turn's usage_update
         self._asks: dict[str, tuple[int | str, list]] = {}  # permission requests: app id → (JSON-RPC id, options)
+        self._closed_turn = True  # the log's newest entry ends a turn (a reply text, or no turn yet)
         self._tasks: set[asyncio.Task] = set()
+        # start() could not resume the chat's session and made a new one: opencode lost the earlier context.
+        self.session_lost = False
 
     @property
     def alive(self) -> bool:
         return self._proc.alive
 
     async def start(self) -> str:
-        """Starts the process and its session: a new one, or the chat's earlier one resumed without replay.
-        Returns the session id; on any failure the process is gone and OpencodeSetupError says why."""
+        """Starts the process and its session: the chat's earlier one resumed without replay, else a new one
+        (`session_lost` says when an earlier one was gone). Returns the session id; on any failure the process is
+        gone and OpencodeSetupError says why."""
         try:
             await self._proc.start()
             await self._call("initialize", {"protocolVersion": PROTOCOL_VERSION, "clientCapabilities": {
                 "fs": {"readTextFile": False, "writeTextFile": False}, "terminal": False}})
             where = {"cwd": str(self._cfg.repo_root), "mcpServers": mcp_servers(self._cfg.repo_root)}
+            result = None
             if self._conv.opencode_session:
-                session = self._conv.opencode_session
-                result = await self._call("session/resume", {"sessionId": session, **where})
-            else:
+                try:
+                    result = await self._call("session/resume", {"sessionId": self._conv.opencode_session, **where})
+                    session = self._conv.opencode_session
+                except _RpcError as e:  # e.g. opencode's storage was cleared: start over rather than stay unusable
+                    log.warning("opencode: session %s not resumed: %s", self._conv.opencode_session, e)
+                    self.session_lost = True
+            if result is None:
                 result = await self._call("session/new", where)
                 session = result["sessionId"]
             self._session = session
@@ -82,14 +96,15 @@ class OpencodeLink:
                     await self._call("session/set_config_option",
                                      {"sessionId": session, "configId": config_id, "value": value})
             return session
-        except (OpencodeSetupError, OSError, KeyError, TypeError) as e:
+        except Exception as e:  # whatever failed (a bad answer, an unreadable .mcp.json), no process outlives it
             await self._proc.close()
-            raise e if isinstance(e, OpencodeSetupError) else OpencodeSetupError(str(e)) from e
+            raise e if isinstance(e, OpencodeSetupError) else OpencodeSetupError(f"{type(e).__name__}: {e}") from e
 
     async def prompt(self, text: str) -> None:
         """Sends one user message; the turn's end arrives as on_turn_end. opencode never echoes the message, so
         the app records it."""
         self._events.on_entry(self._log.user(text))
+        self._closed_turn = False
         self._prompt_id = self._new_id()
         await self._proc.send_json({"jsonrpc": "2.0", "id": self._prompt_id, "method": "session/prompt",
                                     "params": {"sessionId": self._session,
@@ -154,7 +169,7 @@ class OpencodeLink:
         if future is None or future.done():
             return
         if error:
-            future.set_exception(OpencodeSetupError(str(error.get("message") or error)))
+            future.set_exception(_RpcError(str(error.get("message") or error)))
         else:
             future.set_result(msg.get("result") or {})
 
@@ -213,24 +228,33 @@ class OpencodeLink:
             {"type": "tool_use", "id": call_id, "name": name, "input": tool_input}]}}))
         self._events.on_entry(self._log.message({"type": "user", "message": {"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": call_id, "content": output, "is_error": failed}]}}))
+        self._closed_turn = False
 
     def _flush_text(self, usage: dict | None = None) -> None:
-        if not self._text:
-            return
-        message = {"role": "assistant", "content": [{"type": "text", "text": self._text}], **(usage or {})}
-        self._text = ""
+        if self._text:
+            self._write_text(self._text, usage)
+            self._text = ""
+
+    def _write_text(self, text: str, usage: dict | None = None) -> None:
+        message = {"role": "assistant", "content": [{"type": "text", "text": text}], **(usage or {})}
         self._events.on_entry(self._log.message({"type": "assistant", "message": message}))
+        self._closed_turn = True
 
     def _end_turn(self, stop: str | None, error: str | None, notify: bool = True) -> None:
         self._prompt_id = None
         # The context count rides on the turn's last text, so a reload after a restart still knows it.
-        self._flush_text({"usage": {"input_tokens": self._used}} if self._used else None)
+        usage = {"usage": {"input_tokens": self._used}} if self._used else None
+        self._flush_text(None if error or not notify else usage)
         self._message_id = None
         for call_id in list(self._tools):
             self._finish_tool(call_id, INTERRUPTED_OUTPUT, failed=True)
         self._asks.clear()
         if stop == "cancelled":
             self._events.on_entry(self._log.interrupted())
+        elif notify and (error is not None or not self._closed_turn):
+            # A turn that ends on an error or right after a refusal (opencode stops there) gets a closing line,
+            # so the record does not read as cut off once the process is gone.
+            self._write_text(f"opencode 本轮出错：{error}" if error is not None else TURN_ENDED_TEXT, usage)
         if notify:
             self._events.on_turn_end(stop, error)
 

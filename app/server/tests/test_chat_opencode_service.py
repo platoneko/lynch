@@ -102,6 +102,26 @@ def test_opencode_stop_clears_pending_approval(tmp_path):
     assert tool["name"] == "Edit" and tool["is_error"] is True
 
 
+def test_opencode_lost_session_starts_over_with_a_notice(tmp_path):
+    async def main():
+        svc, _ = make_service(tmp_path)
+        conv = await start(svc, "one")
+        await idle(svc, conv.id)
+        sid = svc.list()["chats"][0]["opencode_session"]
+        await svc.shutdown()
+        (tmp_path / "oc-sessions" / f"{sid}.json").unlink()  # opencode's storage lost it
+        svc2, _ = make_service(tmp_path)
+        q = svc2.subscribe(conv.id)
+        await svc2.send(conv.id, "two")
+        notice = await next_event(q, "item", lambda d: d["kind"] == "notice")
+        await idle(svc2, conv.id)
+        new_sid = svc2.list()["chats"][0]["opencode_session"]
+        await svc2.shutdown()
+        return sid, new_sid, notice
+    sid, new_sid, notice = asyncio.run(main())
+    assert new_sid != sid and "之前的内容" in notice["text"]
+
+
 def test_opencode_setup_crash_is_a_conflict_with_the_reason(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path, env={"FAKE_OPENCODE_EXIT": "1"})
@@ -166,7 +186,7 @@ def test_opencode_other_permission_is_refused_without_a_card(tmp_path):
     assert tool["name"] == "Bash" and tool["denied"] is True
 
 
-@pytest.mark.parametrize("allow,reply", [(True, "edited"), (False, None)])
+@pytest.mark.parametrize("allow,reply", [(True, "edited"), (False, "（opencode 结束了本轮）")])
 def test_opencode_skill_edit_allow_and_deny(tmp_path, allow, reply):
     async def main():
         svc, _ = make_service(tmp_path)
@@ -188,7 +208,7 @@ def test_opencode_skill_edit_allow_and_deny(tmp_path, allow, reply):
     assert approval["tool"] == "Edit" and "-a" in approval["diff"] and "+b" in approval["diff"]
     tool = next(i for i in snap["items"] if i["kind"] == "tool")
     assert tool["denied"] is (not allow)
-    assert (snap["items"][-1].get("text") == reply) if reply else snap["items"][-1]["kind"] == "tool"
+    assert snap["items"][-1]["text"] == reply  # opencode ends the turn on a refusal
 
 
 def test_opencode_rejects_edit_compact_and_a_second_message_mid_turn(tmp_path):
@@ -231,18 +251,20 @@ def test_research_opencode_chat_joins_the_ticker_it_writes(tmp_path):
     assert asyncio.run(main())["ticker"] == "ZZZ.US"
 
 
-def test_opencode_prompt_error_is_a_notice(tmp_path):
+def test_opencode_prompt_error_is_said_once_and_kept(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)
         conv = await start(svc, "first")
         await idle(svc, conv.id)
         q = svc.subscribe(conv.id)
         await svc.send(conv.id, "fail")
-        notice = await next_event(q, "item", lambda d: d["kind"] == "notice")
+        item = await next_event(q, "item", lambda d: d["kind"] == "text")
         await idle(svc, conv.id)
+        events = [e for e, d in list(q._queue) if e == "item" and d["kind"] == "notice"]
         await svc.shutdown()
-        return notice
-    assert asyncio.run(main())["text"] == "opencode 本轮出错：Internal error: Cannot connect to API"
+        return item, events
+    item, notices = asyncio.run(main())
+    assert item["text"] == "opencode 本轮出错：Internal error: Cannot connect to API" and notices == []
 
 
 def test_opencode_crash_mid_turn_is_a_notice(tmp_path):

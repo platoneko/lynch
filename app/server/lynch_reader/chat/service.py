@@ -40,6 +40,11 @@ KINDS = ("research", "ticker", "discover")
 AGENT_LABELS = {"claude": "Claude Code", "opencode": "opencode", "grok": "Grok"}
 
 
+def _process_name(agent: str) -> str:
+    """How notices about a chat's process name it; Claude's predate the agent labels."""
+    return "Claude" if agent == "claude" else AGENT_LABELS[agent]
+
+
 def _grok_failure(result: dict) -> str | None:
     """What to tell the user when grok's `result` line is an error subtype; None for a successful turn."""
     if result.get("subtype") == "success" and result.get("is_error") not in (True, "True"):
@@ -282,13 +287,14 @@ class ChatService:
         try:
             await live.proc.interrupt()  # Claude's interrupt message, or opencode's session/cancel
         except (BrokenPipeError, ConnectionResetError) as e:  # it exited after the alive check
-            raise Conflict(f"{AGENT_LABELS[conv.agent]} 进程已退出，原因见对话里的提示") from e
+            raise Conflict(f"{_process_name(conv.agent)} 进程已退出，原因见对话里的提示") from e
 
     async def edit(self, conv_id: str, message_uuid: str, text: str) -> None:
         """Truncate the conversation before `message_uuid` and send `text` in its place. Files are not touched."""
         conv = self._conv(conv_id)
         if conv.agent != "claude":  # only Claude Code can resume a session at an earlier message
-            raise Invalid(f"{'发现新票' if conv.agent == 'grok' else AGENT_LABELS[conv.agent]} 对话不支持编辑消息")
+            raise Invalid("发现新票对话不支持编辑消息" if conv.agent == "grok" else
+                          f"{AGENT_LABELS[conv.agent]} 对话不支持编辑消息")
         live = self._live.setdefault(conv_id, Live())
         async with live.lock:
             self._check_not_archived(conv_id, live)
@@ -359,7 +365,7 @@ class ChatService:
                 await live.proc.respond(request_id, {"behavior": "allow", "updatedInput": approval.tool_input} if allow
                                         else {"behavior": "deny", "message": USER_DENY_MESSAGE})
         except (BrokenPipeError, ConnectionResetError) as e:
-            raise Conflict(f"{AGENT_LABELS[conv.agent]} 进程已退出，原因见对话里的提示") from e
+            raise Conflict(f"{_process_name(conv.agent)} 进程已退出，原因见对话里的提示") from e
 
     def save_candidates(self, conv_id: str, key: object, tickers: object) -> list[str]:
         """The user's 存入候选区: only candidates Grok's own reply carries, looked up again in the transcript."""
@@ -511,6 +517,8 @@ class ChatService:
             raise Conflict(f"无法启动 opencode：{e}") from e
         if conv.opencode_session != session:
             self._index.update(conv.id, opencode_session=session)
+        if link.session_lost:
+            self._notice(conv.id, "opencode 找不到这个对话原来的会话，已新开一个：它不记得之前的内容")
         self._clear_approvals(conv.id, live)  # as in _spawn: a dead predecessor's cards go now
         live.proc = link
         live.partial = ""
@@ -550,8 +558,7 @@ class ChatService:
             self._broadcast(conv_id, "approval", approval.public())
 
         def on_turn_end(live: Live, stop: str | None, error: str | None) -> None:
-            if error is not None:
-                self._notice(conv_id, f"opencode 本轮出错：{error}")
+            # An error reached the page already, as the turn's closing text in the record.
             self._index.update(conv_id, updated_at=self._wall())
             live.partial = ""
             live.last_used = self._now()
@@ -617,7 +624,7 @@ class ChatService:
         live.pending_cut = None  # an edit whose process died unwritten is lost: the next resume sees the old tip
         self._set_state(conv_id, "dormant")
         if not expected:
-            text = f"{'Claude' if agent == 'claude' else AGENT_LABELS[agent]} 进程意外退出" + ("，本轮中断" if was_busy else "")
+            text = f"{_process_name(agent)} 进程意外退出" + ("，本轮中断" if was_busy else "")
             self._notice(conv_id, f"{text}：{stderr_tail}" if stderr_tail else text)
 
     # ---- stream messages
