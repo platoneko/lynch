@@ -10,35 +10,16 @@ from lynch_reader.chat import transcript
 from lynch_reader.chat.app_log import AppLog
 from lynch_reader.chat.items import message_items
 from lynch_reader.chat.opencode import OpencodeConfig
-from lynch_reader.chat.opencode_link import LinkEvents, OpencodeLink, OpencodeSetupError
-from tests.chat_helpers import FAKE_OPENCODE_CMD, conv, fake_opencode_env, opencode_log, until
-
-
-class Recorder:
-    """Collects a link's events."""
-
-    def __init__(self) -> None:
-        self.deltas: list[str] = []
-        self.entries: list[dict] = []
-        self.usage: list[tuple] = []
-        self.permissions: list[tuple] = []
-        self.turn_ends: list[tuple] = []
-        self.exits: list[tuple] = []
-
-    def events(self) -> LinkEvents:
-        return LinkEvents(on_delta=self.deltas.append, on_entry=self.entries.append,
-                          on_usage=lambda *a: self.usage.append(a),
-                          on_permission=lambda *a: self.permissions.append(a),
-                          on_turn_end=lambda *a: self.turn_ends.append(a),
-                          on_exit=lambda *a: self.exits.append(a))
+from lynch_reader.chat.opencode_link import OpencodeLink, OpencodeSetupError
+from tests.chat_helpers import FAKE_OPENCODE_CMD, LinkRecorder, conv, fake_opencode_env, opencode_log, until
 
 
 def oc_conv(**overrides):
     return conv(agent="opencode", model="0g/deepseek-v4.1-flash", effort="default", **overrides)
 
 
-def make_link(tmp_path: Path, c=None, rec: Recorder | None = None, env: dict | None = None, **kwargs):
-    rec = rec or Recorder()
+def make_link(tmp_path: Path, c=None, rec: LinkRecorder | None = None, env: dict | None = None, **kwargs):
+    rec = rec or LinkRecorder()
     (tmp_path / "frameworks" / ".claude" / "skills" / "sediment-framework").mkdir(parents=True, exist_ok=True)
     cfg = OpencodeConfig(FAKE_OPENCODE_CMD, tmp_path, tmp_path / "logs")
     c = c or oc_conv()

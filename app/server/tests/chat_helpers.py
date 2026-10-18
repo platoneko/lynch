@@ -12,6 +12,7 @@ from lynch_reader.chat.config import LaunchConfig
 from lynch_reader.chat.grok import GrokConfig
 from lynch_reader.chat.index import ChatIndex, Conversation
 from lynch_reader.chat.opencode import OpencodeConfig
+from lynch_reader.chat.opencode_link import LinkEvents
 
 FAKE = Path(__file__).with_name("fake_claude.py")
 FAKE_CMD = (sys.executable, str(FAKE))
@@ -132,3 +133,22 @@ def opencode_log(tmp_path: Path) -> list[dict]:
     """The fake opencode's record: one line per launch, one per request method."""
     log = tmp_path / "oc-log.jsonl"
     return [json.loads(l) for l in log.read_text().splitlines()] if log.exists() else []
+
+
+class LinkRecorder:
+    """Collects an OpencodeLink's events."""
+
+    def __init__(self) -> None:
+        self.deltas: list[str] = []
+        self.entries: list[dict] = []
+        self.usage: list[tuple] = []
+        self.permissions: list[tuple] = []
+        self.turn_ends: list[tuple] = []
+        self.exits: list[tuple] = []
+
+    def events(self) -> LinkEvents:
+        return LinkEvents(on_delta=self.deltas.append, on_entry=self.entries.append,
+                          on_usage=lambda *a: self.usage.append(a),
+                          on_permission=lambda *a: self.permissions.append(a),
+                          on_turn_end=lambda *a: self.turn_ends.append(a),
+                          on_exit=lambda *a: self.exits.append(a))
