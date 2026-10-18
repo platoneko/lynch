@@ -19,6 +19,8 @@ import { fetchEarnings, ignoreEarnings, unignoreEarnings } from './earnings/api'
 import { EarningsPage } from './earnings/EarningsPage';
 import type { EarningsList } from './earnings/types';
 import { useOnForeground } from './foreground';
+import { getConnection, useConnection } from './offline/connection';
+import { syncOffline } from './offline/sync';
 import { HomePage } from './home/HomePage';
 import { DEFAULT_FILTER, type HomeFilter } from './home/listModel';
 import {
@@ -29,6 +31,8 @@ import type { Catalog } from './types';
 
 // The server refetches quotes every 5 minutes; the home list, earnings and anomalies are re-read at that pace.
 const ALERT_POLL_MS = 5 * 60_000;
+// Offline, the home list is asked for at this pace: the first real answer brings the app back online.
+const OFFLINE_PROBE_MS = 30_000;
 
 /** Pages that show anchors from the list: only these ask the server for it again. */
 function showsAnchors(route: Route): boolean {
@@ -41,6 +45,9 @@ export function zoneLabels(catalog: Catalog): Map<string, string> {
 
 export function App() {
   const [route, setRoute] = useState<Route>(() => parseRoute(window.location.hash));
+  // Offline, nothing but the home list and the docs has a copy on the phone: the other reads are not tried.
+  const connection = useConnection();
+  const { offline } = connection;
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Filter lives here, not in HomePage, so the query survives a trip into a doc.
@@ -53,11 +60,11 @@ export function App() {
   }, []);
   // The home badge and the lists follow agents running on the server; nothing pushes list changes, so poll.
   useEffect(() => {
-    if (route.page === 'chat' || route.page === 'chat-new' || route.page === 'chat-new-discover') return;
+    if (offline || route.page === 'chat' || route.page === 'chat-new' || route.page === 'chat-new-discover') return;
     loadChats();
     const timer = window.setInterval(loadChats, 10_000);
     return () => window.clearInterval(timer);
-  }, [route.page, loadChats]);
+  }, [route.page, loadChats, offline]);
   const [candidates, setCandidates] = useState<SavedCandidate[] | null>(null);
   const [candidateError, setCandidateError] = useState<string | null>(null);
   const loadCandidates = useCallback(() => {
@@ -65,8 +72,8 @@ export function App() {
       (e: unknown) => setCandidateError(String(e instanceof Error ? e.message : e)));
   }, []);
   useEffect(() => {
-    if (route.page === 'chats' || route.page === 'candidates') loadCandidates();
-  }, [route.page, loadCandidates]);
+    if (!offline && (route.page === 'chats' || route.page === 'candidates')) loadCandidates();
+  }, [route.page, loadCandidates, offline]);
   const [earnings, setEarnings] = useState<EarningsList | null>(null);
   const [earningsError, setEarningsError] = useState<string | null>(null);
   const loadEarnings = useCallback(() => {
@@ -76,11 +83,11 @@ export function App() {
   // Released / upcoming follow the clock (a release flips at the open or close), so poll; the server answers
   // from its day's calendar cache without calling longbridge.
   useEffect(() => {
-    if (route.page !== 'home' && route.page !== 'earnings') return;
+    if (offline || (route.page !== 'home' && route.page !== 'earnings')) return;
     loadEarnings();
     const timer = window.setInterval(loadEarnings, ALERT_POLL_MS);
     return () => window.clearInterval(timer);
-  }, [route.page, loadEarnings]);
+  }, [route.page, loadEarnings, offline]);
   const dismiss = (p: Promise<unknown>) =>
     p.then(loadEarnings, (e: unknown) => setEarningsError(String(e instanceof Error ? e.message : e)));
   const [anomalies, setAnomalies] = useState<AnomalyList | null>(null);
@@ -91,11 +98,11 @@ export function App() {
   }, []);
   // Anomalies are judged on the server's 5-minute quote batches; poll at the same pace.
   useEffect(() => {
-    if (route.page !== 'home' && route.page !== 'anomalies') return;
+    if (offline || (route.page !== 'home' && route.page !== 'anomalies')) return;
     loadAnomalies();
     const timer = window.setInterval(loadAnomalies, ALERT_POLL_MS);
     return () => window.clearInterval(timer);
-  }, [route.page, loadAnomalies]);
+  }, [route.page, loadAnomalies, offline]);
   const dismissAnomaly = (p: Promise<unknown>) =>
     p.then(loadAnomalies, (e: unknown) => setAnomaliesError(String(e instanceof Error ? e.message : e)));
   const [chatOptions, setChatOptions] = useState<ChatOptions | null>(null);
@@ -103,9 +110,9 @@ export function App() {
   const [firstMessage, setFirstMessage] = useState<{ id: string; text: string } | null>(null);
   useEffect(() => {
     if (route.page === 'chat' || route.page === 'chat-new' || route.page === 'chat-new-discover') {
-      if (!chatOptions) fetchChatOptions().then(setChatOptions, () => {});
+      if (!chatOptions && !offline) fetchChatOptions().then(setChatOptions, () => {});
     }
-  }, [route.page, chatOptions]);
+  }, [route.page, chatOptions, offline]);
   const names = useMemo(() => new Map((catalog?.tickers ?? []).flatMap((t) => (t.name ? [[t.ticker, t.name] as const] : []))), [catalog]);
   const labels = useMemo(() => new Map((catalog?.tickers ?? []).map((t) => [t.ticker, tickerLabel(t)] as const)), [catalog]);
   const archive = (p: Promise<unknown>) => p.then(loadChats, (e: unknown) => setChatError(String(e instanceof Error ? e.message : e)));
@@ -117,6 +124,8 @@ export function App() {
   const load = useCallback(() => {
     fetchCatalog(catalogTag.current).then((fresh) => {
       setError(null);
+      // The server answered: keep the phone's offline copy in step (at most every few minutes).
+      if (!getConnection().offline) syncOffline();
       if (fresh === null) return;
       catalogTag.current = fresh.etag;
       setCatalog(fresh.value);
@@ -131,6 +140,17 @@ export function App() {
     const timer = window.setInterval(load, ALERT_POLL_MS);
     return () => window.clearInterval(timer);
   }, [route, load]);
+  // Back online (a probe answered, or the worker saw a late answer): read the list the server has now.
+  const wasOffline = useRef(offline);
+  useEffect(() => {
+    if (wasOffline.current && !offline) load();
+    wasOffline.current = offline;
+  }, [offline, load]);
+  useEffect(() => {
+    if (!offline) return;
+    const timer = window.setInterval(load, OFFLINE_PROBE_MS);
+    return () => window.clearInterval(timer);
+  }, [offline, load]);
   // Back in the foreground on such a page: edits made meanwhile (a terminal session, a git pull) show without a tap.
   useOnForeground(() => {
     if (showsAnchors(route)) load();
@@ -248,9 +268,10 @@ export function App() {
     return (
       <DocPage key={`doc:${ticker}`} load={(held) => fetchFramework(ticker, held)} targets={targets} head={head} onBack={goBack}
         barExtra={<>
-          {row && <ArchiveButton ticker={ticker} archived={row.archived}
+          {offline && <span className="offline-tag">离线</span>}
+          {row && <ArchiveButton ticker={ticker} archived={row.archived} disabled={offline}
             onToggle={() => (row.archived ? restoreFramework(ticker) : archiveFramework(ticker)).then(load)} />}
-          <ChatSheetButton ticker={ticker} chats={chatList?.chats ?? []}
+          <ChatSheetButton ticker={ticker} chats={chatList?.chats ?? []} disabled={offline}
             onOpen={(id) => { window.location.hash = chatHash(id); }}
             onNew={() => { window.location.hash = newChatHash(ticker); }} />
         </>} />
@@ -259,7 +280,8 @@ export function App() {
   if (route.page === 'axis') {
     const { name } = route;
     const head = <AxisDocHead axis={axes.get(name)} pool={pool} />;
-    return <DocPage key={`axis:${name}`} load={(held) => fetchAxis(name, held)} targets={targets} head={head} onBack={goBack} />;
+    return <DocPage key={`axis:${name}`} load={(held) => fetchAxis(name, held)} targets={targets} head={head} onBack={goBack}
+      barExtra={offline && <span className="offline-tag">离线</span>} />;
   }
   return (
     <>
@@ -267,7 +289,7 @@ export function App() {
       <HomePage catalog={catalog} filter={filter} onFilter={setFilter} onOpen={openDoc} onOpenAxis={openAxis}
         chatCount={chatList?.running_count ?? 0} onOpenChats={() => openFromHome(chatsHash())}
         earnings={earnings} onOpenEarnings={() => openFromHome(earningsHash())}
-        anomalies={anomalies} onOpenAnomalies={() => openFromHome(anomaliesHash())} />
+        anomalies={anomalies} onOpenAnomalies={() => openFromHome(anomaliesHash())} connection={connection} />
     </>
   );
 }

@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Tagged } from '../api';
 import { useOnForeground } from '../foreground';
+import { useConnection } from '../offline/connection';
 import { AxisLine } from '../home/AxisLine';
 import { consensusText, extraBands, rowZone, type ExtraBand } from '../home/listModel';
 import { fmt, priceDecimals } from '../home/PriceBar';
@@ -46,6 +47,13 @@ export function DocPage({ load: fetchSource, targets, head, onBack, barExtra }: 
   // Back in the foreground, a document edited meanwhile is read again (unchanged costs an empty 304). A failure
   // keeps the document on screen: the forward may still be waking up, and the next return asks again.
   useOnForeground(() => read(() => {}));
+  // Back online after showing the phone's copy: read again without waiting for a tap or a return to foreground.
+  const { offline } = useConnection();
+  const wasOffline = useRef(offline);
+  useEffect(() => {
+    if (wasOffline.current && !offline) read(() => {});
+    wasOffline.current = offline;
+  }, [offline]);
 
   const doc: BuiltDoc | null = useMemo(() => (source ? buildDoc(source, targets) : null), [source, targets]);
 

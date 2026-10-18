@@ -39,6 +39,9 @@ button { font: inherit; color: inherit; }
 .zone-bg-stretched { background: var(--zone-stretched); color: #fff; }
 
 .status-screen { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 16px; text-align: center; }
+.offline-line { padding-top: 6px; color: var(--muted); font-size: 12px; }
+.offline-tag { align-self: center; color: var(--muted); font-size: 13px; white-space: nowrap; }
+.text-btn:disabled { opacity: 0.4; }
 .banner-error { background: var(--zone-stretched); color: #fff; padding: 8px 16px; font-size: 13px; }
 .banner-muted { margin: 10px 16px 0; color: var(--muted); font-size: 13px; }
 

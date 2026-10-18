@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { Menu, type MenuItem } from '../Menu';
+import type { Connection } from '../offline/connection';
+import { offlineLabel } from '../offline/label';
 import { menuLabel as anomalyMenuLabel, pendingCount as anomalyPendingCount } from '../anomalies/model';
 import type { AnomalyList } from '../anomalies/types';
 import { menuLabel, pendingCount } from '../earnings/model';
@@ -21,7 +23,7 @@ const MARKETS: { id: string; label: string }[] = [
 ];
 
 export function HomePage({ catalog, filter, onFilter, onOpen, onOpenAxis,
-  chatCount, onOpenChats, earnings, onOpenEarnings, anomalies, onOpenAnomalies }: {
+  chatCount, onOpenChats, earnings, onOpenEarnings, anomalies, onOpenAnomalies, connection }: {
   catalog: Catalog;
   filter: HomeFilter;
   onFilter: (f: HomeFilter) => void;
@@ -33,14 +35,23 @@ export function HomePage({ catalog, filter, onFilter, onOpen, onOpenAxis,
   onOpenEarnings: () => void;
   anomalies: AnomalyList | null;
   onOpenAnomalies: () => void;
+  connection: Connection;
 }) {
-  const alertsPending = pendingCount(earnings) > 0 || anomalyPendingCount(anomalies) > 0;
+  const { offline } = connection;
+  const alertsPending = !offline && (pendingCount(earnings) > 0 || anomalyPendingCount(anomalies) > 0);
   const earningsLabel = menuLabel(earnings);
   const anomaliesLabel = anomalyMenuLabel(anomalies);
-  const alertRows: MenuItem[] = [
+  // Offline these pages have nothing to show (the server keeps them): always listed, greyed, without counts.
+  const alertRows: MenuItem[] = offline ? [
+    { label: '财报', onSelect: onOpenEarnings, disabled: true },
+    { label: '异动', onSelect: onOpenAnomalies, disabled: true },
+  ] : [
     ...(earningsLabel ? [{ label: earningsLabel, onSelect: onOpenEarnings }] : []),
     ...(anomaliesLabel ? [{ label: anomaliesLabel, onSelect: onOpenAnomalies }] : []),
   ];
+  const chatRow: MenuItem = offline
+    ? { label: '对话', onSelect: onOpenChats, disabled: true }
+    : { label: chatCount > 0 ? `对话 · ${chatCount} 个运行中` : '对话', onSelect: onOpenChats };
   const zoneOrder = catalog.zones.map((z) => z.id);
   const labels = new Map([...catalog.zones, ...catalog.lynch_classes].map((x) => [x.id, x.label]));
   const rows = applyFilter(catalog.tickers, filter, zoneOrder);
@@ -67,13 +78,13 @@ export function HomePage({ catalog, filter, onFilter, onOpen, onOpenAxis,
           <span className="quote-time">{quoteTimeText(asOf)}</span>
           {/* Badges stay on the button so running chats and pending alerts show without opening the menu. */}
           <button className="icon-btn has-badge" onClick={() => setMenu(!menu)} aria-label="更多">
-            ⋯{chatCount > 0 && <span className="badge">{chatCount}</span>}
+            ⋯{!offline && chatCount > 0 && <span className="badge">{chatCount}</span>}
             {alertsPending && <span className="badge badge-alert">!</span>}
           </button>
           {menu && (
             <Menu onClose={() => setMenu(false)} items={[
               ...alertRows,
-              { label: chatCount > 0 ? `对话 · ${chatCount} 个运行中` : '对话', onSelect: onOpenChats },
+              chatRow,
               {
                 label: filter.showArchived ? '隐藏归档' : `展示归档${archivedCount > 0 ? `（${archivedCount}）` : ''}`,
                 onSelect: () => onFilter({ ...filter, showArchived: !filter.showArchived }),
@@ -81,6 +92,7 @@ export function HomePage({ catalog, filter, onFilter, onOpen, onOpenAxis,
             ]} />
           )}
         </div>
+        {offline && <div className="offline-line">{offlineLabel(connection.savedAt)}</div>}
         <div className="chips">
           {catalog.zones.map((z) => (
             <button key={z.id}

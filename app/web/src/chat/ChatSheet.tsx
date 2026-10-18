@@ -7,11 +7,12 @@ import { relativeTime } from './listModel';
 import type { ChatSummary } from './types';
 
 /** The doc page's 「讨论」: this ticker's conversations, including the research that landed it. */
-export function ChatSheetButton({ ticker, chats, onOpen, onNew }: {
+export function ChatSheetButton({ ticker, chats, onOpen, onNew, disabled = false }: {
   ticker: string;
   chats: ChatSummary[];
   onOpen: (id: string) => void;
   onNew: () => void;
+  disabled?: boolean; // offline: conversations run on the server
 }) {
   const [open, setOpen] = useState(false);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
@@ -27,7 +28,7 @@ export function ChatSheetButton({ ticker, chats, onOpen, onNew }: {
   };
   return (
     <>
-      <button className="text-btn" onClick={() => setOpen(true)}>
+      <button className="text-btn" onClick={() => setOpen(true)} disabled={disabled}>
         讨论{running && <span className="run-dot">●</span>}
       </button>
       {/* Portaled: inside the fixed top bar's stacking context the bottom bar would paint over the sheet. */}

@@ -1,3 +1,4 @@
+import { reportAnswer, reportUnreachable } from './offline/connection';
 import type { Catalog } from './types';
 
 /** 401 = this device was never paired or was revoked; the server's pairing page is the only way back in. */
@@ -8,9 +9,14 @@ function pairIfUnpaired(res: Response): void {
 /** fetch() rejects with a TypeError only when nothing answered: on the phone, tailfwd's lynch forward is down. */
 async function send(path: string, init: RequestInit): Promise<Response> {
   try {
-    return await fetch(path, init);
+    const res = await fetch(path, init);
+    reportAnswer(res);
+    return res;
   } catch (e) {
-    if (e instanceof TypeError) throw new Error('连不上 lynch 服务，请确认 tailfwd 在运行');
+    if (e instanceof TypeError) {
+      reportUnreachable();
+      throw new Error('连不上 lynch 服务，请确认 tailfwd 在运行');
+    }
     throw e;
   }
 }

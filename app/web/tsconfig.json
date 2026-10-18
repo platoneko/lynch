@@ -10,7 +10,7 @@
     "skipLibCheck": true,
     "isolatedModules": true,
     "esModuleInterop": true,
-    "types": ["node"]
+    "types": ["node", "vite/client"]
   },
   "include": ["src", "vite.config.ts"]
 }

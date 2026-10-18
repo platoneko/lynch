@@ -44,6 +44,7 @@ from lynch_reader.chat.service import ChatService, Invalid
 from lynch_reader.chat.transcript import projects_dir_for
 from lynch_reader.earnings import CALENDAR_FILE, IGNORED_FILE, CalendarCache, Earnings, IgnoreStore
 
+from eval.lib.axes import list_axis_paths  # noqa: E402 — after catalog, which puts the repo root on sys.path
 from eval.lib.frameworks import list_framework_paths  # noqa: E402 — after catalog, which puts the repo root on sys.path
 
 WEB_DIST = REPO_ROOT / "app" / "web" / "dist"
@@ -67,13 +68,18 @@ class WebDist(StaticFiles):
         return response
 
 
+def content_tag(body: bytes) -> str:
+    """The ETag of an answer body; the offline manifest lists the same tags the doc endpoints send."""
+    return f'"{hashlib.sha256(body).hexdigest()[:32]}"'
+
+
 def unless_held(request: Request, response: Response) -> Response:
     """Tag the body with a digest of itself; a client already holding that body gets an empty 304.
 
     A content digest, not file times: it changes exactly when the answer does, whatever changed it
     (a framework edit, an archive toggle, a new quote batch or its failure).
     """
-    etag = f'"{hashlib.sha256(response.body).hexdigest()[:32]}"'
+    etag = content_tag(response.body)
     if request.headers.get("if-none-match") == etag:
         return Response(status_code=304, headers={"ETag": etag})
     response.headers["ETag"] = etag
@@ -138,6 +144,13 @@ def create_app(frameworks_dir: Path, web_dist: Path, quotes: QuoteCache, devices
             return PlainTextResponse("unknown axis", status_code=404)
         return unless_held(request, Response(path.read_text(encoding="utf-8"), media_type="text/markdown; charset=utf-8"))
 
+    def offline_manifest(request: Request) -> Response:
+        # Every doc the app may open offline, archived frameworks included; tagged as their endpoints tag them.
+        def tags(paths: list[Path]) -> dict[str, str]:
+            return {p.stem: content_tag(p.read_text(encoding="utf-8").encode("utf-8")) for p in paths}
+        return JSONResponse({"frameworks": tags(list_framework_paths(frameworks_dir)),
+                             "axes": tags(list_axis_paths(frameworks_dir / "axes"))})
+
     def earnings_list(request: Request) -> Response:
         # Sync: the first request after the daily calendar run falls due may wait on longbridge in the thread pool.
         tag = anomalies.earnings_tag if anomalies is not None else (lambda t: None)
@@ -188,6 +201,7 @@ def create_app(frameworks_dir: Path, web_dist: Path, quotes: QuoteCache, devices
         Route("/api/frameworks/{ticker}/archive", set_archived(True), methods=["POST"]),
         Route("/api/frameworks/{ticker}/restore", set_archived(False), methods=["POST"]),
         Route("/api/axes/{name}", axis),
+        Route("/api/offline-manifest", offline_manifest),
     ]
     if earnings is not None:
         routes += [

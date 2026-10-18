@@ -4,7 +4,7 @@ from starlette.testclient import TestClient
 
 from lynch_reader.anomalies import Anomalies, AnomalyStore, BaselineCache, Hit
 from lynch_reader.archive import FrameworkArchive
-from lynch_reader.catalog import QuoteCache
+from lynch_reader.catalog import QuoteCache, quote_pool
 from lynch_reader.earnings import CalendarCache, Earnings, IgnoreStore
 from lynch_reader.web import create_app
 from eval.lib.earnings_lb import CalendarEvent, CalendarFetch  # after lynch_reader, which puts the repo root on sys.path
@@ -282,3 +282,17 @@ def test_archive_refuses_a_non_json_post(repo, tmp_path, quotes):
     c = client(repo, tmp_path, quotes)
     assert c.post("/api/frameworks/AAA.US/archive", content=b"", headers={"Content-Type": "text/plain"}).status_code == 415
     assert archived_flags(c)["AAA.US"] is False
+
+
+def test_offline_manifest_tags_match_the_doc_endpoints(repo, tmp_path, quotes):
+    # CRLF on disk: the endpoints tag the text as read, so the manifest must too.
+    (repo / "axes").mkdir(exist_ok=True)
+    (repo / "axes" / "demo.md").write_bytes("# demo\r\naxis body\r\n".encode("utf-8"))
+    c = client(repo, tmp_path, quotes)
+    c.post("/api/frameworks/BBB.US/archive", json={})
+    manifest = c.get("/api/offline-manifest").json()
+    assert sorted(manifest["frameworks"]) == sorted(quote_pool(repo))  # archived BBB.US included
+    for t, tag in manifest["frameworks"].items():
+        assert c.get(f"/api/frameworks/{t}").headers["ETag"] == tag
+    assert list(manifest["axes"]) == ["demo"]
+    assert c.get("/api/axes/demo").headers["ETag"] == manifest["axes"]["demo"]
