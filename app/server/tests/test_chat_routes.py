@@ -46,6 +46,7 @@ def test_default_model_and_effort(repo, tmp_path, quotes):
         conv_id = c.post("/api/chats", json={"kind": "research", "text": "hi"}).json()["id"]
         row = c.get("/api/chats").json()["chats"][0]
         assert (row["id"], row["model"], row["effort"]) == (conv_id, "claude-opus-5-5", "medium")
+        assert row["agent"] == "claude"  # a client that does not send an agent gets Claude Code
 
 
 def test_event_stream_starts_with_a_snapshot_then_live_events(tmp_path):

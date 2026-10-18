@@ -422,6 +422,43 @@ def test_options_lists_models_and_defaults(tmp_path):
     assert {"id": "claude-haiku-4-5", "label": "Haiku 4.5"} in opts["models"]
 
 
+def test_options_list_agents_with_claude_default(tmp_path):
+    opts = make_service(tmp_path)[0].options()
+    assert opts["default_agent"] == "claude"
+    assert opts["agents"] == [{"id": "claude", "label": "Claude Code"}, {"id": "opencode", "label": "opencode"}]
+    assert opts["opencode"] == {"models": [{"id": "0g/deepseek-v4.1-flash", "label": "DeepSeek V4.1 Flash"}],
+                                "default_model": "0g/deepseek-v4.1-flash"}
+
+
+def test_summary_carries_agent_and_model_labels(tmp_path):
+    async def main():
+        svc, _ = make_service(tmp_path)
+        conv = await svc.create("ticker", "AAA.US", "hello", "claude-opus-5-5", "medium")
+        await until(lambda: state_of(svc, conv.id) == "idle")
+        row = svc.list()["chats"][0]
+        await svc.shutdown()
+        return row
+    row = asyncio.run(main())
+    assert (row["agent"], row["agent_label"], row["model_label"]) == ("claude", "Claude Code", "Opus 5.5")
+
+
+def test_summary_label_falls_back_to_the_model_id(tmp_path):
+    from lynch_reader.chat.index import ChatIndex
+    from tests.chat_helpers import conv
+    (tmp_path / "projects").mkdir()
+    (tmp_path / "projects" / "c1.jsonl").write_text("", encoding="utf-8")
+    ChatIndex(tmp_path / "index.json").put(conv(model="claude-retired-1"))
+    row = make_service(tmp_path)[0].list()["chats"][0]
+    assert row["model_label"] == "claude-retired-1"
+
+
+@pytest.mark.parametrize("kind,agent", [("discover", "claude"), ("research", "grok"), ("research", "gpt")])
+def test_create_rejects_an_agent_the_kind_cannot_use(tmp_path, kind, agent):
+    svc, _ = make_service(tmp_path)
+    with pytest.raises(Invalid):
+        asyncio.run(svc.create(kind, None, "x", "claude-opus-5-5", "medium", agent=agent))
+
+
 def test_ticker_chat_starts_include_archived_and_skip_other_kinds(tmp_path):
     from lynch_reader.chat.index import ChatIndex
     from tests.chat_helpers import conv

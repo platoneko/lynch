@@ -96,7 +96,8 @@ def chat_routes(service: ChatService, frameworks_dir: Path) -> list[Route]:
         # how many days back to look.
         model, effort = (None, None) if kind == "discover" else (DEFAULT_MODEL, DEFAULT_EFFORT)
         conv = await service.create(kind, ticker, str(body.get("text", "")), body.get("model") or model,
-                                    body.get("effort") or effort, body.get("context_window"), body.get("lookback_days"))
+                                    body.get("effort") or effort, body.get("context_window"), body.get("lookback_days"),
+                                    body.get("agent"))
         return JSONResponse({"id": conv.id})
 
     async def archive_ticker(request: Request) -> Response:

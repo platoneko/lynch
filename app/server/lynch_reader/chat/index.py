@@ -14,6 +14,7 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 TITLE_MAX = 40
+AGENTS = ("claude", "opencode", "grok")
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,8 @@ class Conversation:
     grok_session: str | None = None  # discover: grok's own session id (made over ACP, chat/grok.py)
     cost_usd: float | None = None  # discover: what its turns have cost, from each `result`
     lookback_days: int | None = None  # discover: how many days back the KOL search looks, picked at creation
+    agent: str = "claude"  # which program runs it (AGENTS); `kind` stays what the chat is about
+    opencode_session: str | None = None  # opencode: its own session id, resumed after the process is gone
 
 
 def make_title(text: str) -> str:
@@ -43,6 +46,8 @@ def _parse_row(row: object) -> Conversation | None:
     if not isinstance(row, dict):
         return None
     known = {f.name for f in fields(Conversation)}
+    if "agent" not in row:  # written before chats had an agent: discover ran on Grok, the rest on Claude Code
+        row = {**row, "agent": "grok" if row.get("kind") == "discover" else "claude"}
     try:
         c = Conversation(**{k: v for k, v in row.items() if k in known})
     except TypeError:  # a required field is missing
@@ -57,7 +62,9 @@ def _parse_row(row: object) -> Conversation | None:
                    and isinstance(c.archived, bool)
                    and (c.grok_session is None or isinstance(c.grok_session, str))
                    and (c.cost_usd is None or number(c.cost_usd))
-                   and (c.lookback_days is None or type(c.lookback_days) is int))
+                   and (c.lookback_days is None or type(c.lookback_days) is int)
+                   and c.agent in AGENTS
+                   and (c.opencode_session is None or isinstance(c.opencode_session, str)))
     return c if well_formed else None
 
 

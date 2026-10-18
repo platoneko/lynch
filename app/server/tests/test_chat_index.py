@@ -70,3 +70,25 @@ def test_discover_fields_default_and_are_type_checked(tmp_path):
     assert (index.get("a").lookback_days, index.get("e").lookback_days) == (None, 3)
     assert (index.get("a").grok_session, index.get("a").cost_usd) == (None, None)
     assert (index.get("b").grok_session, index.get("b").cost_usd) == ("s1", 0.25)
+
+
+def test_rows_without_agent_get_it_from_kind(tmp_path):
+    # index.json rows written before chats had an agent: discover ran on Grok, everything else on Claude Code.
+    path = tmp_path / "index.json"
+    legacy = [{k: v for k, v in asdict(c).items() if k not in ("agent", "opencode_session")}
+              for c in (conv(id="a"), conv(id="d", kind="discover"))]
+    path.write_text(json.dumps(legacy), encoding="utf-8")
+    idx = ChatIndex(path)
+    assert (idx.get("a").agent, idx.get("d").agent) == ("claude", "grok")
+
+
+def test_agent_fields_are_checked(tmp_path, caplog):
+    path = tmp_path / "index.json"
+    path.write_text(json.dumps([
+        asdict(conv(id="a", agent="opencode", opencode_session="ses_1")),
+        {**asdict(conv(id="b")), "agent": "gpt"},
+        {**asdict(conv(id="c")), "opencode_session": 7},
+    ]), encoding="utf-8")
+    idx = ChatIndex(path)
+    assert [c.id for c in idx.all()] == ["a"]
+    assert idx.get("a").opencode_session == "ses_1"

@@ -27,6 +27,7 @@ from lynch_reader.chat.items import (compact_item, context_tokens, framework_tic
                                      retry_text)
 from lynch_reader.chat.kol import (DEFAULT_LOOKBACK_DAYS, LOOKBACK_DAYS, KolSources, KolUnavailable, kol_brief,
                                    kol_sources)
+from lynch_reader.chat.opencode import DEFAULT_OPENCODE_MODEL, OPENCODE_MODELS
 from lynch_reader.chat.process import ChatProcess
 
 log = logging.getLogger(__name__)
@@ -34,6 +35,7 @@ log = logging.getLogger(__name__)
 BUSY = ("running", "compacting")
 COMPACT_COMMAND = "/compact"
 KINDS = ("research", "ticker", "discover")
+AGENT_LABELS = {"claude": "Claude Code", "opencode": "opencode", "grok": "Grok"}
 
 
 def _grok_failure(result: dict) -> str | None:
@@ -119,8 +121,14 @@ class ChatService:
                                        else default.windows[0]),
                     "lookback_days": list(LOOKBACK_DAYS), "default_lookback_days": DEFAULT_LOOKBACK_DAYS,
                     "hint": None if models else "在终端运行 grok models 刷新 Grok 模型清单"}
+        # The top-level models and efforts are Claude Code's, as before agents; a new 研究 / 讨论 chat starts on
+        # Claude Code whatever the last one used (user, 2026-10-18).
         return {"models": [{"id": m, "label": label} for m, label in CHAT_MODELS], "efforts": list(CHAT_EFFORTS),
-                "default_model": DEFAULT_MODEL, "default_effort": DEFAULT_EFFORT, "discover": discover}
+                "default_model": DEFAULT_MODEL, "default_effort": DEFAULT_EFFORT, "discover": discover,
+                "agents": [{"id": a, "label": AGENT_LABELS[a]} for a in ("claude", "opencode")],
+                "default_agent": "claude",
+                "opencode": {"models": [{"id": m, "label": label} for m, label in OPENCODE_MODELS],
+                             "default_model": DEFAULT_OPENCODE_MODEL}}
 
     def list(self) -> dict:
         rows = [self._summary(c) for c in self._index.all() if self._visible(c)]
@@ -158,14 +166,22 @@ class ChatService:
     # ---- commands
 
     async def create(self, kind: str, ticker: str | None, text: str, model: str, effort: str,
-                     context_window: object = None, lookback_days: object = None) -> Conversation:
+                     context_window: object = None, lookback_days: object = None,
+                     agent: str | None = None) -> Conversation:
         # The values come from a JSON body; a list or dict would break the membership tests below.
-        if not all(isinstance(v, str) for v in (kind, text, model, effort)) or not isinstance(ticker, str | None):
+        if (not all(isinstance(v, str) for v in (kind, text, model, effort))
+                or not all(isinstance(v, str | None) for v in (ticker, agent))):
             raise Invalid("fields must be strings")
         if kind not in KINDS:
             raise Invalid(f"unknown kind {kind!r}")
         if not text.strip():
             raise Invalid("empty message")
+        # 发现新票 runs only on Grok; 研究 / 讨论 on Claude Code or opencode (Claude Code when unnamed).
+        agent = agent or ("grok" if kind == "discover" else "claude")
+        if agent not in (("grok",) if kind == "discover" else ("claude", "opencode")):
+            raise Invalid(f"agent {agent!r} cannot run a {kind} chat")
+        if agent == "opencode":
+            raise Invalid("opencode 未配置")
         conv = (await self._new_discover(text, model, effort, context_window, lookback_days) if kind == "discover"
                 else self._new_claude(kind, ticker, text, model, effort))
         self._index.put(conv)
@@ -211,7 +227,7 @@ class ChatService:
         now = self._wall()
         return Conversation(id=str(uuid.uuid4()), kind="discover", ticker=None, title=make_title(text), model=model,
                             effort=effort, created_at=now, updated_at=now, context_window=window,
-                            grok_session=session, lookback_days=days)
+                            grok_session=session, lookback_days=days, agent="grok")
 
     async def send(self, conv_id: str, text: str) -> None:
         conv = self._conv(conv_id)
@@ -715,7 +731,10 @@ class ChatService:
 
     def _summary(self, conv: Conversation) -> dict:
         live = self._live.get(conv.id)
-        return {**asdict(conv), "state": live.state if live else "dormant"}
+        # Grok's label is its model id, which the page already shows (grok's catalog is a file read per row).
+        labels = dict(CHAT_MODELS if conv.agent == "claude" else OPENCODE_MODELS if conv.agent == "opencode" else ())
+        return {**asdict(conv), "state": live.state if live else "dormant", "agent_label": AGENT_LABELS[conv.agent],
+                "model_label": labels.get(conv.model, conv.model)}
 
     def _is_discover(self, conv_id: str) -> bool:
         conv = self._index.get(conv_id)
