@@ -7,6 +7,11 @@ export function isPending(it: AnomalyItem): boolean {
   return !it.researched && !it.ignored;
 }
 
+/** Dismissed and not researched since: folded away under 已忽略, where 恢复 brings it back. */
+export function isIgnored(it: AnomalyItem): boolean {
+  return it.ignored && !it.researched;
+}
+
 export function pendingCount(list: AnomalyList | null): number {
   return list ? list.items.filter(isPending).length : 0;
 }
