@@ -193,6 +193,8 @@ button { font: inherit; color: inherit; }
 .chat-row-main { padding-left: 14px; font-size: 14px; }
 .chat-row-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-row-time { flex: none; color: var(--muted); font-size: 12px; }
+.chat-row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.chat-row-meta { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .x-btn { flex: none; width: 32px; height: 32px; border: 0; background: none; color: var(--muted); font-size: 18px; }
 .chat-doc-link { display: block; margin: 2px 0 4px 14px; padding: 0; border: 0; background: none; color: var(--accent); font-size: 13px; }
 /* ---- chat */

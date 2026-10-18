@@ -1,3 +1,4 @@
+import { discoverModelText } from './candidateModel';
 import type {
   Approval, ChatEvent, ChatItem, ChatState, ChatSummary, ContextUsage, Snapshot, ToolItem, ToolResult, Usage,
 } from './types';
@@ -27,6 +28,22 @@ export interface ChatView {
 
 export function isBusy(state: ChatState): boolean {
   return state === 'running' || state === 'compacting';
+}
+
+/** Only Claude Code chats edit messages, compact, and count against the Claude subscription. */
+export function isClaude(c: Pick<ChatSummary, 'agent'>): boolean {
+  return c.agent === 'claude';
+}
+
+/** "default": the model has no effort levels to pick from (opencode's). */
+export function effortText(effort: string): string {
+  return effort === 'default' ? '默认' : effort;
+}
+
+/** What runs a chat, as its header and list row show it: agent · model · effort. */
+export function agentModelText(c: ChatSummary): string {
+  if (c.agent === 'grok') return `${c.agent_label} · ${discoverModelText(c)}`;
+  return `${c.agent_label} · ${c.model_label} · ${effortText(c.effort)}`;
 }
 
 /**

@@ -3,14 +3,15 @@ import { renderFragment, type LinkTargets } from '../doc/buildDoc';
 import { Menu } from '../Menu';
 import { answerApproval, createChat, editMessage, fetchCandidates, interruptChat, openChatEvents, renameChat, sendMessage } from './api';
 import { CandidateCards } from './CandidateCards';
-import { costText, DISCOVER_OPENER, discoverModelText, partialText } from './candidateModel';
+import { costText, DISCOVER_OPENER, partialText } from './candidateModel';
 import {
-  applyEvent, compactText, contextText, contextWarn, diffLineClass, editableUuids, formatTokens, fromSnapshot, inputJumps, isBusy,
-  stateText, toolDetail, toolSummary, turnDocLinks, usageText, type ChatView, type InputJumps, type Queued,
+  agentModelText, applyEvent, compactText, contextText, contextWarn, diffLineClass, editableUuids, formatTokens, fromSnapshot,
+  inputJumps, isBusy, isClaude, stateText, toolDetail, toolSummary, turnDocLinks, usageText, type ChatView, type InputJumps,
+  type Queued,
 } from './chatModel';
 import { cancelEdit, composer, draftText, putBack, sent, startEdit, typed, type Composer } from './composer';
 import { clearDraft, loadDraft, loadShowTools, saveDraft, saveShowTools } from './drafts';
-import type { ChatItem, ChatOptions } from './types';
+import type { ChatAgent, ChatItem, ChatOptions } from './types';
 
 const INPUT_MAX_PX = 160;
 const PARK_PX = 8; // gap left between the header and a bubble an input jump lands on
@@ -56,6 +57,7 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
   const [compactOpen, setCompactOpen] = useState(false);
   const [compactHint, setCompactHint] = useState('');
   const [renaming, setRenaming] = useState<string | null>(null); // the title being typed, while the sheet is open
+  const [agent, setAgent] = useState<ChatAgent>('claude'); // 研究 / 讨论: the agent picked on the blank page
   const [model, setModel] = useState('');
   const [effort, setEffort] = useState('');
   const [ctxWindow, setCtxWindow] = useState(0); // discover: the context window picked on the blank page
@@ -78,6 +80,7 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
   };
   const conv = view?.conv;
   const discover = conv ? conv.kind === 'discover' : newDiscover;
+  const claude = conv ? isClaude(conv) : !newDiscover && agent === 'claude';
   const discoverModel = options?.discover.models.find((m) => m.id === model);
   const pickDiscoverModel = (id: string) => {
     const m = options?.discover.models.find((x) => x.id === id);
@@ -87,11 +90,18 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
     if (!m.windows.includes(ctxWindow)) setCtxWindow(m.windows[0]);
   };
 
+  // A new 研究 / 讨论 chat starts on the server's default agent, never the last one used (user, 2026-10-18).
+  const pickAgent = (a: ChatAgent) => {
+    if (!options) return;
+    setAgent(a);
+    setModel(a === 'opencode' ? options.opencode.default_model : options.default_model);
+    setEffort(a === 'opencode' ? 'default' : options.default_effort);
+  };
+
   useEffect(() => {
     if (!options || model) return;
     if (!newDiscover) {
-      setModel(options.default_model);
-      setEffort(options.default_effort);
+      pickAgent(options.default_agent);
       return;
     }
     const d = options.discover;
@@ -207,7 +217,7 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
         setCreating(body);
         const created = await createChat({
           kind: discover ? 'discover' : newTicker ? 'ticker' : 'research', ticker: discover ? null : newTicker,
-          text: body, model, effort, ...(discover ? { context_window: ctxWindow, lookback_days: lookbackDays } : {}),
+          text: body, model, effort, ...(discover ? { context_window: ctxWindow, lookback_days: lookbackDays } : { agent }),
         });
         clearDraft(draftKey);
         onCreated(created.id, body);
@@ -268,7 +278,8 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
     }
   };
 
-  const modelLabel = (m: string) => options?.models.find((x) => x.id === m)?.label ?? m;
+  // opencode reports a cost only when its provider prices the model; 0 says nothing.
+  const cost = conv && !claude && !(conv.agent === 'opencode' && !conv.cost_usd) ? costText(conv.cost_usd) : '';
   const title = conv?.title ?? (id !== null ? '对话' : newDiscover ? '发现新票' : newTicker ? `讨论 ${newTicker}` : '新票调研');
   const ticker = conv?.ticker ?? newTicker;
 
@@ -281,10 +292,9 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
             <div className="chat-title-main">{title}</div>
             <div className="chat-meta">
               {ticker && <button className="chat-ticker" onClick={() => onOpenDoc(ticker)}>{ticker}</button>}
-              {conv && <span>{discover ? discoverModelText(conv) : `${modelLabel(conv.model)} · ${conv.effort}`}</span>}
+              {conv && <span>{agentModelText(conv)}</span>}
               {view && <span className={contextWarn(view.context) ? 'ctx-warn' : ''}>ctx {contextText(view.context)}</span>}
-              {discover ? conv && costText(conv.cost_usd) && <span>{costText(conv.cost_usd)}</span>
-                : view?.usage && <span>{usageText(view.usage)}</span>}
+              {claude ? view?.usage && <span>{usageText(view.usage)}</span> : cost && <span>{cost}</span>}
             </div>
           </div>
           {id !== null && <button className="icon-btn" disabled={gone} onClick={() => setMenu(!menu)} aria-label="更多">⋯</button>}
@@ -293,7 +303,7 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
           <Menu onClose={() => setMenu(false)} items={[
             { label: showTools ? '隐藏调用过程' : '显示调用过程', onSelect: () => { setShowTools(!showTools); saveShowTools(!showTools); } },
             { label: '重命名', onSelect: () => setRenaming(conv?.title ?? '') },
-            ...(discover ? [] : [{ label: '压缩上下文', disabled: busy, onSelect: () => setCompactOpen(true) }]),
+            ...(claude ? [{ label: '压缩上下文', disabled: busy, onSelect: () => setCompactOpen(true) }] : []),
           ]} />
         )}
       </header>
@@ -306,7 +316,7 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
             {it.kind === 'user' && (
               <div className="msg msg-user">
                 <div className="msg-text">{it.text}</div>
-                {editable.has(it.uuid) && !discover && (
+                {editable.has(it.uuid) && claude && (
                   <button className="edit-btn" disabled={busy || gone || sending} onClick={() => edit(it)} aria-label="编辑">✎</button>
                 )}
               </div>
@@ -383,12 +393,17 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
         )}
         {id === null && options && !discover && (
           <div className="model-picker">
+            <select value={agent} onChange={(e) => pickAgent(e.target.value as ChatAgent)}>
+              {options.agents.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
+            </select>
             <select value={model} onChange={(e) => setModel(e.target.value)}>
-              {options.models.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+              {(agent === 'opencode' ? options.opencode.models : options.models).map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
             </select>
-            <select value={effort} onChange={(e) => setEffort(e.target.value)}>
-              {options.efforts.map((x) => <option key={x} value={x}>{x}</option>)}
-            </select>
+            {agent === 'claude' && (
+              <select value={effort} onChange={(e) => setEffort(e.target.value)}>
+                {options.efforts.map((x) => <option key={x} value={x}>{x}</option>)}
+              </select>
+            )}
           </div>
         )}
         {id === null && options && discover && (
@@ -419,9 +434,9 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
           <textarea ref={inputEl} rows={1} value={text} disabled={gone} onChange={(e) => setInput((c) => typed(c, e.target.value))}
             placeholder={id === null ? (discover ? '想看 KOL 最近推了什么？（直接发送即可）' : newTicker ? `围绕 ${newTicker} 说点什么` : '想调研哪只票？') : '输入消息'} />
           <button className="send-btn" onClick={submit}
-            disabled={sending || gone || (editing !== null && busy) || (discover && busy)
+            disabled={sending || gone || (editing !== null && busy) || (!claude && busy)
               || (discover && id === null ? !discoverModel : !text.trim())}>
-            {sending ? '发送中' : discover && busy ? '等这一轮结束' : '发送'}
+            {sending ? '发送中' : !claude && busy ? '等这一轮结束' : '发送'}
           </button>
         </div>
       </footer>

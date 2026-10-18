@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Menu } from '../Menu';
-import { isBusy } from './chatModel';
+import { agentModelText, isBusy } from './chatModel';
 import { ConfirmSheet, type Confirm } from './ConfirmSheet';
 import { groupChats, relativeTime, type ChatGroup } from './listModel';
 import type { ChatList, ChatSummary } from './types';
@@ -128,10 +128,20 @@ function ChatRow({ chat, label, now, onOpen, onArchive }: {
     <div className="chat-row">
       <button className="chat-row-main" onClick={onOpen}>
         {isBusy(chat.state) && <span className="run-dot">●</span>}
-        <span className="chat-row-title">{label}</span>
+        <ChatRowText chat={chat} label={label} />
         <span className="chat-row-time">{relativeTime(chat.updated_at, now)}</span>
       </button>
       <button className="x-btn" aria-label="归档" onClick={onArchive}>×</button>
     </div>
+  );
+}
+
+/** A chat row's title, with what runs the chat on a quieter second line. */
+export function ChatRowText({ chat, label }: { chat: ChatSummary; label: string }) {
+  return (
+    <span className="chat-row-text">
+      <span className="chat-row-title">{label}</span>
+      <span className="chat-row-meta">{agentModelText(chat)}</span>
+    </span>
   );
 }

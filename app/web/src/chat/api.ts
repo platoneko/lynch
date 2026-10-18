@@ -1,6 +1,6 @@
 import { get, post } from '../api';
 import { toChatEvent } from './chatModel';
-import type { ChatEvent, ChatKind, ChatList, ChatOptions, SavedCandidate, Snapshot } from './types';
+import type { ChatAgent, ChatEvent, ChatKind, ChatList, ChatOptions, SavedCandidate, Snapshot } from './types';
 
 const base = (id: string) => `/api/chats/${encodeURIComponent(id)}`;
 
@@ -14,7 +14,7 @@ export async function fetchChatOptions(): Promise<ChatOptions> {
 
 export async function createChat(body: {
   kind: ChatKind; ticker: string | null; text: string; model: string; effort: string; context_window?: number;
-  lookback_days?: number;
+  lookback_days?: number; agent?: ChatAgent;
 }): Promise<{ id: string }> {
   return (await post('/api/chats', body)).json();
 }

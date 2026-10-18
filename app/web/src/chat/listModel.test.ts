@@ -4,7 +4,7 @@ import type { ChatSummary } from './types';
 
 const chat = (id: string, over: Partial<ChatSummary>): ChatSummary => ({
   id, kind: 'ticker', ticker: 'NVDA.US', title: id, model: 'm', effort: 'e', created_at: 0, updated_at: 0,
-  context_window: null, archived: false, state: 'idle', ...over,
+  context_window: null, archived: false, state: 'idle', agent: 'claude', agent_label: 'Claude Code', model_label: 'm', ...over,
 });
 const names = new Map([['NVDA.US', 'NVIDIA'], ['0700.HK', '腾讯控股']]);
 

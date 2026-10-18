@@ -3,6 +3,9 @@ export type ChatState = 'running' | 'compacting' | 'idle' | 'dormant';
 
 export type ChatKind = 'research' | 'ticker' | 'discover';
 
+/** Which program runs a chat; `kind` stays what it is about. discover is always grok. */
+export type ChatAgent = 'claude' | 'opencode' | 'grok';
+
 export interface ChatSummary {
   id: string;
   kind: ChatKind; // discover: a Grok search of the KOL list on X
@@ -17,6 +20,10 @@ export interface ChatSummary {
   lookback_days?: number | null; // discover: how many days back the KOL search looks, picked at creation
   archived: boolean;
   state: ChatState;
+  agent: ChatAgent;
+  agent_label: string; // e.g. Claude Code
+  model_label: string; // the model's name, or its id when the server knows none
+  opencode_session?: string | null;
 }
 
 export interface Usage {
@@ -38,6 +45,9 @@ export interface ChatOptions {
   default_model: string;
   default_effort: string;
   discover: DiscoverOptions;
+  agents: { id: ChatAgent; label: string }[]; // the agents a 研究 / 讨论 chat can run on
+  default_agent: ChatAgent;
+  opencode: { models: { id: string; label: string }[]; default_model: string };
 }
 
 export interface ContextUsage {

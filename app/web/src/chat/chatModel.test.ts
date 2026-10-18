@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
-  applyEvent, compactText, contextText, contextWarn, diffLineClass, editableUuids, formatTokens, fromSnapshot,
-  inputJumps, toChatEvent, toolDetail, toolSummary, turnDocLinks, type Queued,
+  agentModelText, applyEvent, compactText, contextText, contextWarn, diffLineClass, editableUuids, effortText, formatTokens,
+  fromSnapshot, inputJumps, isClaude, toChatEvent, toolDetail, toolSummary, turnDocLinks, type Queued,
 } from './chatModel';
 import type { Approval, ChatItem, ChatSummary, Snapshot, ToolItem } from './types';
 
 const conv: ChatSummary = {
   id: 'c1', kind: 'ticker', ticker: 'NVDA.US', title: 't', model: 'claude-opus-5-5', effort: 'medium',
   created_at: 1, updated_at: 1, context_window: 1_000_000, archived: false, state: 'idle',
+  agent: 'claude', agent_label: 'Claude Code', model_label: 'Opus 5.5',
 };
 const user = (uuid: string, text = uuid): ChatItem => ({ kind: 'user', key: uuid, uuid, text });
 const reply = (key: string, text = key): ChatItem => ({ kind: 'text', key, text });
@@ -236,5 +237,24 @@ describe('diffLineClass', () => {
   it('colours added, removed and hunk lines but not the file headers', () => {
     expect(['+++ b/x', '--- a/x', '@@ -1 +1 @@', '+new', '-old', ' same', '（内容没有变化）'].map(diffLineClass))
       .toEqual(['diff-meta', 'diff-meta', 'diff-hunk', 'diff-add', 'diff-del', '', '']);
+  });
+});
+
+describe('agentModelText', () => {
+  it('shows agent, model and effort', () => {
+    expect(agentModelText(conv)).toBe('Claude Code · Opus 5.5 · medium');
+    expect(agentModelText({ ...conv, agent: 'opencode', agent_label: 'opencode', model: '0g/deepseek-v4.1-flash',
+      model_label: 'DeepSeek V4.1 Flash', effort: 'default' })).toBe('opencode · DeepSeek V4.1 Flash · 默认');
+    expect(agentModelText({ ...conv, kind: 'discover', agent: 'grok', agent_label: 'Grok', model: 'grok-4.6',
+      model_label: 'grok-4.6', context_window: 500000, effort: 'high', lookback_days: 2 }))
+      .toBe('Grok · grok-4.6-500k · high · 2天');
+  });
+  it('names the default effort in Chinese and leaves the rest', () => {
+    expect(effortText('default')).toBe('默认');
+    expect(effortText('xhigh')).toBe('xhigh');
+  });
+  it('tells Claude chats apart', () => {
+    expect(isClaude(conv)).toBe(true);
+    expect(isClaude({ agent: 'opencode' })).toBe(false);
   });
 });

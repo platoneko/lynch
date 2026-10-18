@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
 import { isBusy } from './chatModel';
+import { ChatRowText } from './ChatsPage';
 import { ConfirmSheet, type Confirm } from './ConfirmSheet';
 import { relativeTime } from './listModel';
 import type { ChatSummary } from './types';
@@ -38,7 +39,7 @@ export function ChatSheetButton({ ticker, chats, onOpen, onNew }: {
               <div key={c.id} className="chat-row">
                 <button className="chat-row-main" onClick={() => onOpen(c.id)}>
                   {isBusy(c.state) && <span className="run-dot">●</span>}
-                  <span className="chat-row-title">{c.kind === 'research' ? '调研 · ' : ''}「{c.title}」</span>
+                  <ChatRowText chat={c} label={`${c.kind === 'research' ? '调研 · ' : ''}「${c.title}」`} />
                   <span className="chat-row-time">{relativeTime(c.updated_at, now)}</span>
                 </button>
               </div>
