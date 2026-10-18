@@ -252,6 +252,10 @@ logs:
 gen-index:
     python3 scripts/gen_index.py
 
+[doc('框架 / 轴文档目录：各节行号与大小、每条假设一行，如 just outline INTC.US 或 just outline frameworks/axes/sic.md')]
+outline doc:
+    python3 -m eval.lib.outline {{doc}}
+
 # ── mobile reader (app/) ────────────────────────────────────────────────
 # Separate from the neige instance above: its own port, pid and log.
 app_host := "100.93.210.104"
