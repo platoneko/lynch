@@ -49,18 +49,39 @@ class ParseTests(unittest.TestCase):
         ))
         self.assertEqual(got, {})
 
+    def test_call_start_and_actual_figures(self) -> None:
+        reported = info("SPCX.US", "2026-10-21", "after", "2026 财年第 3 季度业绩披露")
+        reported["live"] = {"started_at": "1792528200", "status": 4}
+        reported["data_kv"] = [{"type": "estimate_eps", "value_raw": "0.164710"},
+                               {"type": "actual_eps", "value_raw": "0.350000"}]
+        pending = info("INTC.US", "2026-10-29", "after", "2026 财年第 3 季度业绩披露")
+        pending["live"] = {"started_at": "1793307600", "status": 1}
+        pending["data_kv"] = [{"type": "estimate_eps", "value_raw": "0.280120"},
+                              {"type": "actual_eps", "value_raw": ""}, {"type": "actual_revenue", "value_raw": ""}]
+        got = parse_calendar(payload(reported, pending, info("AMKR.US", "2026-10-26", "after", "x")))
+        self.assertEqual(got["SPCX.US"][0],
+                         CalendarEvent("2026-10-21", "after", "2026 财年第 3 季度", call_at=1792528200, reported=True))
+        self.assertEqual((got["INTC.US"][0].call_at, got["INTC.US"][0].reported), (1793307600, False))
+        self.assertEqual((got["AMKR.US"][0].call_at, got["AMKR.US"][0].reported), (None, False))
+
     def test_garbage_payload_is_empty(self) -> None:
         self.assertEqual(parse_calendar(None), {})
         self.assertEqual(parse_calendar({"list": "nope"}), {})
 
 
 class FakeRun:
-    """Stands in for `_run_json`: answers by the --symbol flags, or raises for listed symbols."""
+    """Stands in for `_run_json`: answers by the --symbol flags or the --market exchange, or raises for listed ones."""
 
     def __init__(self, infos: list[dict], fail: set[str] = frozenset()) -> None:
         self.infos, self.fail, self.calls = infos, fail, []
 
     def __call__(self, cmd: list[str]) -> dict:
+        if "--market" in cmd:
+            market = cmd[cmd.index("--market") + 1]
+            self.calls.append(market)
+            if market in self.fail:
+                raise RuntimeError("longbridge failed (exit 1): token expired")
+            return payload(*[i for i in self.infos if i["symbol"].endswith("." + market)])
         symbols = [cmd[i + 1] for i, a in enumerate(cmd) if a == "--symbol"]
         self.calls.append(symbols)
         if self.fail & set(symbols):
@@ -101,6 +122,36 @@ class FetchTests(unittest.TestCase):
                              sleep=lambda s: None)
         self.assertEqual((got.events, got.failed), ({}, ["AAA.US"]))
         self.assertIn("unauthorized", got.error)
+
+    def test_a_shares_come_from_their_exchange_listing(self) -> None:
+        # --symbol answers nothing for .SH / .SZ, so A-shares are picked out of each exchange's full listing.
+        run = FakeRun([
+            info("300750.SZ", "2026-10-20", "after", "2026 财年第 3 季度业绩披露"),
+            info("000001.SZ", "2026-10-21", "after", "x"),
+            info("600036.SH", "2026-10-31", "after", "x"),
+            info("NVDA.US", "2026-11-19", "after", "x"),
+        ])
+        got = fetch_calendar(["300750.SZ", "600036.SH", "601899.SH", "NVDA.US"], self.START, self.END,
+                             run=run, sleep=lambda s: None)
+        self.assertEqual(run.calls, [["NVDA.US"], "SH", "SZ"])
+        self.assertEqual(got.events["300750.SZ"], [CalendarEvent("2026-10-20", "after", "2026 财年第 3 季度")])
+        self.assertEqual(got.events["600036.SH"][0].date, "2026-10-31")
+        self.assertEqual(got.events["601899.SH"], [])
+        self.assertNotIn("000001.SZ", got.events)
+        self.assertEqual(got.events["NVDA.US"][0].date, "2026-11-19")
+
+    def test_failed_exchange_listing_fails_only_its_tickers(self) -> None:
+        run = FakeRun([info("300750.SZ", "2026-10-20", "after", "x")], fail={"SH"})
+        got = fetch_calendar(["300750.SZ", "600036.SH"], self.START, self.END, run=run, sleep=lambda s: None)
+        self.assertEqual(got.failed, ["600036.SH"])
+        self.assertEqual(set(got.events), {"300750.SZ"})
+
+    def test_a_full_day_in_an_exchange_listing_is_logged(self) -> None:
+        # Longbridge returns at most 1000 releases per day; a day at the cap may be missing some.
+        full = [info(f"{600000 + i}.SH", "2026-10-30", "after", "x") for i in range(1000)]
+        with self.assertLogs("eval.lib.earnings_lb", level="WARNING") as logs:
+            fetch_calendar(["600036.SH"], self.START, self.END, run=FakeRun(full), sleep=lambda s: None)
+        self.assertIn("2026-10-30", logs.output[0])
 
     def test_passes_the_window_to_the_cli(self) -> None:
         seen: list[list[str]] = []

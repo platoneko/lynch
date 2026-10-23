@@ -91,7 +91,7 @@ class DailyTickerCache(Generic[T]):
             log.warning("%s fetch raised: %s", type(self).__name__, e)
             got = TickerFetch({}, list(tickers), str(e))
         with self._lock:
-            self._data.update(got.data)
+            self._data.update({t: self._merge(t, self._data.get(t), v, now) for t, v in got.data.items()})
             self._failed = (self._failed - set(tickers)) | set(got.failed)
             if got.failed:
                 self._failed_at = now
@@ -127,6 +127,10 @@ class DailyTickerCache(Generic[T]):
 
     def _fetch(self, tickers: list[str], today: date) -> TickerFetch[T]:
         raise NotImplementedError
+
+    def _merge(self, ticker: str, old: T | None, new: T, now: float) -> T:
+        """What to hold for `ticker` once `new` answered over `old`: the answer, unless the source loses data."""
+        return new
 
     def _encode(self, value: T) -> Any:
         raise NotImplementedError

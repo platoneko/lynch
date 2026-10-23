@@ -3,6 +3,11 @@
 The calendar comes from longbridge (eval/lib/earnings_lb.py). A release counts as out once its session slot's
 moment has passed on the market's own clock: before-open releases at the open, everything else at the close.
 Nothing waits for report data to reach longbridge.
+
+Once results are in, longbridge rewrites the entry (seen 2026-10): a US after-close release moves to the next day
+(Beijing's), extra entries appear (year-to-date, prior year), and some releases drop out altogether. The earnings
+call's start survives the rewrite, so a reported entry counts from it when it is earlier, and a release already out
+stays cached when the calendar drops it.
 """
 from __future__ import annotations
 
@@ -57,8 +62,11 @@ def release_at(ticker: str, ev: CalendarEvent) -> datetime | None:
     market = market_bucket(ticker)
     if market not in CLOSE:
         return None
-    moment = OPEN if ev.slot == "before" else CLOSE[market]
-    return datetime.combine(date.fromisoformat(ev.date), moment, MARKET_TZ[market])
+    tz = MARKET_TZ[market]
+    moment = datetime.combine(date.fromisoformat(ev.date), OPEN if ev.slot == "before" else CLOSE[market], tz)
+    if ev.reported and ev.call_at is not None:  # a rewritten entry's date may be a day late; its call is not
+        moment = min(moment, datetime.fromtimestamp(ev.call_at, tz))
+    return moment
 
 
 def judge(ticker: str, events: list[CalendarEvent], now: datetime) -> Row | None:
@@ -70,14 +78,15 @@ def judge(ticker: str, events: list[CalendarEvent], now: datetime) -> Row | None
         if moment is None:
             return None
         offset = (moment.date() - now.astimezone(moment.tzinfo).date()).days
+        day = (moment.date().isoformat(),)  # the corrected day: stable across the calendar's rewrite
         if moment <= now and -offset <= RELEASED_DAYS:
-            released.append(Row(ticker, "released", ev, moment, offset, moment, (ev.date,)))
+            released.append(Row(ticker, "released", ev, moment, offset, moment, day))
         elif moment > now and offset <= UPCOMING_DAYS:
-            upcoming.append(Row(ticker, "upcoming", ev, moment, offset, moment, (ev.date,)))
+            upcoming.append(Row(ticker, "upcoming", ev, moment, offset, moment, day))
     if released:
         latest = max(released, key=lambda r: r.release_at)
         return replace(latest, since=min(r.release_at for r in released),
-                       dates=tuple(sorted(r.event.date for r in released)))
+                       dates=tuple(sorted({d for r in released for d in r.dates})))
     if upcoming:
         return min(upcoming, key=lambda r: r.release_at)
     return None
@@ -112,8 +121,22 @@ class CalendarCache(DailyTickerCache[list[CalendarEvent]]):
         got = self._calendar(tickers, start, end)
         return TickerFetch(got.events, got.failed, got.error)
 
+    def _merge(self, ticker: str, old: list[CalendarEvent] | None, new: list[CalendarEvent],
+               now: float) -> list[CalendarEvent]:
+        # Only when the answer holds no release already out: a rewritten one, counted from its call, replaces them.
+        t = datetime.fromtimestamp(now, BJT)
+
+        def out(events: list[CalendarEvent]) -> list[CalendarEvent]:
+            return [e for e in events if (m := release_at(ticker, e)) is not None and m <= t]
+
+        if old is None or out(new):
+            return new
+        oldest = (t.date() - timedelta(days=RELEASED_DAYS + 1)).isoformat()  # the fetch window's start
+        return [e for e in out(old) if e.date >= oldest] + new
+
     def _encode(self, value: list[CalendarEvent]) -> Any:
-        return [{"date": e.date, "slot": e.slot, "period": e.period} for e in value]
+        return [{"date": e.date, "slot": e.slot, "period": e.period, "call_at": e.call_at, "reported": e.reported}
+                for e in value]
 
     def _decode(self, raw: Any) -> list[CalendarEvent]:
         return [CalendarEvent(**e) for e in raw]
@@ -169,7 +192,7 @@ def _item(r: Row, ignored: set[tuple[str, str]], chat_starts: list[tuple[str, fl
           anomaly: dict[str, Any] | None) -> dict[str, Any]:
     since = r.since.timestamp()
     return {
-        "ticker": r.ticker, "status": r.status, "date": r.event.date, "day_offset": r.day_offset,
+        "ticker": r.ticker, "status": r.status, "date": r.release_at.date().isoformat(), "day_offset": r.day_offset,
         "slot": r.event.slot, "release_at": r.release_at.isoformat(), "period": r.event.period,
         # Any 讨论 chat on the ticker started after the release counts, wherever it was opened from.
         "researched": any(t == r.ticker and created >= since for t, created in chat_starts),
