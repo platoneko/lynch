@@ -49,6 +49,21 @@ class ParseTests(unittest.TestCase):
         ))
         self.assertEqual(got, {})
 
+    def test_call_start_and_actual_figures(self) -> None:
+        reported = info("SPCX.US", "2026-10-21", "after", "2026 财年第 3 季度业绩披露")
+        reported["live"] = {"started_at": "1792528200", "status": 4}
+        reported["data_kv"] = [{"type": "estimate_eps", "value_raw": "0.164710"},
+                               {"type": "actual_eps", "value_raw": "0.350000"}]
+        pending = info("INTC.US", "2026-10-29", "after", "2026 财年第 3 季度业绩披露")
+        pending["live"] = {"started_at": "1793307600", "status": 1}
+        pending["data_kv"] = [{"type": "estimate_eps", "value_raw": "0.280120"},
+                              {"type": "actual_eps", "value_raw": ""}, {"type": "actual_revenue", "value_raw": ""}]
+        got = parse_calendar(payload(reported, pending, info("AMKR.US", "2026-10-26", "after", "x")))
+        self.assertEqual(got["SPCX.US"][0],
+                         CalendarEvent("2026-10-21", "after", "2026 财年第 3 季度", call_at=1792528200, reported=True))
+        self.assertEqual((got["INTC.US"][0].call_at, got["INTC.US"][0].reported), (1793307600, False))
+        self.assertEqual((got["AMKR.US"][0].call_at, got["AMKR.US"][0].reported), (None, False))
+
     def test_garbage_payload_is_empty(self) -> None:
         self.assertEqual(parse_calendar(None), {})
         self.assertEqual(parse_calendar({"list": "nope"}), {})

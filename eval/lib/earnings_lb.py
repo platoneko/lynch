@@ -29,6 +29,7 @@ _BATCH_PAUSE_S = 0.5  # back-to-back calls trip Longbridge's per-second cap (cod
 _HTTP_TIMEOUT_S = 60.0
 _SLOTS = ("before", "during", "after")  # anything else ("U", missing) is unknown
 _PERIOD_SUFFIX = "业绩披露"
+_ACTUALS = ("actual_eps", "actual_revenue")
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,8 @@ class CalendarEvent:
     date: str  # market-local ISO date of the release
     slot: str  # before | during | after | unknown
     period: str  # the calendar's own wording, e.g. "2026 财年第 3 季度"
+    call_at: int | None = None  # epoch start of the earnings call, scheduled or held
+    reported: bool = False  # the entry carries actual figures: the results are out
 
 
 @dataclass
@@ -106,7 +109,13 @@ def _event(info: dict[str, Any]) -> CalendarEvent | None:
     report = ext.get("financial_report") if isinstance(ext.get("financial_report"), dict) else {}
     slot = report.get("market_time")
     period = str(info.get("content") or "").strip().removesuffix(_PERIOD_SUFFIX).strip()
-    return CalendarEvent(day.isoformat(), slot if slot in _SLOTS else "unknown", period)
+    live = info.get("live") if isinstance(info.get("live"), dict) else {}
+    started = str(live.get("started_at") or "").strip()
+    kv = info.get("data_kv") if isinstance(info.get("data_kv"), list) else []
+    reported = any(isinstance(k, dict) and k.get("type") in _ACTUALS and str(k.get("value_raw") or "").strip()
+                   for k in kv)
+    return CalendarEvent(day.isoformat(), slot if slot in _SLOTS else "unknown", period,
+                         int(started) if started.isdigit() else None, reported)
 
 
 def fetch_calendar(

@@ -20,6 +20,11 @@ def at(market: str, month: int, day: int, hh: int, mm: int = 0) -> datetime:
     return datetime(2026, month, day, hh, mm, tzinfo=MARKET_TZ[market])
 
 
+def reported(day: str, slot: str, call: datetime, period: str = "2026 财年第 3 季度") -> CalendarEvent:
+    """An entry Longbridge rewrote once results were in: `day` may be off, the call start is not."""
+    return CalendarEvent(day, slot, period, call_at=int(call.timestamp()), reported=True)
+
+
 @pytest.mark.parametrize("ticker, slot, local", [
     ("TSM.US", "before", (9, 30)),
     ("TSM.US", "during", (16, 0)),
@@ -89,6 +94,20 @@ def test_two_entries_make_one_row():
 def test_released_wins_over_upcoming_and_nearest_upcoming_wins():
     assert judge("TSM.US", [ev("2026-10-14"), ev("2026-10-16")], at("US", 10, 14, 17)).event.date == "2026-10-14"
     assert judge("TSM.US", [ev("2026-10-17"), ev("2026-10-15")], at("US", 10, 14, 12)).event.date == "2026-10-15"
+
+
+def test_reported_entry_counts_from_its_call_when_earlier():
+    # A 10-20 after-close release the calendar moved to 10-21 once results were in.
+    e = reported("2026-10-21", "after", at("US", 10, 20, 16, 30))
+    assert release_at("SPCX.US", e) == at("US", 10, 20, 16, 30)
+    row = judge("SPCX.US", [e], at("US", 10, 21, 10))
+    assert (row.status, row.day_offset, row.dates) == ("released", -1, ("2026-10-20",))
+
+
+def test_call_only_corrects_a_reported_entry_and_never_delays_it():
+    early = int(at("US", 10, 20, 16, 30).timestamp())
+    assert release_at("TSM.US", CalendarEvent("2026-10-21", "after", "q", call_at=early)) == at("US", 10, 21, 16)
+    assert release_at("TSM.US", reported("2026-10-21", "after", at("US", 10, 21, 17))) == at("US", 10, 21, 16)
 
 
 # ---- calendar cache, ignores, research, response
@@ -213,6 +232,32 @@ def test_total_failure_holds_the_day_for_a_full_refetch(tmp_path, cal):
     assert cal.calls[-1][0] == ["TSM.US", "0700.HK"] and (day, error) == ("2026-10-15", None)
 
 
+def test_release_dropped_once_out_stays_through_the_window(tmp_path):
+    # Longbridge has dropped releases from the calendar the day after they came out.
+    cal = FakeCalendar({"TSM.US": [ev("2026-10-14", "after")]})
+    clk = Clock(at("A", 10, 14, 17))  # New York 05:00, before the release
+    cache = CalendarCache(tmp_path / "c.json", fetch=cal, wall=clk)
+    cache.get(["TSM.US"])
+    cal.events = {"TSM.US": [ev("2027-01-15", "after")]}
+    clk.set(at("A", 10, 15, 17))
+    assert cache.get(["TSM.US"])[0]["TSM.US"] == [ev("2026-10-14", "after"), ev("2027-01-15", "after")]
+    clk.set(at("A", 10, 22, 17))
+    assert ev("2026-10-14", "after") in cache.get(["TSM.US"])[0]["TSM.US"]
+    clk.set(at("A", 10, 23, 17))  # 10-14 has left the fetch window, 8 days back
+    assert cache.get(["TSM.US"])[0]["TSM.US"] == [ev("2027-01-15", "after")]
+
+
+def test_answer_with_a_release_out_replaces_the_cached_ones(tmp_path):
+    cal = FakeCalendar({"TSM.US": [ev("2026-10-14", "after")]})
+    clk = Clock(at("A", 10, 14, 17))
+    CalendarCache(tmp_path / "c.json", fetch=cal, wall=clk).get(["TSM.US"])
+    moved = reported("2026-10-15", "after", at("US", 10, 14, 16, 30))
+    cal.events = {"TSM.US": [moved]}
+    clk.set(at("A", 10, 15, 17))
+    assert CalendarCache(tmp_path / "c.json", fetch=cal, wall=clk).get(["TSM.US"])[0]["TSM.US"] == [moved]
+    assert CalendarCache(tmp_path / "c.json", fetch=cal, wall=clk).get(["TSM.US"])[0]["TSM.US"] == [moved]  # persisted
+
+
 def test_fetch_that_raises_is_a_failure_not_a_crash(tmp_path, cal):
     clk = Clock(at("A", 10, 14, 8))
     cal.error = RuntimeError("boom")
@@ -266,6 +311,13 @@ def test_chat_before_release_is_not_research(tmp_path, cal):
 def test_ignored_release_is_flagged(tmp_path, cal):
     body = snapshot(tmp_path, cal, at("US", 10, 14, 17), ignore=[("TSM.US", "2026-10-14")])
     assert body["items"][0]["ignored"] is True
+
+
+def test_rewritten_release_shows_and_ignores_on_its_true_day(tmp_path):
+    cal = FakeCalendar({"TSM.US": [reported("2026-10-15", "after", at("US", 10, 14, 16, 30))]})
+    [item] = snapshot(tmp_path, cal, at("US", 10, 15, 10), ignore=[("TSM.US", "2026-10-14")])["items"]
+    assert (item["date"], item["day_offset"], item["ignored"]) == ("2026-10-14", -1, True)
+    assert item["release_at"] == "2026-10-14T16:30:00-04:00"
 
 
 def test_us_release_is_fetched_through_its_seventh_local_day(tmp_path):
