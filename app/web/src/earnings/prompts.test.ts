@@ -42,6 +42,11 @@ describe('earnings prompts', () => {
     expect(p).toContain('确认 / 削弱 / 证伪');
     expect(p).toContain('落盘等我说「可以落盘」');
   });
+  it('every research prompt asks for a TL;DR before the details', () => {
+    expect(earningsPrompt(item())).toContain('回复开头先写 TL;DR');
+    expect(earningsPrompt(item({ status: 'upcoming' }))).toContain('回复开头先写 TL;DR');
+    expect(anomalyPrompt(anomaly())).toContain('回复开头先写 TL;DR');
+  });
   it('pre-earnings prompt for an upcoming release', () => {
     const p = earningsPrompt(item({ status: 'upcoming', slot: 'before', date: '2026-10-16' }));
     expect(p).toContain('TSM.US 将于 2026-10-16 盘前发布 2026 财年第 3 季度财报');
