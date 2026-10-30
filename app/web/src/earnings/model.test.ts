@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { doneTag, isPending, menuLabel, pendingCount, whenText } from './model';
+import { doneTag, isPending, menuLabel, pendingCount, searchEarnings, whenText } from './model';
 import type { EarningsItem } from './types';
 
 const item = (o: Partial<EarningsItem> = {}): EarningsItem => ({
@@ -29,6 +29,18 @@ describe('earnings model', () => {
     expect(whenText(item({ day_offset: 1, slot: 'before' }))).toBe('明天盘前');
     expect(whenText(item({ day_offset: -1, slot: 'during' }))).toBe('昨天盘中');
     expect(whenText(item({ day_offset: -3, date: '2026-10-11', slot: 'unknown' }))).toBe('10-11');
+  });
+  it('searches by code or full name, keeping the server order', () => {
+    const items = [item({ ticker: 'TSM.US' }), item({ ticker: '0700.HK', status: 'upcoming' }), item({ ticker: 'NVDA.US' })];
+    const names = new Map([['TSM.US', 'Taiwan Semiconductor'], ['0700.HK', '腾讯控股 / Tencent']]);
+    const tickers = (q: string) => searchEarnings(items, q, names).map((it) => it.ticker);
+    expect(tickers('')).toEqual(['TSM.US', '0700.HK', 'NVDA.US']);
+    expect(tickers(' tsm ')).toEqual(['TSM.US']);
+    expect(tickers('0700')).toEqual(['0700.HK']);
+    expect(tickers('腾讯')).toEqual(['0700.HK']);
+    expect(tickers('tencent')).toEqual(['0700.HK']);
+    expect(tickers('.us')).toEqual(['TSM.US', 'NVDA.US']);
+    expect(tickers('苹果')).toEqual([]);
   });
   it('tags handled rows', () => {
     expect(doneTag(item({ researched: true, ignored: true }))).toBe('已调研');

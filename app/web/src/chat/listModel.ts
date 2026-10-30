@@ -23,9 +23,7 @@ export function groupChats(chats: ChatSummary[], query: string, names: ReadonlyM
   const research = byTime.filter((c) => c.kind !== 'discover' && c.ticker === null && titled(c));
   const groups = new Map<string, ChatSummary[]>();
   for (const c of byTime) {
-    if (c.ticker === null) continue;
-    const name = names.get(c.ticker)?.toLowerCase() ?? '';
-    if (q && !c.ticker.toLowerCase().includes(q) && !name.includes(q)) continue;
+    if (c.ticker === null || !matchesTicker(c.ticker, query, names)) continue;
     groups.set(c.ticker, [...(groups.get(c.ticker) ?? []), c]);
   }
   return {
@@ -35,6 +33,13 @@ export function groupChats(chats: ChatSummary[], query: string, names: ReadonlyM
       ticker, chats: list, running: list.some((c) => isBusy(c.state)), updated_at: list[0].updated_at,
     })),
   };
+}
+
+/** A ticker search box's rule: the query, case-insensitive, is part of the code or of the framework's full name. */
+export function matchesTicker(ticker: string, query: string, names: ReadonlyMap<string, string>): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return ticker.toLowerCase().includes(q) || (names.get(ticker)?.toLowerCase() ?? '').includes(q);
 }
 
 /** HK / A-share codes are bare numbers, so they read by Chinese name; US tickers are readable as is. */

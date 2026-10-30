@@ -240,7 +240,7 @@ export function App() {
   }
   if (route.page === 'earnings') {
     return (
-      <EarningsPage list={earnings} error={earningsError} label={(t) => labels.get(t) ?? t} onBack={goBack}
+      <EarningsPage list={earnings} error={earningsError} names={names} label={(t) => labels.get(t) ?? t} onBack={goBack}
         onResearch={(t) => { window.location.hash = newChatHash(t); }}
         onIgnore={(it) => dismiss(ignoreEarnings(it.ticker, it.date))}
         onUnignore={(it) => dismiss(unignoreEarnings(it.ticker, it.date))}
