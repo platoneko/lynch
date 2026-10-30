@@ -3,7 +3,8 @@
 Only paired devices get in (lynch_reader.auth): a one-time code from `just app-pair` buys a long-lived cookie.
 Chats run Claude Code or opencode subprocesses that may write frameworks/ under a tool whitelist and the
 sediment-framework skill, and read-only grok subprocesses that search X (AGENTS.md「app 对话」). The server itself
-writes only output/chat/, output/candidates/, output/archive/, output/earnings/ and output/anomalies/.
+writes only output/chat/, output/candidates/, output/watch/, output/archive/, output/earnings/ and
+output/anomalies/.
 """
 from __future__ import annotations
 
@@ -42,6 +43,7 @@ from lynch_reader.chat.kol import INVEST_ROOT
 from lynch_reader.chat.routes import _body, _guarded, chat_lifespan, chat_routes
 from lynch_reader.chat.service import ChatService, Invalid
 from lynch_reader.chat.transcript import projects_dir_for
+from lynch_reader.chat.watch import WATCH_FILE, WatchStore
 from lynch_reader.earnings import CALENDAR_FILE, IGNORED_FILE, CalendarCache, Earnings, IgnoreStore
 
 from eval.lib.axes import list_axis_paths  # noqa: E402 — after catalog, which puts the repo root on sys.path
@@ -239,6 +241,7 @@ def main(argv: list[str] | None = None) -> None:
                         home=Path.home(), logs=output / "chat" / "grok", invest_root=INVEST_ROOT,
                         skill=REPO_ROOT / ".agents" / "skills" / "discover-kol" / "references" / "search.md"),
         candidates=CandidateStore(CANDIDATES_FILE),
+        watch=WatchStore(WATCH_FILE),
         opencode=OpencodeConfig((shutil.which("opencode") or "opencode",), REPO_ROOT, output / "chat" / "opencode"),
     )
     # An open chat stream never ends by itself: without a graceful-shutdown timeout, SIGTERM waits on it

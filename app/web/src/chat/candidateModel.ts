@@ -4,7 +4,8 @@ export const STANCE_LABEL: Record<Stance, string> = { bullish: '看多', bearish
 export const DISCOVER_OPENER = '看看名单里 KOL 最近提到了哪些票';
 
 const NAMED_MARKETS = new Set(['HK', 'SH', 'SZ']);
-const BLOCK_START = '```lynch-candidates';
+// Either block the app turns into cards: a discover reply's candidates, a 讨论 reply's watch card.
+const BLOCK_START = '```lynch-';
 
 /** HK / A-share codes are bare numbers, so their name leads (the server requires one there). */
 export function candidateLabel(c: Pick<Candidate, 'ticker' | 'name'>): string {
@@ -86,7 +87,7 @@ export function costText(usd: number | null | undefined): string {
   return usd == null ? '' : `本对话 $${usd.toFixed(2)}`;
 }
 
-/** Streamed text up to the candidate block: the block reads well only as cards, once the reply is complete. */
+/** Streamed text up to a card block: the block reads well only as cards, once the reply is complete. */
 export function partialText(partial: string): { text: string; collecting: boolean } {
   const at = partial.indexOf(BLOCK_START);
   return at < 0 ? { text: partial, collecting: false } : { text: partial.slice(0, at).trimEnd(), collecting: true };

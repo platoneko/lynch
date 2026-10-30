@@ -12,6 +12,9 @@ import {
 import { cancelEdit, composer, draftText, putBack, sent, startEdit, typed, type Composer } from './composer';
 import { clearDraft, loadDraft, loadShowTools, saveDraft, saveShowTools } from './drafts';
 import type { ChatAgent, ChatItem, ChatOptions } from './types';
+import { fetchWatch } from '../watch/api';
+import type { WatchList } from '../watch/types';
+import { WatchCardView } from '../watch/WatchCardView';
 
 const INPUT_MAX_PX = 160;
 const PARK_PX = 8; // gap left between the header and a bubble an input jump lands on
@@ -64,6 +67,8 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
   const [lookbackDays, setLookbackDays] = useState(0); // discover: how many days back, picked on the blank page
   // discover: tickers in the candidate list; null until loaded, so the cards' first ticks can skip them
   const [savedTickers, setSavedTickers] = useState<ReadonlySet<string> | null>(null);
+  // 讨论: the watch list, so a card shows whether it is saved or would replace the ticker's card; null until loaded
+  const [watchList, setWatchList] = useState<WatchList | null>(null);
   const [stream, setStream] = useState(0); // bumping it reopens the event stream (after an edit)
   const [answering, setAnswering] = useState<ReadonlySet<string>>(new Set()); // approvals whose answer is in flight
   const inputEl = useRef<HTMLTextAreaElement>(null);
@@ -120,6 +125,12 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
       () => setSavedTickers(new Set()), // no candidate list to compare against: still show the cards
     );
   }, [id, discover]);
+
+  const tickerChat = conv?.kind === 'ticker';
+  const loadWatch = () => fetchWatch().then(setWatchList, () => setWatchList({ items: [] })); // still show the cards
+  useEffect(() => {
+    if (id !== null && tickerChat) loadWatch();
+  }, [id, tickerChat]);
 
   useEffect(() => {
     if (id === null) return;
@@ -327,6 +338,10 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
                 hasFramework={(t) => targets.pool.has(t)} saved={savedTickers}
                 onSaved={(ts) => setSavedTickers((s) => new Set([...(s ?? []), ...ts]))} />
             )}
+            {it.kind === 'text' && it.watch && id !== null && tickerChat && watchList && (
+              <WatchCardView convId={id} itemKey={it.key} card={it.watch} onSaved={loadWatch}
+                saved={watchList.items.find((w) => w.ticker === it.watch?.ticker) ?? null} />
+            )}
             {it.kind === 'tool' && showTools && (
               <details className={`tool ${it.denied ? 'tool-denied' : ''}`}>
                 <summary>{toolSummary(it)}</summary>
@@ -346,7 +361,7 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
           return (
             <>
               {p.text && <div className="msg msg-agent msg-partial">{p.text}{!p.collecting && '▌'}</div>}
-              {p.collecting && <div className="notice">正在整理候选…</div>}
+              {p.collecting && <div className="notice">{discover ? '正在整理候选…' : '正在整理观察区卡片…'}</div>}
             </>
           );
         })()}

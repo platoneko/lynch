@@ -36,6 +36,7 @@ def make_service(tmp_path: Path, env: dict[str, str] | None = None, **kwargs):
     path. `env` adds to the fakes' environment."""
     from lynch_reader.chat.candidates import CandidateStore
     from lynch_reader.chat.service import ChatService
+    from lynch_reader.chat.watch import WatchStore
     projects = tmp_path / "projects"
     projects.mkdir(exist_ok=True)
     (tmp_path / "frameworks").mkdir(exist_ok=True)
@@ -45,6 +46,7 @@ def make_service(tmp_path: Path, env: dict[str, str] | None = None, **kwargs):
            **(env or {})}
     svc = ChatService(ChatIndex(tmp_path / "index.json"), LaunchConfig(FAKE_CMD, tmp_path), projects, env,
                       grok=grok_config(tmp_path), candidates=CandidateStore(tmp_path / "candidates.json"),
+                      watch=WatchStore(tmp_path / "watch.json"),
                       opencode=OpencodeConfig(FAKE_OPENCODE_CMD, tmp_path, tmp_path / "oc-logs"), **kwargs)
     return svc, log
 

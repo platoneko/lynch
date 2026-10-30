@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AnomalyItem } from '../anomalies/types';
-import { anomalyPrompt, earningsPrompt, withPrompt } from './prompts';
+import type { WatchItem } from '../watch/types';
+import { anomalyPrompt, earningsPrompt, watchPrompt, withPrompt } from './prompts';
 import type { EarningsItem } from './types';
 
 const item = (o: Partial<EarningsItem> = {}): EarningsItem => ({
@@ -46,6 +47,7 @@ describe('earnings prompts', () => {
     expect(earningsPrompt(item())).toContain('回复开头先写 TL;DR');
     expect(earningsPrompt(item({ status: 'upcoming' }))).toContain('回复开头先写 TL;DR');
     expect(anomalyPrompt(anomaly())).toContain('回复开头先写 TL;DR');
+    expect(watchPrompt(watched())).toContain('回复开头先写 TL;DR');
   });
   it('pre-earnings prompt for an upcoming release', () => {
     const p = earningsPrompt(item({ status: 'upcoming', slot: 'before', date: '2026-10-16' }));
@@ -64,5 +66,24 @@ describe('earnings prompts', () => {
   it('does not stack the prompt when 调研 is tapped again', () => {
     expect(withPrompt('P', 'P')).toBe('P');
     expect(withPrompt('先看毛利率\n\nP', 'P')).toBe('先看毛利率\n\nP');
+  });
+});
+
+const watched = (o: Partial<WatchItem> = {}): WatchItem => ({
+  ticker: 'SOFI.US', recheck: '分部营销费', saved_at: 1, conv_id: 'c1',
+  waits: [{ what: '10-Q（预计 11 月上旬）', date: '2026-11-07' }, { what: '卖方刷新', date: '2026-11-10' }],
+  due_date: '2026-11-07', due: true, researched: false, ...o,
+});
+
+describe('watch prompts', () => {
+  it('lists what was awaited, what to check, and asks for a new card only if something is still out', () => {
+    const p = watchPrompt(watched());
+    expect(p.split('\n').slice(0, 4)).toEqual([
+      'SOFI.US 的观察区卡片 2026-11-07 到期。之前建议先不落盘，在等：',
+      '- 2026-11-07 10-Q（预计 11 月上旬）', '- 2026-11-10 卖方刷新', '到时要核对：分部营销费',
+    ]);
+    expect(p).toContain('frameworks/SOFI.US.md');
+    expect(p).toContain('附新的观察区卡片');
+    expect(p).toContain('落盘等我说「可以落盘」');
   });
 });

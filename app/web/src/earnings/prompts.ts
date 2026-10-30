@@ -1,6 +1,7 @@
 import { hitWhen, moveText } from '../anomalies/model';
 import type { AnomalyItem } from '../anomalies/types';
 import { SLOT_CN } from './model';
+import type { WatchItem } from '../watch/types';
 import type { EarningsItem } from './types';
 
 /** Research replies run long on a phone: every prompt asks for the same short summary up front. */
@@ -55,6 +56,23 @@ export function anomalyPrompt(it: AnomalyItem): string {
     '3. 给结论：框架是否需要修订、改哪几处，还是只需继续观察。',
     '',
     tldr('异动原因、是否触及某条假设、框架要不要改', '来源和逐条判断'),
+    '只在对话里讨论，不写文件；落盘等我说「可以落盘」，再走 sediment-framework。',
+  ].join('\n');
+}
+
+/** The watch page's research prompt: is what the framework waited on out yet, and what changes if it is. */
+export function watchPrompt(it: WatchItem): string {
+  return [
+    `${it.ticker} 的观察区卡片 ${it.due_date} 到期。之前建议先不落盘，在等：`,
+    ...it.waits.map((w) => `- ${w.date} ${w.what}`),
+    `到时要核对：${it.recheck}`,
+    '',
+    '请重新核对：',
+    '1. 逐条查上面等的东西出来没有（注明来源和时间）；卖方预测要看修订日期是否在本期财报之后。',
+    `2. 出来了的，读 frameworks/${it.ticker}.md 的现行结论和 Assumptions，对照新数据指出要改的地方，估计 L/M/H 大致往哪边移。`,
+    '3. 还有没出来的，重新估计日子，在回复末尾附新的观察区卡片（会覆盖旧卡片，仍在等的事全部列上）；都出来了就不附。',
+    '',
+    tldr('哪些已经出来、框架要不要改、还在等什么', '逐条核对和来源'),
     '只在对话里讨论，不写文件；落盘等我说「可以落盘」，再走 sediment-framework。',
   ].join('\n');
 }

@@ -97,11 +97,24 @@ class LaunchConfig:
     repo_root: Path  # every process runs here; .mcp.json lives here
 
 
+# Post-earnings checks often end in "wait for the sell-side to revise" with a date only the chat remembered
+# (user, 2026-10-30): the card the app parses (chat/watch.py) puts the ticker on the watch list until it is due.
+WATCH_RULE = """\
+- 建议先不落盘、等后续数据时（卖方按本期财报刷新预测、10-Q / 年报、业绩说明会、同业财报、某个事件出结果等），\
+在回复末尾附一张观察区卡片，用户在手机上点「加入观察区」才会存：
+```lynch-watch
+{"ticker": "%s", "waits": [{"what": "等什么（括号里保留原来的时间说法，如「约一两周」）", "date": "YYYY-MM-DD"}], \
+"recheck": "到时要重新核对的数字或假设，一两句"}
+```
+  每件要等的事一条；date 是你估计它出来的那天，模糊说法按今天的北京日期换算成具体日子（不确定今天几号就跑 `date`）。\
+存入会覆盖这只票在观察区的旧卡片，所以把仍在等的事全部列上。一次回复最多一张；不需要等就不附。"""
+
+
 def scope_line(conv: Conversation) -> str:
     if conv.kind == "ticker":
         # The eval script is left unnamed: the framework's header points at it, and naming it here had the
         # agent read it up front in every chat (about 7k tokens) before any number was in question.
-        return f"本次对话关于 {conv.ticker}：它的框架是 frameworks/{conv.ticker}.md。"
+        return f"本次对话关于 {conv.ticker}：它的框架是 frameworks/{conv.ticker}.md。\n{WATCH_RULE % conv.ticker}"
     return ("本次对话研究一个还没有框架的新标的；落盘后它会成为 "
             "frameworks/<TICKER>.md 和 frameworks/eval/<TICKER>.py。")
 
