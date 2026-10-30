@@ -163,6 +163,18 @@ def chat_routes(service: ChatService, frameworks_dir: Path) -> list[Route]:
             raise Invalid("候选区没有这只票")
         return Response(status_code=204)
 
+    async def save_watch(request: Request) -> Response:
+        service.save_watch(request.path_params["id"], (await _body(request)).get("key"))
+        return Response(status_code=204)
+
+    async def list_watch(request: Request) -> Response:
+        return JSONResponse({"items": service.watch_list()})
+
+    async def remove_watch(request: Request) -> Response:
+        if not service.watch.remove(request.path_params["ticker"]):
+            raise Invalid("观察区没有这只票")
+        return Response(status_code=204)
+
     routes = [
         Route("/api/chats", _guarded(list_chats), methods=["GET"]),
         Route("/api/chats", _guarded(create), methods=["POST"]),
@@ -176,12 +188,18 @@ def chat_routes(service: ChatService, frameworks_dir: Path) -> list[Route]:
         Route("/api/chats/{id}/title", _guarded(rename), methods=["POST"]),
         Route("/api/chats/{id}/approvals/{request_id}", _guarded(approval), methods=["POST"]),
         Route("/api/chats/{id}/candidates", _guarded(save_candidates), methods=["POST"]),
+        Route("/api/chats/{id}/watch", _guarded(save_watch), methods=["POST"]),
     ]
     if service.candidates is not None:
         routes += [
             Route("/api/candidates", _guarded(list_candidates), methods=["GET"]),
             Route("/api/candidates/{ticker}/archive", _guarded(archive_candidate), methods=["POST"]),
             Route("/api/candidates/{ticker}/restore", _guarded(restore_candidate), methods=["POST"]),
+        ]
+    if service.watch is not None:
+        routes += [
+            Route("/api/watch", _guarded(list_watch), methods=["GET"]),
+            Route("/api/watch/{ticker}/remove", _guarded(remove_watch), methods=["POST"]),
         ]
     return routes
 

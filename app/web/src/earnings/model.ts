@@ -1,3 +1,4 @@
+import { matchesTicker } from '../chat/listModel';
 import type { EarningsItem, EarningsList, EarningsSlot } from './types';
 
 export const SLOT_CN: Record<EarningsSlot, string> = { before: '盘前', during: '盘中', after: '盘后', unknown: '' };
@@ -19,6 +20,11 @@ export function menuLabel(list: EarningsList | null): string | null {
   const upcoming = list.items.filter((it) => it.status === 'upcoming').length;
   return ['财报', ...(pending > 0 ? [`${pending} 待看`] : []), ...(upcoming > 0 ? [`${upcoming} 将出`] : [])]
     .join(' · ');
+}
+
+/** The page's search box: same rule as the chat list's, so one query finds a ticker on both. */
+export function searchEarnings(items: EarningsItem[], query: string, names: ReadonlyMap<string, string>): EarningsItem[] {
+  return items.filter((it) => matchesTicker(it.ticker, query, names));
 }
 
 export function whenText(it: EarningsItem): string {

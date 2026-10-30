@@ -110,6 +110,12 @@ def test_research_prompt_has_no_ticker():
     assert "新标的" in p and "None" not in p
 
 
+def test_only_a_ticker_chat_is_told_how_to_write_a_watch_card():
+    p = system_prompt(conv(kind="ticker", ticker="NVDA.US"))
+    assert '```lynch-watch\n{"ticker": "NVDA.US"' in p and "加入观察区" in p
+    assert "lynch-watch" not in system_prompt(conv(kind="research", ticker=None))
+
+
 def test_permission_prompts_come_to_the_app():
     # Without it claude refuses every .claude/ write outright; with it, the server answers (chat/approvals.py).
     argv = launch_argv(CFG, conv(), resume=False)

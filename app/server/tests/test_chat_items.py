@@ -108,6 +108,13 @@ def test_text_with_a_candidate_block_carries_the_candidates():
     assert item["candidates_dropped"] == 0
 
 
+def test_text_with_a_watch_block_carries_the_card():
+    text = ('先不落盘\n```lynch-watch\n{"ticker": "MSFT.US", "recheck": "FY28 共识", '
+            '"waits": [{"what": "卖方刷新（约一两周）", "date": "2026-11-10"}]}\n```')
+    [item] = message_items(assistant("a1", {"type": "text", "text": text}))
+    assert item["text"] == "先不落盘" and item["watch"]["ticker"] == "MSFT.US"
+
+
 def test_grok_string_tool_input_becomes_a_dict():
     [item] = message_items(assistant("a1", {"type": "tool_use", "id": "t1", "name": "X search:",
                                             "input": "{'variant': 'XSearch', 'backend': True}"}))

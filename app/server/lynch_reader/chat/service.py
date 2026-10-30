@@ -17,6 +17,7 @@ from lynch_reader.chat import transcript
 from lynch_reader.chat.approvals import (AUTO_DENY_MESSAGE, USER_DENY_MESSAGE, Approval, approvable_path,
                                          new_approval)
 from lynch_reader.chat.candidates import CandidateStore
+from lynch_reader.chat.watch import WatchStore
 from lynch_reader.chat.config import (CHAT_EFFORTS, CHAT_MODELS, DEFAULT_EFFORT, DEFAULT_MODEL, IDLE_TIMEOUT_S,
                                       MAX_PROCESSES, LaunchConfig, launch_argv, launch_env)
 from lynch_reader.chat.grok import (DEFAULT_GROK_MODEL, DEFAULT_WINDOW, MAX_TURNS, GrokConfig, GrokSetupError,
@@ -102,7 +103,7 @@ class Live:
 class ChatService:
     def __init__(self, index: ChatIndex, launch: LaunchConfig, projects_dir: Path, base_env: Mapping[str, str], *,
                  grok: GrokConfig | None = None, candidates: CandidateStore | None = None,
-                 opencode: OpencodeConfig | None = None,
+                 watch: WatchStore | None = None, opencode: OpencodeConfig | None = None,
                  monotonic: Callable[[], float] = time.monotonic, wall: Callable[[], float] = time.time,
                  idle_timeout_s: float = IDLE_TIMEOUT_S, max_processes: int = MAX_PROCESSES) -> None:
         self._index = index
@@ -115,6 +116,7 @@ class ChatService:
         self._opencode = opencode
         self._opencode_env = dict(base_env)  # opencode bills its own providers; the Claude billing guard is moot
         self.candidates = candidates
+        self.watch = watch
         self._now, self._wall = monotonic, wall
         self._idle_timeout_s, self._max_processes = idle_timeout_s, max_processes
         self._live: dict[str, Live] = {}
@@ -376,16 +378,39 @@ class ChatService:
             raise Invalid("key and a list of tickers required")
         if self.candidates is None:
             raise Conflict("候选区未配置")
-        path = self._transcript(conv_id)
-        entries = transcript.read_entries(path) if path.exists() else []
-        items = transcript.history(transcript.current_branch(entries), entries).items
-        item = next((i for i in items if i["key"] == key and i.get("candidates")), None)
+        item = self._reply_item(conv_id, key, "candidates")
         if item is None:
             raise Conflict("这组候选已不在对话记录里")
         picked = [c for c in item["candidates"] if c["ticker"] in set(tickers)]
         if not picked:
             raise Conflict("所选的票不在这组候选里")
         return self.candidates.save(conv_id, picked)
+
+    def save_watch(self, conv_id: str, key: object) -> None:
+        """The user's 加入观察区: only the card the agent's own reply carries, looked up again in the transcript."""
+        conv = self._conv(conv_id)
+        if conv.kind != "ticker":
+            raise Invalid("只有讨论已有框架的对话能加入观察区")
+        if not isinstance(key, str):
+            raise Invalid("key required")
+        if self.watch is None:
+            raise Conflict("观察区未配置")
+        item = self._reply_item(conv_id, key, "watch")
+        if item is None:
+            raise Conflict("这张卡片已不在对话记录里")
+        if item["watch"]["ticker"] != conv.ticker:
+            raise Conflict(f"卡片里的票不是本次对话的 {conv.ticker}")
+        self.watch.save(conv_id, item["watch"])
+
+    def watch_list(self) -> list[dict]:
+        return self.watch.snapshot(self.ticker_chat_starts()) if self.watch is not None else []
+
+    def _reply_item(self, conv_id: str, key: str, field: str) -> dict | None:
+        """The reply item `key` on the chat's current branch, if it carries `field` (a block the app parsed)."""
+        path = self._transcript(conv_id)
+        entries = transcript.read_entries(path) if path.exists() else []
+        items = transcript.history(transcript.current_branch(entries), entries).items
+        return next((i for i in items if i["key"] == key and i.get(field)), None)
 
     async def reap_idle(self) -> None:
         now = self._now()

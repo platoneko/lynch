@@ -9,6 +9,7 @@ import uuid as uuidlib
 from pathlib import Path
 
 from lynch_reader.chat.candidates import parse_candidates
+from lynch_reader.chat.watch import parse_watch
 
 OUTPUT_MAX = 4000
 # Tool results that mean "the whitelist refused this call" (verified texts, spec §9 第 2 条).
@@ -99,6 +100,9 @@ def _assistant_block(uuid: str, index: int, block: dict) -> list[dict]:
         parsed = parse_candidates(block["text"])
         if parsed is not None:  # a discover reply's candidate list (chat/candidates.py)
             item.update(text=parsed.text, candidates=parsed.candidates, candidates_dropped=parsed.dropped)
+        watch = parse_watch(item["text"])
+        if watch is not None:  # a 讨论 reply's watch card (chat/watch.py)
+            item.update(text=watch.text, watch=watch.card)
         return [item]
     if block.get("type") == "tool_use":
         tool_input = block.get("input") or {}

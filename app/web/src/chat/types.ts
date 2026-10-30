@@ -1,3 +1,5 @@
+import type { WatchCard } from '../watch/types';
+
 /** Mirrors lynch_reader/chat: summaries from ChatService.list, items from chat/items.py. */
 export type ChatState = 'running' | 'compacting' | 'idle' | 'dormant';
 
@@ -68,7 +70,7 @@ export interface ToolItem {
 
 export type ChatItem =
   | { kind: 'user'; key: string; uuid: string; text: string }
-  | { kind: 'text'; key: string; text: string; candidates?: Candidate[]; candidates_dropped?: number }
+  | { kind: 'text'; key: string; text: string; candidates?: Candidate[]; candidates_dropped?: number; watch?: WatchCard }
   | ToolItem
   | { kind: 'compact'; key: string; trigger: string | null; pre_tokens: number | null; post_tokens: number | null }
   | { kind: 'notice'; key: string; text: string };

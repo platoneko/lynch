@@ -25,11 +25,15 @@ import { HomePage } from './home/HomePage';
 import { DEFAULT_FILTER, type HomeFilter } from './home/listModel';
 import {
   anomaliesHash, axisHash, candidatesHash, chatHash, chatsHash, docHash, earningsHash, newChatHash, newDiscoverHash,
-  parseRoute, type Route,
+  parseRoute, watchHash, type Route,
 } from './route';
 import type { Catalog } from './types';
+import { fetchWatch, removeWatch } from './watch/api';
+import type { WatchList } from './watch/types';
+import { WatchPage } from './watch/WatchPage';
 
-// The server refetches quotes every 5 minutes; the home list, earnings and anomalies are re-read at that pace.
+// The server refetches quotes every 5 minutes; the home list, earnings, anomalies and the watch list are re-read at
+// that pace.
 const ALERT_POLL_MS = 5 * 60_000;
 // Offline, the home list is asked for at this pace: the first real answer brings the app back online.
 const OFFLINE_PROBE_MS = 30_000;
@@ -105,6 +109,19 @@ export function App() {
   }, [route.page, loadAnomalies, offline]);
   const dismissAnomaly = (p: Promise<unknown>) =>
     p.then(loadAnomalies, (e: unknown) => setAnomaliesError(String(e instanceof Error ? e.message : e)));
+  const [watch, setWatch] = useState<WatchList | null>(null);
+  const [watchError, setWatchError] = useState<string | null>(null);
+  const loadWatch = useCallback(() => {
+    fetchWatch().then((l) => { setWatch(l); setWatchError(null); },
+      (e: unknown) => setWatchError(String(e instanceof Error ? e.message : e)));
+  }, []);
+  // A card falls due at midnight and counts as looked at once a chat on it starts: poll like the alerts.
+  useEffect(() => {
+    if (offline || (route.page !== 'home' && route.page !== 'watch')) return;
+    loadWatch();
+    const timer = window.setInterval(loadWatch, ALERT_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [route.page, loadWatch, offline]);
   const [chatOptions, setChatOptions] = useState<ChatOptions | null>(null);
   // A new conversation's first message, handed from its blank page to its own page.
   const [firstMessage, setFirstMessage] = useState<{ id: string; text: string } | null>(null);
@@ -240,7 +257,7 @@ export function App() {
   }
   if (route.page === 'earnings') {
     return (
-      <EarningsPage list={earnings} error={earningsError} label={(t) => labels.get(t) ?? t} onBack={goBack}
+      <EarningsPage list={earnings} error={earningsError} names={names} label={(t) => labels.get(t) ?? t} onBack={goBack}
         onResearch={(t) => { window.location.hash = newChatHash(t); }}
         onIgnore={(it) => dismiss(ignoreEarnings(it.ticker, it.date))}
         onUnignore={(it) => dismiss(unignoreEarnings(it.ticker, it.date))}
@@ -253,6 +270,14 @@ export function App() {
         onResearch={(t) => { window.location.hash = newChatHash(t); }}
         onIgnore={(it) => dismissAnomaly(ignoreAnomaly(it.ticker, it.ref))}
         onUnignore={(it) => dismissAnomaly(unignoreAnomaly(it.ticker, it.ref))}
+        onOpenDoc={(t) => { window.location.hash = docHash(t); }} />
+    );
+  }
+  if (route.page === 'watch') {
+    return (
+      <WatchPage list={watch} error={watchError} label={(t) => labels.get(t) ?? t} onBack={goBack}
+        onResearch={(t) => { window.location.hash = newChatHash(t); }}
+        onRemove={(t) => removeWatch(t).then(loadWatch, (e: unknown) => setWatchError(String(e instanceof Error ? e.message : e)))}
         onOpenDoc={(t) => { window.location.hash = docHash(t); }} />
     );
   }
@@ -289,7 +314,8 @@ export function App() {
       <HomePage catalog={catalog} filter={filter} onFilter={setFilter} onOpen={openDoc} onOpenAxis={openAxis}
         chatCount={chatList?.running_count ?? 0} onOpenChats={() => openFromHome(chatsHash())}
         earnings={earnings} onOpenEarnings={() => openFromHome(earningsHash())}
-        anomalies={anomalies} onOpenAnomalies={() => openFromHome(anomaliesHash())} connection={connection} />
+        anomalies={anomalies} onOpenAnomalies={() => openFromHome(anomaliesHash())}
+        watch={watch} onOpenWatch={() => openFromHome(watchHash())} connection={connection} />
     </>
   );
 }

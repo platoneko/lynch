@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   anomaliesHash, axisHash, candidatesHash, chatHash, chatsHash, docHash, earningsHash, newChatHash, newDiscoverHash, parseRoute,
+  watchHash,
 } from './route';
 
 describe('route', () => {
@@ -40,5 +41,7 @@ describe('route', () => {
   it('parses the anomaly page', () => {
     expect(parseRoute('#/anomalies')).toEqual({ page: 'anomalies' });
     expect(anomaliesHash()).toBe('#/anomalies');
+    expect(parseRoute('#/watch')).toEqual({ page: 'watch' });
+    expect(watchHash()).toBe('#/watch');
   });
 });

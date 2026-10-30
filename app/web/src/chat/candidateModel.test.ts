@@ -100,9 +100,10 @@ describe('discover header', () => {
 });
 
 describe('partialText', () => {
-  it('hides the candidate block while it streams', () => {
+  it('hides a card block while it streams', () => {
     expect(partialText('看到两只\n\n```lynch-candidates\n{"cand')).toEqual({ text: '看到两只', collecting: true });
     expect(partialText('还在搜')).toEqual({ text: '还在搜', collecting: false });
+    expect(partialText('先等卖方\n```lynch-watch\n{"tic')).toEqual({ text: '先等卖方', collecting: true });
   });
 });
 

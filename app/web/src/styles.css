@@ -290,5 +290,8 @@ button { font: inherit; color: inherit; }
 .earn-main .chat-row-title { width: 100%; }
 .earn-sub { color: var(--muted); font-size: 12px; }
 .earn-done .chat-row-main { opacity: 0.55; }
+/* ---- watch */
+.watch-date { color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+.watch-replaces { font-size: 12px; color: var(--muted); padding: 4px 8px; border-radius: 6px; background: var(--bubble); }
 /* Left of the ⋯ button, so the running-chats count keeps the right corner. */
 .badge-alert { right: auto; left: -6px; min-width: 18px; padding: 0; background: #e5484d; font-weight: 700; }

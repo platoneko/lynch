@@ -232,3 +232,23 @@ def test_discover_create_save_list_archive_and_restore(repo, tmp_path, quotes):
         assert c.post("/api/candidates/NOPE.US/archive", json={}).status_code == 400
         assert c.post("/api/candidates/NOPE.US/restore", json={}).status_code == 400
         assert c.post("/api/candidates/AXTI.US/archive", data="x").status_code == 415  # the CSRF guard holds
+
+
+def test_watch_save_list_and_remove(repo, tmp_path, quotes):
+    card = ('```lynch-watch\n{"ticker": "AAA.US", "recheck": "FY28 共识", '
+            '"waits": [{"what": "卖方刷新（约一两周）", "date": "2026-11-10"}]}\n```')
+    c, svc = client(repo, tmp_path, quotes)
+    with c:
+        conv_id = c.post("/api/chats", json={"kind": "ticker", "ticker": "AAA.US", "text": card}).json()["id"]
+        asyncio.run(until(lambda: state_of(svc, conv_id) == "idle"
+                          and any(i.get("watch") for i in svc.snapshot(conv_id)["items"])))
+        [item] = [i for i in svc.snapshot(conv_id)["items"] if i.get("watch")]
+        assert item["text"] == "echo:"  # the block is the card, not reply text
+        assert c.post(f"/api/chats/{conv_id}/watch", json={"key": "nope"}).status_code == 409
+        assert c.post(f"/api/chats/{conv_id}/watch", json={"key": item["key"]}).status_code == 204
+        [row] = c.get("/api/watch").json()["items"]
+        assert (row["ticker"], row["due_date"], row["conv_id"]) == ("AAA.US", "2026-11-10", conv_id)
+        assert c.post("/api/watch/AAA.US/remove", data="x").status_code == 415  # the CSRF guard holds
+        assert c.post("/api/watch/AAA.US/remove", json={}).status_code == 204
+        assert c.post("/api/watch/AAA.US/remove", json={}).status_code == 400
+        assert c.get("/api/watch").json()["items"] == []

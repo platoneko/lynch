@@ -7,6 +7,8 @@ import type { AnomalyList } from '../anomalies/types';
 import { menuLabel, pendingCount } from '../earnings/model';
 import type { EarningsList } from '../earnings/types';
 import type { Catalog } from '../types';
+import { menuLabel as watchMenuLabel, pendingCount as watchPendingCount } from '../watch/model';
+import type { WatchList } from '../watch/types';
 import { applyFilter, inArchiveScope, latestAsOf, quoteTimeText, type HomeFilter, type SortKey } from './listModel';
 import { TickerCard } from './TickerCard';
 
@@ -23,7 +25,7 @@ const MARKETS: { id: string; label: string }[] = [
 ];
 
 export function HomePage({ catalog, filter, onFilter, onOpen, onOpenAxis,
-  chatCount, onOpenChats, earnings, onOpenEarnings, anomalies, onOpenAnomalies, connection }: {
+  chatCount, onOpenChats, earnings, onOpenEarnings, anomalies, onOpenAnomalies, watch, onOpenWatch, connection }: {
   catalog: Catalog;
   filter: HomeFilter;
   onFilter: (f: HomeFilter) => void;
@@ -35,19 +37,25 @@ export function HomePage({ catalog, filter, onFilter, onOpen, onOpenAxis,
   onOpenEarnings: () => void;
   anomalies: AnomalyList | null;
   onOpenAnomalies: () => void;
+  watch: WatchList | null;
+  onOpenWatch: () => void;
   connection: Connection;
 }) {
   const { offline } = connection;
-  const alertsPending = !offline && (pendingCount(earnings) > 0 || anomalyPendingCount(anomalies) > 0);
+  const alertsPending = !offline
+    && (pendingCount(earnings) > 0 || anomalyPendingCount(anomalies) > 0 || watchPendingCount(watch) > 0);
   const earningsLabel = menuLabel(earnings);
   const anomaliesLabel = anomalyMenuLabel(anomalies);
+  const watchLabel = watchMenuLabel(watch);
   // Offline these pages have nothing to show (the server keeps them): always listed, greyed, without counts.
   const alertRows: MenuItem[] = offline ? [
     { label: '财报', onSelect: onOpenEarnings, disabled: true },
     { label: '异动', onSelect: onOpenAnomalies, disabled: true },
+    { label: '观察', onSelect: onOpenWatch, disabled: true },
   ] : [
     ...(earningsLabel ? [{ label: earningsLabel, onSelect: onOpenEarnings }] : []),
     ...(anomaliesLabel ? [{ label: anomaliesLabel, onSelect: onOpenAnomalies }] : []),
+    ...(watchLabel ? [{ label: watchLabel, onSelect: onOpenWatch }] : []),
   ];
   const chatRow: MenuItem = offline
     ? { label: '对话', onSelect: onOpenChats, disabled: true }

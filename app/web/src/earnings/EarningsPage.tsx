@@ -1,7 +1,8 @@
+import { useState } from 'react';
 import { AlertRow } from '../alerts/AlertRow';
 import { moveText, SESSION_CN } from '../anomalies/model';
 import { loadDraft, saveDraft } from '../chat/drafts';
-import { doneTag, isPending, whenText } from './model';
+import { doneTag, isPending, searchEarnings, whenText } from './model';
 import { earningsPrompt, withPrompt } from './prompts';
 import type { EarningsItem, EarningsList } from './types';
 
@@ -11,9 +12,10 @@ function anomalySession(it: EarningsItem): string {
 }
 
 /** Pool tickers that just released or are about to release earnings, each a tap away from a research chat. */
-export function EarningsPage({ list, error, label, onBack, onResearch, onIgnore, onUnignore, onOpenDoc }: {
+export function EarningsPage({ list, error, names, label, onBack, onResearch, onIgnore, onUnignore, onOpenDoc }: {
   list: EarningsList | null;
   error: string | null; // the page's own request failed
+  names: ReadonlyMap<string, string>; // ticker → framework's full name, for the search box
   label: (ticker: string) => string;
   onBack: () => void;
   onResearch: (ticker: string) => void; // opens the ticker's new 讨论 page, whose draft was just written
@@ -21,8 +23,10 @@ export function EarningsPage({ list, error, label, onBack, onResearch, onIgnore,
   onUnignore: (it: EarningsItem) => void;
   onOpenDoc: (ticker: string) => void;
 }) {
-  const released = list?.items.filter((it) => it.status === 'released') ?? [];
-  const upcoming = list?.items.filter((it) => it.status === 'upcoming') ?? [];
+  const [query, setQuery] = useState('');
+  const shown = searchEarnings(list?.items ?? [], query, names);
+  const released = shown.filter((it) => it.status === 'released');
+  const upcoming = shown.filter((it) => it.status === 'upcoming');
   const research = (it: EarningsItem) => {
     const key = `new/${it.ticker}`; // ChatPage's draft key for a new 讨论 chat on this ticker
     saveDraft(key, withPrompt(loadDraft(key), earningsPrompt(it)));
@@ -42,7 +46,8 @@ export function EarningsPage({ list, error, label, onBack, onResearch, onIgnore,
       <header className="bar bar-top">
         <div className="bar-row">
           <button className="icon-btn" onClick={onBack} aria-label="返回">‹</button>
-          <div className="chat-title-main">财报</div>
+          <input className="home-search" type="search" placeholder="搜索标的" value={query}
+            onChange={(e) => setQuery(e.target.value)} />
         </div>
       </header>
       <main className="chats-body">
@@ -66,6 +71,7 @@ export function EarningsPage({ list, error, label, onBack, onResearch, onIgnore,
           </section>
         )}
         {list && list.items.length === 0 && <p className="empty">近 7 天没有发布、3 天内也没有要发布的财报</p>}
+        {list && list.items.length > 0 && shown.length === 0 && <p className="empty">没有匹配的财报</p>}
         {!list && !error && <p className="empty">加载中…</p>}
       </main>
     </div>
