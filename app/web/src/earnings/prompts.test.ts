@@ -40,8 +40,15 @@ describe('earnings prompts', () => {
     const p = earningsPrompt(item());
     expect(p).toContain('TSM.US 的 2026 财年第 3 季度财报已于 2026-10-14 盘后发布');
     expect(p).toContain('frameworks/TSM.US.md');
-    expect(p).toContain('确认 / 削弱 / 证伪');
+    expect(p).toContain('确认 / 削弱 / 证伪 / 维持');
     expect(p).toContain('落盘等我说「可以落盘」');
+  });
+  it('post-earnings prompt always ends in a landing list, not in whether to revise', () => {
+    const p = earningsPrompt(item());
+    expect(p).toContain('锚点不变也写');
+    expect(p).toContain('共识待更新');
+    expect(p).toContain('问我要不要落盘');
+    expect(p).not.toContain('框架是否需要修订');
   });
   it('every research prompt asks for a TL;DR before the details', () => {
     expect(earningsPrompt(item())).toContain('回复开头先写 TL;DR');

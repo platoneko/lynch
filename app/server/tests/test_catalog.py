@@ -6,7 +6,7 @@ import re
 import subprocess
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -66,7 +66,22 @@ def test_parsed_row_is_zoned_on_the_live_price(repo, quotes):
         "band": {"price": 25.0, "session": None, "as_of": AS_OF, "zone": zone_of(25.0, 10, 20, 40),
                  "option_zone": None, "candidate_zone": None},
         "quote_error": None, "error": None, "archived": False,
+        "framework_updated": "2026-09-21", "last_earnings": None, "next_earnings": None, "stale_after_earnings": False,
     }
+
+
+def test_earnings_dates_are_asked_with_each_frameworks_header_day(repo, quotes):
+    asked = []
+
+    def dates(updated):
+        asked.append(dict(updated))
+        # A broken framework is still in the pool, so the calendar answers for it too.
+        return {t: {"last_earnings": {"date": "2026-09-18"}, "stale_after_earnings": True} for t in ("AAA.US", "0001.HK")}
+    rows = {r["ticker"]: r for r in catalog(repo, quotes, earnings_dates=dates)["tickers"]}
+    assert asked == [{"AAA.US": date(2026, 9, 21), "BBB.US": date(2026, 9, 21)}]
+    assert (rows["AAA.US"]["last_earnings"], rows["AAA.US"]["stale_after_earnings"]) == ({"date": "2026-09-18"}, True)
+    assert (rows["BBB.US"]["last_earnings"], rows["BBB.US"]["stale_after_earnings"]) == (None, False)
+    assert rows["0001.HK"]["stale_after_earnings"] is False  # a broken framework is never flagged
 
 
 def test_option_and_candidate_zones(repo, fetch, quotes):

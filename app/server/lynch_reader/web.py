@@ -31,8 +31,8 @@ from lynch_reader.archive import ARCHIVE_FILE, FrameworkArchive
 from lynch_reader.auth.gate import DeviceAuth, pair_routes
 from lynch_reader.auth.store import DEVICES_FILE, DeviceStore
 from lynch_reader.catalog import (
-    FRAMEWORKS_DIR, REPO_ROOT, QuoteCache, QuotePoller, axis_path_in, catalog, framework_path, quote_failure,
-    quote_pool,
+    FRAMEWORKS_DIR, REPO_ROOT, QuoteCache, QuotePoller, axis_path_in, catalog, framework_path, framework_updates,
+    quote_failure, quote_pool,
 )
 from lynch_reader.chat.candidates import CANDIDATES_FILE, CandidateStore
 from lynch_reader.chat.config import LaunchConfig
@@ -44,7 +44,9 @@ from lynch_reader.chat.routes import _body, _guarded, chat_lifespan, chat_routes
 from lynch_reader.chat.service import ChatService, Invalid
 from lynch_reader.chat.transcript import projects_dir_for
 from lynch_reader.chat.watch import WATCH_FILE, WatchStore
-from lynch_reader.earnings import CALENDAR_FILE, IGNORED_FILE, CalendarCache, Earnings, IgnoreStore
+from lynch_reader.earnings import (
+    CALENDAR_FILE, IGNORED_FILE, CalendarCache, Earnings, IgnoreStore, revised_by,
+)
 
 from eval.lib.axes import list_axis_paths  # noqa: E402 — after catalog, which puts the repo root on sys.path
 from eval.lib.frameworks import list_framework_paths  # noqa: E402 — after catalog, which puts the repo root on sys.path
@@ -120,7 +122,9 @@ def create_app(frameworks_dir: Path, web_dist: Path, quotes: QuoteCache, devices
         quotes.subscribe(lambda batch: anomalies.observe(batch, pool()))
 
     def tickers(request: Request) -> Response:
-        return unless_held(request, JSONResponse(catalog(frameworks_dir, quotes, archive.tickers())))
+        dates = None if earnings is None else (
+            lambda updated: earnings.ticker_dates(pool(), revised_by(updated, frameworks_dir)))
+        return unless_held(request, JSONResponse(catalog(frameworks_dir, quotes, archive.tickers(), dates)))
 
     def framework(request: Request) -> Response:
         path = framework_path(request.path_params["ticker"], frameworks_dir)
@@ -156,7 +160,8 @@ def create_app(frameworks_dir: Path, web_dist: Path, quotes: QuoteCache, devices
     def earnings_list(request: Request) -> Response:
         # Sync: the first request after the daily calendar run falls due may wait on longbridge in the thread pool.
         tag = anomalies.earnings_tag if anomalies is not None else (lambda t: None)
-        return JSONResponse(earnings.snapshot(pool(), chat.ticker_chat_starts() if chat is not None else [], tag))
+        revised = revised_by(framework_updates(frameworks_dir), frameworks_dir)
+        return JSONResponse(earnings.snapshot(pool(), revised, tag))
 
     def set_ignored(ignored: bool):
         async def run(request: Request) -> Response:

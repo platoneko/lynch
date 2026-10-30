@@ -35,17 +35,18 @@ export interface HomeFilter {
   axes: string[];
   sort: SortKey;
   showArchived: boolean;
+  staleOnly: boolean; // 财报后未更新
 }
 
 export const DEFAULT_FILTER: HomeFilter = {
-  query: '', zones: [], classes: [], markets: [], axes: [], sort: 'zone', showArchived: false,
+  query: '', zones: [], classes: [], markets: [], axes: [], sort: 'zone', showArchived: false, staleOnly: false,
 };
 
 export function applyFilter(rows: TickerRow[], f: HomeFilter, zoneOrder: string[]): TickerRow[] {
   const serverOrder = new Map(rows.map((r, i) => [r.ticker, i]));
   const kept = rows.filter(
     (r) => inArchiveScope(r, f) && matchesQuery(r, f.query) && matchesZones(r, f.zones) && matchesClasses(r, f.classes)
-      && matchesMarkets(r, f.markets) && matchesAxes(r, f.axes),
+      && matchesMarkets(r, f.markets) && matchesAxes(r, f.axes) && (!f.staleOnly || r.stale_after_earnings),
   );
   return kept.sort(comparator(f.sort, zoneOrder, serverOrder));
 }

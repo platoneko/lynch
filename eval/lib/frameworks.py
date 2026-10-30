@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 
 from .axes import Consensus, header_consensus
@@ -70,6 +71,8 @@ _LYNCH = re.compile(
     r"林奇：\s*`([a-z_]+)`(?:\s*/\s*`([a-z_]+)`)?",
     re.IGNORECASE,
 )
+# The 更新 day on the same header line as 林奇 (skill references/contracts.md「框架文档」).
+_UPDATED = re.compile(r"林奇：[^\n]*?更新：\s*(\d{4}-\d{2}-\d{2})")
 
 # AGENTS.md / sediment-framework 六类中英对照
 LYNCH_CN: dict[str, str] = {
@@ -128,6 +131,8 @@ class FrameworkMeta:
     baskets: dict[str, int] = field(default_factory=dict)
     # The header's optional `> 共识：` line: where consensus sits on this ticker's own L/M/H.
     consensus: Consensus | None = None
+    # The header's 更新 day: the last landing, whatever it changed.
+    updated: date | None = None
 
     @property
     def option_band(self) -> tuple[float, float, float] | None:
@@ -379,7 +384,17 @@ def load_framework(path: Path) -> FrameworkMeta:
         candidate_gate=candidate[2] if candidate else None,
         baskets=baskets,
         consensus=header_consensus(md),
+        updated=_parse_updated(md),
     )
+
+
+def _parse_updated(md: str) -> date | None:
+    """The header's 更新 day; a missing or impossible one is None, not a broken framework."""
+    m = _UPDATED.search(md)
+    try:
+        return date.fromisoformat(m.group(1)) if m else None
+    except ValueError:
+        return None
 
 
 def load_all_frameworks(frameworks_dir: Path | None = None) -> list[FrameworkMeta]:

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { doneTag, isPending, menuLabel, pendingCount, searchEarnings, whenText } from './model';
+import type { EarningsDate, TickerRow } from '../types';
+import { docEarnings, doneTag, isPending, menuLabel, pendingCount, searchEarnings, whenText } from './model';
 import type { EarningsItem } from './types';
 
 const item = (o: Partial<EarningsItem> = {}): EarningsItem => ({
@@ -41,6 +42,27 @@ describe('earnings model', () => {
     expect(tickers('tencent')).toEqual(['0700.HK']);
     expect(tickers('.us')).toEqual(['TSM.US', 'NVDA.US']);
     expect(tickers('苹果')).toEqual([]);
+  });
+  it("writes the doc page's earnings line", () => {
+    const when = (o: Partial<EarningsDate>): EarningsDate => ({
+      date: '2026-11-05', slot: 'after', period: '2026 财年第 3 季度', release_at: '2026-11-05T16:00:00-05:00',
+      day_offset: 6, ...o,
+    });
+    const doc = (o: Partial<TickerRow>) => docEarnings({
+      archived: false, error: null, framework_updated: '2026-10-26', next_earnings: null, last_earnings: null,
+      stale_after_earnings: false, ...o,
+    });
+    expect(doc({ next_earnings: when({}), last_earnings: when({ date: '2026-10-14', day_offset: -16 }) })).toEqual({
+      text: '下次财报 11-05盘后（6 天后） · 上次财报 10-14盘后 · 框架更新 10-26', stale: false,
+    });
+    expect(doc({ next_earnings: when({ day_offset: 1, slot: 'before' }) })?.text).toBe('下次财报 明天盘前 · 框架更新 10-26');
+    expect(doc({ last_earnings: when({ day_offset: 0 }), stale_after_earnings: true })).toEqual({
+      text: '下次财报 未公布 · 上次财报 今天盘后 · 框架更新 10-26', stale: true,
+    });
+    expect(doc({ archived: true, next_earnings: when({}) })).toBeNull(); // the calendar skips archived tickers
+    expect(doc({ error: 'bad header' })).toBeNull();
+    // A phone copy saved before the server sent these fields: say nothing rather than 未公布.
+    expect(doc({ next_earnings: undefined, last_earnings: undefined, stale_after_earnings: undefined })).toBeNull();
   });
   it('tags handled rows', () => {
     expect(doneTag(item({ researched: true, ignored: true }))).toBe('已调研');

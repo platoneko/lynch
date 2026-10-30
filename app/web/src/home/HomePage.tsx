@@ -65,6 +65,7 @@ export function HomePage({ catalog, filter, onFilter, onOpen, onOpenAxis,
   const rows = applyFilter(catalog.tickers, filter, zoneOrder);
   const total = catalog.tickers.filter((r) => inArchiveScope(r, filter)).length;
   const archivedCount = catalog.tickers.filter((r) => r.archived).length;
+  const staleCount = catalog.tickers.filter((r) => inArchiveScope(r, filter) && r.stale_after_earnings).length;
   const asOf = latestAsOf(catalog.tickers);
   const toggle = (list: string[], id: string) => (list.includes(id) ? list.filter((x) => x !== id) : [...list, id]);
   const axes = new Map(catalog.axes.map((a) => [a.name, a]));
@@ -140,6 +141,10 @@ export function HomePage({ catalog, filter, onFilter, onOpen, onOpenAxis,
                 {m.label}
               </button>
             ))}
+            <button className={`chip ${filter.staleOnly ? 'chip-on' : ''}`}
+              onClick={() => onFilter({ ...filter, staleOnly: !filter.staleOnly })}>
+              财报后未更新{staleCount > 0 ? `（${staleCount}）` : ''}
+            </button>
           </div>
           <select value={filter.sort} onChange={(e) => onFilter({ ...filter, sort: e.target.value as SortKey })}>
             {SORTS.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}

@@ -104,6 +104,19 @@ def test_earnings_lists_pool_tickers(repo, tmp_path, quotes):
     assert [(i["ticker"], i["status"]) for i in body["items"]] == [("AAA.US", "released")]
 
 
+def test_tickers_carry_earnings_dates_for_the_active_pool(repo, tmp_path, quotes):
+    c = client(repo, tmp_path, quotes)
+    c.get("/api/earnings")  # the earnings page fills the calendar; the list only reads it
+    rows = {r["ticker"]: r for r in c.get("/api/tickers").json()["tickers"]}
+    # AAA's framework says 更新 2026-09-21, the release's own Beijing day, and tmp_path is no git repo: unknown.
+    assert rows["AAA.US"]["last_earnings"]["date"] == "2026-09-21" and rows["AAA.US"]["stale_after_earnings"] is True
+    assert c.get("/api/earnings").json()["items"][0]["researched"] is False
+    assert (rows["BBB.US"]["last_earnings"], rows["BBB.US"]["next_earnings"]) == (None, None)
+    c.post("/api/frameworks/AAA.US/archive", json={})
+    row = {r["ticker"]: r for r in c.get("/api/tickers").json()["tickers"]}["AAA.US"]
+    assert (row["last_earnings"], row["stale_after_earnings"]) == (None, False)
+
+
 def test_earnings_skip_archived_tickers(repo, tmp_path, quotes):
     seen: list[list[str]] = []
 
