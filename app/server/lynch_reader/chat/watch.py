@@ -7,6 +7,7 @@ A 讨论 chat that advises waiting ends its reply with a lynch-watch block (the 
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from collections.abc import Callable
@@ -17,6 +18,8 @@ from pathlib import Path
 from lynch_reader.catalog import REPO_ROOT
 from lynch_reader.chat.candidates import TICKER
 from lynch_reader.daily_cache import BJT, write_json
+
+log = logging.getLogger(__name__)
 
 BLOCK = re.compile(r"```lynch-watch[^\n]*\n(.*?)```", re.S)
 DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -97,7 +100,8 @@ class WatchStore:
 
     def snapshot(self, chat_starts: list[tuple[str, float]]) -> list[dict]:
         """The `GET /api/watch` items, soonest first. A card is due from its earliest wait's day (Beijing), and
-        researched once a 讨论 chat on its ticker starts on or after that day."""
+        researched once a 讨论 chat on its ticker starts on or after that day and after the card was saved (the chat
+        that saved it does not count)."""
         today = datetime.fromtimestamp(self._wall(), BJT).date().isoformat()
         items = []
         for row in self._read().values():
@@ -112,7 +116,17 @@ class WatchStore:
     def _read(self) -> dict[str, dict]:
         if not self._path.exists():
             return {}
-        return {r["ticker"]: r for r in json.loads(self._path.read_text(encoding="utf-8"))}
+        rows = {}
+        for row in json.loads(self._path.read_text(encoding="utf-8")):
+            # A hand-edited row must not take the whole list down, nor its × with it.
+            card = _card(row)
+            stamped = isinstance(row, dict) and isinstance(row.get("saved_at"), (int, float)) \
+                and isinstance(row.get("conv_id"), str)
+            if card is None or not stamped:
+                log.warning("skipping malformed watch row: %r", row)
+                continue
+            rows[card["ticker"]] = {**card, "saved_at": row["saved_at"], "conv_id": row["conv_id"]}
+        return rows
 
     def _write(self, rows: dict[str, dict]) -> None:
         write_json(self._path, sorted(rows.values(), key=lambda r: r["ticker"]))

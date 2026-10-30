@@ -33,7 +33,7 @@ export function WatchPage({ list, error, label, onBack, onResearch, onRemove, on
     <AlertRow key={it.ticker} title={label(it.ticker)} sub={rowSub(it)} done={it.researched ? '已调研' : null}
       pending canRestore={false}
       onOpen={() => onOpenDoc(it.ticker)} onResearch={() => research(it)}
-      onIgnore={() => remove(it)} onRestore={() => {}} />
+      onIgnore={() => remove(it)} onRestore={() => {}} dismissLabel="移出" />
   );
 
   return (

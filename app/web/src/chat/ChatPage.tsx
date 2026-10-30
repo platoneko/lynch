@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { renderFragment, type LinkTargets } from '../doc/buildDoc';
 import { Menu } from '../Menu';
 import { answerApproval, createChat, editMessage, fetchCandidates, interruptChat, openChatEvents, renameChat, sendMessage } from './api';
@@ -126,11 +126,13 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
     );
   }, [id, discover]);
 
-  const tickerChat = conv?.kind === 'ticker';
-  const loadWatch = () => fetchWatch().then(setWatchList, () => setWatchList({ items: [] })); // still show the cards
+  // Any chat but discover may show a watch card; only a 讨论 chat on the card's own ticker can save it.
+  const watchChat = conv !== undefined && conv.kind !== 'discover';
+  // A failed read keeps the list it had (none yet: still show the cards).
+  const loadWatch = useCallback(() => fetchWatch().then(setWatchList, () => setWatchList((w) => w ?? { items: [] })), []);
   useEffect(() => {
-    if (id !== null && tickerChat) loadWatch();
-  }, [id, tickerChat]);
+    if (id !== null && watchChat) loadWatch();
+  }, [id, watchChat, loadWatch]);
 
   useEffect(() => {
     if (id === null) return;
@@ -332,14 +334,15 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
                 )}
               </div>
             )}
-            {it.kind === 'text' && <div className="msg msg-agent md" dangerouslySetInnerHTML={{ __html: html.get(it.key)?.html ?? '' }} />}
+            {it.kind === 'text' && it.text && <div className="msg msg-agent md" dangerouslySetInnerHTML={{ __html: html.get(it.key)?.html ?? '' }} />}
             {it.kind === 'text' && it.candidates && it.candidates.length > 0 && id !== null && savedTickers && (
               <CandidateCards convId={id} itemKey={it.key} candidates={it.candidates} dropped={it.candidates_dropped ?? 0}
                 hasFramework={(t) => targets.pool.has(t)} saved={savedTickers}
                 onSaved={(ts) => setSavedTickers((s) => new Set([...(s ?? []), ...ts]))} />
             )}
-            {it.kind === 'text' && it.watch && id !== null && tickerChat && watchList && (
+            {it.kind === 'text' && it.watch && id !== null && watchList && (
               <WatchCardView convId={id} itemKey={it.key} card={it.watch} onSaved={loadWatch}
+                canSave={conv?.kind === 'ticker' && it.watch.ticker === conv.ticker}
                 saved={watchList.items.find((w) => w.ticker === it.watch?.ticker) ?? null} />
             )}
             {it.kind === 'tool' && showTools && (

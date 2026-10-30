@@ -88,3 +88,21 @@ def test_only_a_ticker_chat_saves_a_card_on_its_own_ticker(tmp_path):
         return own, rows
     own, rows = asyncio.run(main())
     assert [(r["ticker"], r["conv_id"]) for r in rows] == [("SOFI.US", own.id)]
+
+
+def test_a_malformed_row_is_skipped_not_fatal(tmp_path):
+    path = tmp_path / "watch.json"
+    good = {**parse_watch(block(card())).card, "saved_at": 1.0, "conv_id": "c1"}
+    path.write_text(json.dumps([{"ticker": "MSFT.US"}, {**good, "ticker": "AAPL.US", "waits": []}, "x", good]))
+    store = WatchStore(path, wall=lambda: bjt("2026-10-30"))
+    assert [it["ticker"] for it in store.snapshot([])] == ["SOFI.US"]
+    assert store.remove("SOFI.US") and store.snapshot([]) == []
+
+
+def test_the_chat_that_saved_a_due_card_does_not_count_as_research(tmp_path):
+    store = WatchStore(tmp_path / "watch.json", wall=lambda: bjt("2026-11-08", 10))
+    store.save("c1", parse_watch(block(card())).card)  # due since 11-07
+    [it] = store.snapshot([("SOFI.US", bjt("2026-11-08", 9))])
+    assert (it["due"], it["researched"]) == (True, False)
+    [it] = store.snapshot([("SOFI.US", bjt("2026-11-08", 11))])
+    assert it["researched"]
