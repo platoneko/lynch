@@ -106,3 +106,10 @@ def test_the_chat_that_saved_a_due_card_does_not_count_as_research(tmp_path):
     assert (it["due"], it["researched"]) == (True, False)
     [it] = store.snapshot([("SOFI.US", bjt("2026-11-08", 11))])
     assert it["researched"]
+
+
+def test_an_unreadable_file_reads_as_empty(tmp_path):
+    path = tmp_path / "watch.json"
+    for text in ("", "{oops", "null", "3"):
+        path.write_text(text)
+        assert WatchStore(path).snapshot([]) == []

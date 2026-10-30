@@ -1,4 +1,4 @@
-/** One alert row, shared by the earnings and anomaly pages: open the doc, research, dismiss or restore. */
+/** One alert row, shared by the earnings, anomaly and watch pages: open the doc, research, dismiss or restore. */
 export function AlertRow({ title, sub, done, pending, canRestore, onOpen, onResearch, onIgnore, onRestore, dismissLabel = '忽略' }: {
   title: string;
   sub: string;

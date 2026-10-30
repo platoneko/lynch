@@ -79,7 +79,8 @@ def _wait(w: object) -> dict | None:
 class WatchStore:
     """output/watch/watch.json, one card per ticker.
 
-    The server is the only writer and calls it from async handlers on one event loop, so no lock.
+    The server is the only writer and calls it from async handlers on one event loop, so no lock. A row that fails
+    the card format (a hand edit) is skipped on read, so the next save or remove drops it from the file.
     """
 
     def __init__(self, path: Path, wall: Callable[[], float] = time.time) -> None:
@@ -116,8 +117,13 @@ class WatchStore:
     def _read(self) -> dict[str, dict]:
         if not self._path.exists():
             return {}
+        try:
+            raw = json.loads(self._path.read_text(encoding="utf-8"))
+        except ValueError:
+            log.warning("unreadable watch list %s: read as empty", self._path)
+            return {}
         rows = {}
-        for row in json.loads(self._path.read_text(encoding="utf-8")):
+        for row in raw if isinstance(raw, list) else []:
             # A hand-edited row must not take the whole list down, nor its × with it.
             card = _card(row)
             stamped = isinstance(row, dict) and isinstance(row.get("saved_at"), (int, float)) \

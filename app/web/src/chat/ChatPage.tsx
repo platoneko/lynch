@@ -67,7 +67,7 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
   const [lookbackDays, setLookbackDays] = useState(0); // discover: how many days back, picked on the blank page
   // discover: tickers in the candidate list; null until loaded, so the cards' first ticks can skip them
   const [savedTickers, setSavedTickers] = useState<ReadonlySet<string> | null>(null);
-  // 讨论: the watch list, so a card shows whether it is saved or would replace the ticker's card; null until loaded
+  // the watch list, so a card shows whether it is saved or would replace the ticker's card; null until loaded
   const [watchList, setWatchList] = useState<WatchList | null>(null);
   const [stream, setStream] = useState(0); // bumping it reopens the event stream (after an edit)
   const [answering, setAnswering] = useState<ReadonlySet<string>>(new Set()); // approvals whose answer is in flight
@@ -126,13 +126,13 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
     );
   }, [id, discover]);
 
-  // Any chat but discover may show a watch card; only a 讨论 chat on the card's own ticker can save it.
-  const watchChat = conv !== undefined && conv.kind !== 'discover';
-  // A failed read keeps the list it had (none yet: still show the cards).
-  const loadWatch = useCallback(() => fetchWatch().then(setWatchList, () => setWatchList((w) => w ?? { items: [] })), []);
+  // Read once a reply carries a card. A failed read keeps the list it had; with none, cards show but cannot be
+  // saved, since saving blind could replace the ticker's card unasked.
+  const hasWatchCard = view?.items.some((it) => it.kind === 'text' && it.watch) ?? false;
+  const loadWatch = useCallback(() => fetchWatch().then(setWatchList, () => {}), []);
   useEffect(() => {
-    if (id !== null && watchChat) loadWatch();
-  }, [id, watchChat, loadWatch]);
+    if (id !== null && hasWatchCard) loadWatch();
+  }, [id, hasWatchCard, loadWatch]);
 
   useEffect(() => {
     if (id === null) return;
@@ -340,10 +340,11 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
                 hasFramework={(t) => targets.pool.has(t)} saved={savedTickers}
                 onSaved={(ts) => setSavedTickers((s) => new Set([...(s ?? []), ...ts]))} />
             )}
-            {it.kind === 'text' && it.watch && id !== null && watchList && (
-              <WatchCardView convId={id} itemKey={it.key} card={it.watch} onSaved={loadWatch}
-                canSave={conv?.kind === 'ticker' && it.watch.ticker === conv.ticker}
-                saved={watchList.items.find((w) => w.ticker === it.watch?.ticker) ?? null} />
+            {it.kind === 'text' && it.watch && id !== null && (
+              // Remounted once the list arrives, so the first tick is judged against it.
+              <WatchCardView key={watchList ? 'known' : 'unknown'} convId={id} itemKey={it.key} card={it.watch}
+                onSaved={loadWatch} canSave={watchList !== null && conv?.kind === 'ticker' && it.watch.ticker === conv.ticker}
+                saved={watchList?.items.find((w) => w.ticker === it.watch?.ticker) ?? null} />
             )}
             {it.kind === 'tool' && showTools && (
               <details className={`tool ${it.denied ? 'tool-denied' : ''}`}>
