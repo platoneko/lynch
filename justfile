@@ -277,8 +277,10 @@ app-install:
     mkdir -p _local/tmp "$(dirname "{{app_unit_file}}")"
     repo={{quote(justfile_directory())}}
     # The unit does not read the shell rc files: snapshot the variables the server and its
-    # claude / grok / longbridge children need from the shell running this recipe.
-    env_lines=$(env | grep -E '^(PATH|HOME|https?_proxy|HTTPS?_PROXY|all_proxy|ALL_PROXY|no_proxy|NO_PROXY|LONGBRIDGE_[A-Z_]*|GROK_[A-Z_]*|LYNCH_[A-Z_]*|FEISHU_[A-Z_]*)=' \
+    # claude / grok / opencode / longbridge children need from the shell running this recipe.
+    # opencode's providers name their keys in ~/.config/opencode/opencode.json as {env:NAME}
+    # (0g → ZG_API_KEY, MiMo → MIMO_API_KEY); add new ones here and re-run this recipe.
+    env_lines=$(env | grep -E '^(PATH|HOME|https?_proxy|HTTPS?_PROXY|all_proxy|ALL_PROXY|no_proxy|NO_PROXY|LONGBRIDGE_[A-Z_]*|GROK_[A-Z_]*|LYNCH_[A-Z_]*|FEISHU_[A-Z_]*|ZG_API_KEY|MIMO_API_KEY)=' \
         | sed -E 's/^(.*)$/Environment="\1"/')
     cat >"{{app_unit_file}}" <<EOF
     [Unit]
