@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from eval.lib.frameworks import list_framework_paths
+from eval.lib.frameworks import list_framework_paths, load_framework
 from eval.lib.zones import zone_of
 from eval.lib.price import SessionQuote
 from lynch_reader import catalog as catalog_module
@@ -462,6 +462,12 @@ def test_no_option_band_is_null(repo, quotes, outputs):
 
 @needs_content
 def test_real_frameworks_options(quotes):
+    """The book's bands survive the parse; what each is worth is the book's business, not the test's.
+
+    The amounts move whenever a framework is recomputed, and that ticker's own eval script is what
+    reconciles them against the document (`just check`); a copy here would only be a second number
+    to keep in sync, and when it reds it cannot say whether the book moved or the code broke.
+    """
     rows = rows_by_ticker(FRAMEWORKS_DIR, quotes)
     with_option = {t: r["option"] for t, r in rows.items() if r["option"] is not None}
     assert len(with_option) >= 20
@@ -470,13 +476,14 @@ def test_real_frameworks_options(quotes):
         # Every credited band today keeps the strict ladder: no ties.
         assert option["L"] < option["M"] < option["H"], ticker
         assert option["line"] and option["line"].startswith("\\(V_{opt}\\)"), ticker
-    # A V_opt = 0 disclosure line is no band.
-    assert rows["0700.HK"]["option"] is None
-    cohr = with_option["COHR.US"]
-    assert cohr["v_opt"] == 18.17
-    assert [round(cohr[k], 2) for k in "LMH"] == [77.82, 197.51, 331.15]
-    assert [r["id"] for r in cohr["rows"]] == ["A12"]
-    assert cohr["rows"][0]["text"].startswith("**SiC 子公司不进底牌")
+        # The rows the line cites are the option's background in the app: a citation the §2 table
+        # does not hold would silently drop out of it.
+        cited = set(catalog_module._ASSUMPTION_ID.findall(option["line"]))
+        assert {r["id"] for r in option["rows"]} == cited, ticker
+    # A V_opt = 0 line is a disclosure, not a band (test_no_option_band_is_null owns the rule).
+    zero = [p.stem for p in list_framework_paths(FRAMEWORKS_DIR) if load_framework(p).v_opt == 0]
+    for ticker in zero:
+        assert rows[ticker]["option"] is None, ticker
 
 
 def ny(day: int, hh: int, mm: int = 0) -> float:
