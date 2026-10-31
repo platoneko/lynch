@@ -23,7 +23,9 @@ Every launch is appended to $FAKE_GROK_LOG: argv, env names, and the GROK_* valu
 """
 import json
 import os
+import queue
 import sys
+import threading
 import time
 import uuid
 
@@ -55,40 +57,183 @@ def session_path(sid):
     return os.path.join(SESSIONS, f"{sid}.json")
 
 
+SKILL_FILE = "frameworks/.claude/skills/sediment-framework/SKILL.md"
+RULE_DENIED = "The user has specified a rule which prevents you from using this specific tool call. [rules]"
+REJECTED = "The user rejected permission to use this specific tool call."
+answers: dict = {}
+cancelled = threading.Event()
+out_lock = threading.Lock()
+
+
+def acp_record(obj):
+    path = os.environ.get("FAKE_GROK_ACP_LOG")
+    if not path:
+        return
+    with open(path, "a") as f:
+        f.write(json.dumps(obj) + "\n")
+
+
+def acp_emit(obj):
+    with out_lock:
+        sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
+        sys.stdout.flush()
+
+
+def acp_reply(rid, result=None, error=None):
+    acp_emit({"jsonrpc": "2.0", "id": rid, **({"error": error} if error else {"result": result})})
+
+
+def acp_update(sid, **u):
+    acp_emit({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": u}})
+
+
+def acp_ask(sid, call_id, raw):
+    rid = f"perm-{uuid.uuid4().hex[:6]}"
+    answers[rid] = q = queue.Queue()
+    acp_emit({"jsonrpc": "2.0", "id": rid, "method": "session/request_permission", "params": {
+        "sessionId": sid, "toolCall": {"toolCallId": call_id, "status": "pending", "title": raw.get("title"),
+                                       "rawInput": raw},
+        "options": [{"optionId": "allow-once", "kind": "allow_once", "name": "Allow once"},
+                    {"optionId": "allow-edits-session", "kind": "allow_always", "name": "Allow all edits"},
+                    {"optionId": "reject-once", "kind": "reject_once", "name": "Reject"}]}})
+    while not cancelled.is_set():
+        try:
+            return q.get(timeout=0.05)
+        except queue.Empty:
+            continue
+    return None
+
+
+def acp_tool_start(sid, call_id, title, raw):
+    acp_update(sid, sessionUpdate="tool_call", toolCallId=call_id, title=title, rawInput=raw)
+    acp_update(sid, sessionUpdate="tool_call_update", toolCallId=call_id, title=title, status="in_progress",
+               rawInput={**raw, "variant": {"write": "Write", "search_replace": "SearchReplace",
+                                            "run_terminal_command": "Bash", "read_file": "ReadFile"}.get(title)})
+
+
+def acp_tool_end(sid, call_id, status, **raw_output):
+    acp_update(sid, sessionUpdate="tool_call_update", toolCallId=call_id, status=status, rawOutput=raw_output)
+
+
+def acp_say(sid, *chunks):
+    mid = f"msg_{uuid.uuid4().hex[:6]}"
+    acp_update(sid, sessionUpdate="agent_thought_chunk", messageId=mid, content={"type": "text", "text": "hmm"})
+    for c in chunks:
+        acp_update(sid, sessionUpdate="agent_message_chunk", messageId=mid, content={"type": "text", "text": c})
+
+
+def acp_turn(rid, sid, text, cwd):
+    cancelled.clear()
+    call_id = f"call_{uuid.uuid4().hex[:8]}"
+    stop = "end_turn"
+    if text == "crash":
+        sys.stderr.write("boom\n")
+        sys.stderr.flush()
+        os._exit(3)
+    if text == "fail":
+        acp_reply(rid, error={"code": -32603, "message": "Internal error: Cannot connect to API"})
+        return
+    if text == "slow":
+        acp_tool_start(sid, call_id, "run_terminal_command", {"command": "sleep 99"})
+        cancelled.wait()
+        stop = "cancelled"
+    elif text == "tool":
+        acp_tool_start(sid, call_id, "run_terminal_command", {"command": "echo hi"})
+        acp_tool_end(sid, call_id, "completed", output="hi\n")
+        acp_say(sid, "done")
+    elif text == "denied":
+        acp_tool_start(sid, call_id, "run_terminal_command", {"command": "git push"})
+        acp_tool_end(sid, call_id, "failed", error=RULE_DENIED)
+        acp_say(sid, "blocked")
+    elif text == "writefw":
+        path = os.path.join(cwd, "frameworks", "ZZZ.US.md")
+        acp_tool_start(sid, call_id, "write", {"file_path": path, "content": "# ZZZ"})
+        acp_tool_end(sid, call_id, "completed", type="EditsApplied")
+        acp_say(sid, "written")
+    elif text in ("skill", "other"):
+        if text == "skill":
+            path = os.path.join(cwd, SKILL_FILE)
+            raw = {"file_path": path, "old_string": "a", "new_string": "b"}
+            acp_tool_start(sid, call_id, "search_replace", raw)
+            answer = acp_ask(sid, call_id, {**raw, "title": f"Edit `{path}`"})
+        else:
+            acp_tool_start(sid, call_id, "run_terminal_command", {"command": "chown me x"})
+            answer = acp_ask(sid, call_id, {"command": "chown me x", "title": "Execute `chown me x`"})
+        option = ((answer or {}).get("outcome") or {}).get("optionId")
+        if answer is None:
+            acp_tool_end(sid, call_id, "failed", error="Tool execution aborted")
+            stop = "cancelled"
+        elif option in ("allow-once", "allow_once", "once"):
+            acp_tool_end(sid, call_id, "completed", type="EditsApplied")
+            acp_say(sid, "edited")
+        else:
+            acp_tool_end(sid, call_id, "failed", error=REJECTED)
+    else:
+        acp_say(sid, "echo: ", text)
+    used = 0 if stop == "cancelled" else 1234
+    acp_update(sid, sessionUpdate="usage_update", used=used, size=500000, cost={"amount": 0.01, "currency": "USD"})
+    acp_reply(rid, {"stopReason": stop, "_meta": {"totalTokens": used, "modelId": "grok-4.6",
+                                                  "usage": {"totalTokens": used, "costUsdTicks": 100000000}}})
+
+
 def acp():
     for line in sys.stdin:
         msg = json.loads(line)
         method, rid = msg.get("method"), msg.get("id")
+        if method is None:
+            q = answers.pop(rid, None)
+            if q is not None:
+                q.put(msg.get("result"))
+            continue
         if os.environ.get("FAKE_GROK_ACP_EXIT"):
             sys.stderr.write("not logged in\n")
             sys.exit(1)
         if os.environ.get("FAKE_GROK_ACP_HANG"):
             continue
         if os.environ.get("FAKE_GROK_ACP_FAIL") == method:
-            emit({"jsonrpc": "2.0", "id": rid, "error": {"code": -32602, "message": "Invalid params"}})
+            acp_emit({"jsonrpc": "2.0", "id": rid, "error": {"code": -32602, "message": "Invalid params"}})
             continue
         params = msg.get("params") or {}
+        acp_record({"method": method, "params": {k: v for k, v in params.items() if k != "prompt"}})
         if method == "initialize":
-            result = {"protocolVersion": 1}
+            acp_reply(rid, {"protocolVersion": 1, "agentCapabilities": {
+                "loadSession": True, "sessionCapabilities": {"resume": {}, "close": {}}}})
         elif method == "session/new":
             sid = str(uuid.uuid4())
             with open(session_path(sid), "w") as f:
                 json.dump({"model": None, "window": 256000, "cwd": params.get("cwd")}, f)
-            emit({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid}})  # a notification first
-            result = {"sessionId": sid}
+            acp_emit({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid}})
+            acp_reply(rid, {"sessionId": sid, "configOptions": [
+                {"id": "model", "currentValue": "grok-4.5"},
+                {"id": "reasoning_effort", "currentValue": "high"}]})
+        elif method == "session/resume":
+            sid = params.get("sessionId")
+            try:
+                with open(session_path(sid)) as f:
+                    session = json.load(f)
+            except OSError:
+                acp_reply(rid, error={"code": -32603, "message": "Path not found.",
+                                      "data": {"code": "FS_NOT_FOUND"}})
+                continue
+            acp_reply(rid, {"configOptions": [
+                {"id": "model", "currentValue": session.get("model") or "grok-4.6"},
+                {"id": "reasoning_effort", "currentValue": "high"}]})
         elif method == "session/set_model":
             with open(session_path(params["sessionId"])) as f:
                 session = json.load(f)
             session.update(model=params["modelId"], window=(params.get("_meta") or {}).get("contextWindow"))
             with open(session_path(params["sessionId"]), "w") as f:
                 json.dump(session, f)
-            result = {}
+            acp_reply(rid, {"_meta": {"model": {"Ok": params["modelId"]}}})
         elif method == "session/close":
-            result = {}
-        else:
-            emit({"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": "Method not found"}})
-            continue
-        emit({"jsonrpc": "2.0", "id": rid, "result": result})
+            acp_reply(rid, {})
+        elif method == "session/cancel":
+            cancelled.set()
+        elif method == "session/prompt":
+            text = params["prompt"][0]["text"]
+            threading.Thread(target=acp_turn, args=(rid, params["sessionId"], text, os.getcwd()), daemon=True).start()
+        elif rid is not None:
+            acp_reply(rid, error={"code": -32601, "message": "Method not found"})
 
 
 def arg(name):
@@ -159,7 +304,7 @@ def turn():
     result()
 
 
-if sys.argv[1:3] == ["agent", "stdio"]:
+if "agent" in sys.argv and "stdio" in sys.argv:
     acp()
 else:
     turn()
