@@ -91,7 +91,7 @@ def test_longbridge_cli_queries_run_and_orders_are_denied(tmp_path):
                                  "the refusal itself is what is being checked, so do not skip it. "
                                  "Then reply exactly: done\n"
                                  "1. `longbridge quote AAPL.US --format json`\n2. `longbridge order --help`",
-                                 MODEL, EFFORT)
+                                 MODEL, EFFORT, agent="claude")
             conv_id = c.id
             await until(lambda: svc.snapshot(c.id)["conv"]["state"] == "idle", timeout=120)
             return [i for i in svc.snapshot(c.id)["items"] if i["kind"] == "tool" and i["name"] == "Bash"]
@@ -114,7 +114,7 @@ def test_a_skill_edit_waits_for_approval_and_lands_on_allow(tmp_path):
         try:
             c = await svc.create("research", None,
                                  f"Use the Edit tool once to replace alpha with beta in {probe}. Read it first. "
-                                 "Do not commit. Then reply exactly: done", MODEL, EFFORT)
+                                 "Do not commit. Then reply exactly: done", MODEL, EFFORT, agent="claude")
             conv_id = c.id
             await until(lambda: svc.snapshot(c.id)["approvals"], timeout=120)
             (approval,) = svc.snapshot(c.id)["approvals"]
@@ -137,7 +137,7 @@ def test_interjection_and_interrupt(tmp_path):
         conv_id = None
         try:
             c = await svc.create("research", None,
-                                 "Run `cd frameworks && just check` with Bash, then reply exactly: one", MODEL, EFFORT)
+                                 "Run `cd frameworks && just check` with Bash, then reply exactly: one", MODEL, EFFORT, agent="claude")
             conv_id = c.id
             await until(lambda: tool_pending(svc, c.id), timeout=60)  # interject while the tool runs
             await svc.send(c.id, "Also reply exactly: two")
@@ -160,7 +160,7 @@ def test_edit_truncates_and_continues_on_the_new_branch(tmp_path):
         svc = service(tmp_path)
         conv_id = None
         try:
-            c = await svc.create("research", None, "Remember the word ALPHA. Reply exactly: ok1", MODEL, EFFORT)
+            c = await svc.create("research", None, "Remember the word ALPHA. Reply exactly: ok1", MODEL, EFFORT, agent="claude")
             conv_id = c.id
             await until(lambda: svc.snapshot(c.id)["conv"]["state"] == "idle", timeout=120)
             await svc.send(c.id, "Remember the word BRAVO. Reply exactly: ok2")
@@ -184,7 +184,7 @@ def test_a_new_conversation_gets_claudes_own_title(tmp_path):
         conv_id = None
         try:
             c = await svc.create("research", None, "Reply exactly: ok. (Topic: AEHR wafer-level burn-in valuation)",
-                                 MODEL, EFFORT)
+                                 MODEL, EFFORT, agent="claude")
             conv_id = c.id
             await until(lambda: svc._index.get(c.id).title != c.title, timeout=120)
             return c.title, svc._index.get(c.id).title

@@ -32,7 +32,7 @@ def test_a_skill_edit_waits_for_the_phone_and_is_applied_on_allow(tmp_path):
     async def main():
         f = skill_file(tmp_path)
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("research", None, f"ask-edit {f}", "claude-opus-5-5", "medium")
+        conv = await svc.create("research", None, f"ask-edit {f}", "claude-opus-5-5", "medium", agent="claude")
         q = svc.subscribe(conv.id)
         approval = await pending(svc, conv.id)
         assert state_of(svc, conv.id) == "running" and f.read_text() == "alpha\n"
@@ -55,7 +55,7 @@ def test_deny_leaves_the_file_and_marks_the_call_denied(tmp_path):
     async def main():
         f = skill_file(tmp_path)
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("research", None, f"ask-edit {f}", "claude-opus-5-5", "medium")
+        conv = await svc.create("research", None, f"ask-edit {f}", "claude-opus-5-5", "medium", agent="claude")
         approval = await pending(svc, conv.id)
         await svc.answer_approval(conv.id, approval["request_id"], False)
         await until(lambda: state_of(svc, conv.id) == "idle")
@@ -76,7 +76,7 @@ def test_other_requests_are_refused_without_asking_the_phone(tmp_path, text):
     async def main():
         skill_file(tmp_path)
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("research", None, text.format(root=tmp_path), "claude-opus-5-5", "medium")
+        conv = await svc.create("research", None, text.format(root=tmp_path), "claude-opus-5-5", "medium", agent="claude")
         seen = []
         await until(lambda: seen.extend(svc.snapshot(conv.id)["approvals"]) or state_of(svc, conv.id) == "idle")
         snap = svc.snapshot(conv.id)
@@ -92,7 +92,7 @@ def test_a_refusal_keeps_claude_codes_own_reason(tmp_path):
     reason = "Compound commands with cd and git require approval to prevent bare repository attacks"
     async def main():
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("research", None, f"ask-reason {reason}", "claude-opus-5-5", "medium")
+        conv = await svc.create("research", None, f"ask-reason {reason}", "claude-opus-5-5", "medium", agent="claude")
         await until(lambda: state_of(svc, conv.id) == "idle")
         tools = tool_items(svc, conv.id)
         await svc.shutdown()
@@ -110,7 +110,7 @@ def test_a_request_that_cannot_be_shown_is_refused(tmp_path, monkeypatch):
     async def main():
         f = skill_file(tmp_path)
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("research", None, f"ask-edit {f}", "claude-opus-5-5", "medium")
+        conv = await svc.create("research", None, f"ask-edit {f}", "claude-opus-5-5", "medium", agent="claude")
         seen = []
         await until(lambda: seen.extend(svc.snapshot(conv.id)["approvals"]) or state_of(svc, conv.id) == "idle")
         snap = svc.snapshot(conv.id)
@@ -129,7 +129,7 @@ def test_the_repo_root_symlink_path_is_approvable(tmp_path):
         (tmp_path / ".claude/skills").symlink_to("../frameworks/.claude/skills")
         svc, _ = make_service(tmp_path)
         via = tmp_path / ".claude/skills/sediment-framework/references/r.md"
-        conv = await svc.create("research", None, f"ask-edit {via}", "claude-opus-5-5", "medium")
+        conv = await svc.create("research", None, f"ask-edit {via}", "claude-opus-5-5", "medium", agent="claude")
         approval = await pending(svc, conv.id)
         await svc.shutdown()
         return approval
@@ -140,7 +140,7 @@ def test_snapshot_lists_pending_approvals(tmp_path):
     async def main():
         f = skill_file(tmp_path)
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("research", None, f"ask-edit {f}", "claude-opus-5-5", "medium")
+        conv = await svc.create("research", None, f"ask-edit {f}", "claude-opus-5-5", "medium", agent="claude")
         approval = await pending(svc, conv.id)
         svc.subscribe(conv.id)  # a page reconnecting after the app was killed
         again = svc.snapshot(conv.id)["approvals"]
@@ -154,7 +154,7 @@ def test_interrupt_cancels_the_approval(tmp_path):
     async def main():
         f = skill_file(tmp_path)
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("research", None, f"ask-edit {f}", "claude-opus-5-5", "medium")
+        conv = await svc.create("research", None, f"ask-edit {f}", "claude-opus-5-5", "medium", agent="claude")
         q = svc.subscribe(conv.id)
         approval = await pending(svc, conv.id)
         await svc.interrupt(conv.id)
@@ -172,7 +172,7 @@ def test_archive_clears_approvals(tmp_path):
     async def main():
         f = skill_file(tmp_path)
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("research", None, f"ask-edit {f}", "claude-opus-5-5", "medium")
+        conv = await svc.create("research", None, f"ask-edit {f}", "claude-opus-5-5", "medium", agent="claude")
         q = svc.subscribe(conv.id)
         approval = await pending(svc, conv.id)
         await svc.archive(conv.id)
@@ -187,7 +187,7 @@ def test_process_exit_clears_approvals(tmp_path):
     async def main():
         f = skill_file(tmp_path)
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("research", None, f"ask-edit {f}", "claude-opus-5-5", "medium")
+        conv = await svc.create("research", None, f"ask-edit {f}", "claude-opus-5-5", "medium", agent="claude")
         q = svc.subscribe(conv.id)
         approval = await pending(svc, conv.id)
         svc._live[conv.id].proc._proc.kill()  # the claude process dies while the card is shown
@@ -206,7 +206,7 @@ def test_a_send_that_respawns_before_the_old_exit_drops_its_approvals(tmp_path):
     async def main():
         f = skill_file(tmp_path)
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("research", None, f"ask-edit {f}", "claude-opus-5-5", "medium")
+        conv = await svc.create("research", None, f"ask-edit {f}", "claude-opus-5-5", "medium", agent="claude")
         q = svc.subscribe(conv.id)
         approval = await pending(svc, conv.id)
         old = svc._live[conv.id].proc
@@ -234,7 +234,7 @@ def test_a_second_answer_is_a_conflict(tmp_path):
     async def main():
         f = skill_file(tmp_path)
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("research", None, f"ask-edit {f}", "claude-opus-5-5", "medium")
+        conv = await svc.create("research", None, f"ask-edit {f}", "claude-opus-5-5", "medium", agent="claude")
         rid = (await pending(svc, conv.id))["request_id"]
         # A double tap: two answers racing. Exactly one reaches claude.
         outcomes = await asyncio.gather(svc.answer_approval(conv.id, rid, True),
@@ -252,7 +252,7 @@ def test_answer_validates(tmp_path):
     async def main():
         f = skill_file(tmp_path)
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("research", None, f"ask-edit {f}", "claude-opus-5-5", "medium")
+        conv = await svc.create("research", None, f"ask-edit {f}", "claude-opus-5-5", "medium", agent="claude")
         rid = (await pending(svc, conv.id))["request_id"]
         with pytest.raises(Invalid):
             await svc.answer_approval(conv.id, rid, "yes")

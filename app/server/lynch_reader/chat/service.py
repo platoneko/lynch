@@ -20,8 +20,11 @@ from lynch_reader.chat.candidates import CandidateStore
 from lynch_reader.chat.watch import WatchStore
 from lynch_reader.chat.config import (CHAT_EFFORTS, CHAT_MODELS, DEFAULT_EFFORT, DEFAULT_MODEL, IDLE_TIMEOUT_S,
                                       MAX_PROCESSES, LaunchConfig, launch_argv, launch_env)
-from lynch_reader.chat.grok import (DEFAULT_GROK_MODEL, DEFAULT_WINDOW, MAX_TURNS, GrokConfig, GrokSetupError,
-                                    discover_prompt, grok_argv, grok_env, grok_models, new_session, prepare_workdir)
+from lynch_reader.chat.grok import (DEFAULT_GROK_MODEL, DEFAULT_RESEARCH_EFFORT, DEFAULT_RESEARCH_MODEL, DEFAULT_WINDOW,
+                                    MAX_TURNS, GrokConfig, GrokSetupError, discover_prompt, grok_argv, grok_env,
+                                    grok_models, new_session, prepare_workdir, research_env, write_research_home,
+                                    write_research_rules)
+from lynch_reader.chat.grok_link import GrokLink
 from lynch_reader.chat.app_log import AppLog
 from lynch_reader.chat.index import ChatIndex, Conversation, make_title
 from lynch_reader.chat.items import (compact_item, context_tokens, framework_ticker, message_items, notice_item,
@@ -126,21 +129,31 @@ class ChatService:
     # ---- queries
 
     def options(self) -> dict:
-        models = grok_models(self._grok.home) if self._grok else []
-        default = next((m for m in models if m.id == DEFAULT_GROK_MODEL), models[0] if models else None)
-        discover = {"models": [m.public() for m in models], "default_model": default.id if default else None,
-                    "default_window": (DEFAULT_WINDOW if default is None or DEFAULT_WINDOW in default.windows
-                                       else default.windows[0]),
-                    "lookback_days": list(LOOKBACK_DAYS), "default_lookback_days": DEFAULT_LOOKBACK_DAYS,
-                    "hint": None if models else "在终端运行 grok models 刷新 Grok 模型清单"}
-        # The top-level models and efforts are Claude Code's, as before agents; a new 研究 / 讨论 chat starts on
-        # Claude Code whatever the last one used (user, 2026-10-18).
+        discover_models = grok_models(self._grok.home) if self._grok else []
+        research_models = grok_models(self._grok.home, search_only=False) if self._grok else []
+        discover = self._grok_block(discover_models, DEFAULT_GROK_MODEL, lookback=True)
+        grok = self._grok_block(research_models, DEFAULT_RESEARCH_MODEL, lookback=False)
         return {"models": [{"id": m, "label": label} for m, label in CHAT_MODELS], "efforts": list(CHAT_EFFORTS),
                 "default_model": DEFAULT_MODEL, "default_effort": DEFAULT_EFFORT, "discover": discover,
-                "agents": [{"id": a, "label": AGENT_LABELS[a]} for a in ("claude", "opencode")],
-                "default_agent": "claude",
+                "agents": [{"id": a, "label": AGENT_LABELS[a]} for a in ("grok", "claude", "opencode")],
+                "default_agent": "grok", "grok": grok,
                 "opencode": {"models": [{"id": m, "label": label} for m, label in OPENCODE_MODELS],
                              "default_model": DEFAULT_OPENCODE_MODEL}}
+
+    def _grok_block(self, models: list, preferred: str, *, lookback: bool) -> dict:
+        default = next((m for m in models if m.id == preferred), models[0] if models else None)
+        window = (DEFAULT_WINDOW if default is None or DEFAULT_WINDOW in default.windows
+                  else default.windows[0])
+        effort = (DEFAULT_RESEARCH_EFFORT if default and DEFAULT_RESEARCH_EFFORT in default.efforts
+                  else (default.default_effort if default else "high"))
+        out = {"models": [m.public() for m in models], "default_model": default.id if default else None,
+               "default_window": window, "default_effort": effort,
+               "hint": None if models else "在终端运行 grok models 刷新 Grok 模型清单"}
+        if lookback:
+            out["lookback_days"] = list(LOOKBACK_DAYS)
+            out["default_lookback_days"] = DEFAULT_LOOKBACK_DAYS
+            out.pop("default_effort", None)  # discover picker has its own effort on each model
+        return out
 
     def list(self) -> dict:
         rows = [self._summary(c) for c in self._index.all() if self._visible(c)]
@@ -188,12 +201,15 @@ class ChatService:
             raise Invalid(f"unknown kind {kind!r}")
         if not text.strip():
             raise Invalid("empty message")
-        # 发现新票 runs only on Grok; 研究 / 讨论 on Claude Code or opencode (Claude Code when unnamed).
-        agent = agent or ("grok" if kind == "discover" else "claude")
-        if agent not in (("grok",) if kind == "discover" else ("claude", "opencode")):
+        # 发现新票 runs only on Grok; 研究 / 讨论 default Grok, Claude Code and opencode still selectable.
+        agent = agent or "grok"
+        allowed = ("grok",) if kind == "discover" else ("grok", "claude", "opencode")
+        if agent not in allowed:
             raise Invalid(f"agent {agent!r} cannot run a {kind} chat")
-        if agent == "grok":
+        if kind == "discover":
             conv = await self._new_discover(text, model, effort, context_window, lookback_days)
+        elif agent == "grok":
+            conv = self._new_research_grok(kind, ticker, text, model, effort, context_window)
         elif agent == "opencode":
             conv = self._new_opencode(kind, ticker, text, model, effort)
         else:
@@ -235,6 +251,25 @@ class ChatService:
                             title=make_title(text), model=model, effort=effort, created_at=now, updated_at=now,
                             agent="opencode")
 
+    def _new_research_grok(self, kind: str, ticker: str | None, text: str, model: str, effort: str,
+                           window: object) -> Conversation:
+        grok = self._require_grok()
+        chosen = next((m for m in grok_models(grok.home, search_only=False) if m.id == model), None)
+        if chosen is None:
+            raise Invalid(f"unknown Grok model {model!r}")
+        if effort not in chosen.efforts:
+            raise Invalid(f"unknown effort {effort!r}")
+        if window is None:
+            window = DEFAULT_WINDOW if DEFAULT_WINDOW in chosen.windows else chosen.windows[0]
+        if type(window) is not int or window not in chosen.windows:
+            raise Invalid(f"unknown context window {window!r}")
+        if kind == "ticker" and not ticker:
+            raise Invalid("a ticker conversation needs a ticker")
+        now = self._wall()
+        return Conversation(id=str(uuid.uuid4()), kind=kind, ticker=ticker if kind == "ticker" else None,
+                            title=make_title(text), model=model, effort=effort, created_at=now, updated_at=now,
+                            context_window=window, agent="grok")
+
     async def _new_discover(self, text: str, model: str, effort: str, window: object, days: object) -> Conversation:
         grok = self._require_grok()
         chosen = next((m for m in grok_models(grok.home) if m.id == model), None)
@@ -267,7 +302,10 @@ class ChatService:
         async with live.lock:
             self._check_not_archived(conv_id, live)
             if conv.agent == "grok":
-                await self._start_grok_turn(conv, live, text)
+                if conv.kind == "discover":
+                    await self._start_grok_turn(conv, live, text)
+                else:
+                    await self._send_research_grok(conv, live, text)
                 return
             if conv.agent == "opencode":
                 await self._send_opencode(conv, live, text)
@@ -283,7 +321,7 @@ class ChatService:
         live = self._live.get(conv_id)
         if not (live and live.proc and live.proc.alive and live.state in BUSY):
             return
-        if conv.agent == "grok":
+        if conv.agent == "grok" and conv.kind == "discover":
             await self._stop_grok_turn(conv_id, live)
             return
         try:
@@ -478,7 +516,7 @@ class ChatService:
         if live.state in BUSY:
             raise Conflict("回答进行中，等这一轮结束或先停止")
         if text.lstrip().startswith(COMPACT_COMMAND):
-            raise Invalid("发现新票对话不支持压缩上下文")
+            raise Invalid("Grok 对话不支持压缩上下文")
         grok = self._require_grok()
         skill = self._discover_skill()  # both read every turn: an edit applies at once
         kol = await self._kol_sources()
@@ -550,7 +588,47 @@ class ChatService:
         live.last_used = self._now()
         self._set_state(conv.id, "idle")
 
-    def _link_events(self, conv_id: str, link: Callable[[], OpencodeLink]) -> LinkEvents:
+    async def _send_research_grok(self, conv: Conversation, live: Live, text: str) -> None:
+        if live.state in BUSY:
+            raise Conflict("回答进行中，等这一轮结束或先停止")
+        if text.lstrip().startswith(COMPACT_COMMAND):
+            raise Invalid("Grok 对话不支持压缩上下文")
+        if live.proc is None or not live.proc.alive:
+            await self._spawn_research_grok(conv)
+        link = live.proc
+        try:
+            await link.prompt(text)
+        except (BrokenPipeError, ConnectionResetError) as e:
+            raise Conflict("Grok 进程已退出，原因见对话里的提示") from e
+        self._index.update(conv.id, updated_at=self._wall())
+        if live.proc is link:
+            live.last_used = self._now()
+            self._set_state(conv.id, "running")
+
+    async def _spawn_research_grok(self, conv: Conversation) -> None:
+        cfg = self._require_grok()
+        await self._make_room()
+        live = self._live.setdefault(conv.id, Live())
+        home = write_research_home(cfg, conv, cfg.home / ".grok")
+        write_research_rules(cfg, conv)
+        env = research_env(self._env, home)
+        link = GrokLink(cfg, conv, env, AppLog(self._transcript(conv.id)),
+                        self._link_events(conv.id, lambda: link), self._launch.repo_root)
+        try:
+            session = await link.start()
+        except GrokSetupError as e:
+            raise Conflict(f"无法启动 Grok：{e}") from e
+        if conv.grok_session != session:
+            conv = self._index.update(conv.id, grok_session=session)
+        if link.session_lost:
+            self._notice(conv.id, "Grok 找不到这个对话原来的会话，已新开一个：它不记得之前的内容")
+        self._clear_approvals(conv.id, live)
+        live.proc = link
+        live.partial = ""
+        live.last_used = self._now()
+        self._set_state(conv.id, "idle")
+
+    def _link_events(self, conv_id: str, link: Callable[[], object]) -> LinkEvents:
         """The link's callbacks, each ignored once the link is no longer the chat's (stopped or replaced)."""
         def current(handler: Callable[..., None]) -> Callable[..., None]:
             def run(*args) -> None:
@@ -595,7 +673,7 @@ class ChatService:
                           on_turn_end=current(on_turn_end),
                           on_exit=lambda expected, err: self._on_exit(conv_id, link(), expected, err))
 
-    async def _answer_link(self, conv_id: str, link: OpencodeLink, request_id: str) -> None:
+    async def _answer_link(self, conv_id: str, link: object, request_id: str) -> None:
         try:
             await link.answer(request_id, False)
         except OSError as e:  # the process died: its exit already told the page
@@ -642,7 +720,8 @@ class ChatService:
         was_busy = live.state in BUSY
         conv = self._index.get(conv_id)
         agent = conv.agent if conv is not None else "claude"
-        expected = expected or (agent == "grok" and live.result_seen)  # grok exits by itself once its turn is done
+        expected = expected or (agent == "grok" and conv is not None and conv.kind == "discover"
+                                and live.result_seen)  # discover grok exits by itself once its turn is done
         live.proc = None
         self._clear_approvals(conv_id, live)
         live.partial = ""
@@ -742,7 +821,7 @@ class ChatService:
         self._clear_approvals(conv_id, live)  # an interrupted turn whose cancel never arrived
         # A discover turn ends when grok exits (`_on_exit`): until then it still writes its session, so a
         # second resume, an eviction or a reap must not start.
-        if conv.agent != "grok":
+        if conv.agent != "grok" or conv.kind != "discover":
             self._set_state(conv_id, "idle")
         self._broadcast(conv_id, "context", self._context(conv_id))
         if "cost_usd" in changes:
