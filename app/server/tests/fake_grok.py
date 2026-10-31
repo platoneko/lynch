@@ -150,9 +150,9 @@ def acp_turn(rid, sid, text, cwd):
         acp_tool_start(sid, call_id, "write", {"file_path": path, "content": "# ZZZ"})
         acp_tool_end(sid, call_id, "completed", type="EditsApplied")
         acp_say(sid, "written")
-    elif text in ("skill", "other"):
-        if text == "skill":
-            path = os.path.join(cwd, SKILL_FILE)
+    elif text in ("skill", "skillrel", "other"):
+        if text in ("skill", "skillrel"):
+            path = SKILL_FILE if text == "skillrel" else os.path.join(cwd, SKILL_FILE)
             raw = {"file_path": path, "old_string": "a", "new_string": "b"}
             acp_tool_start(sid, call_id, "search_replace", raw)
             answer = acp_ask(sid, call_id, {**raw, "title": f"Edit `{path}`"})
@@ -218,6 +218,14 @@ def acp():
             acp_reply(rid, {"configOptions": [
                 {"id": "model", "currentValue": session.get("model") or "grok-4.6"},
                 {"id": "reasoning_effort", "currentValue": "high"}]})
+        elif method == "session/set_config_option":
+            path = session_path(params["sessionId"])
+            with open(path) as f:
+                session = json.load(f)
+            session[params["configId"]] = params["value"]
+            with open(path, "w") as f:
+                json.dump(session, f)
+            acp_reply(rid, {})
         elif method == "session/set_model":
             with open(session_path(params["sessionId"])) as f:
                 session = json.load(f)

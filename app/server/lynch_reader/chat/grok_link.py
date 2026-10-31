@@ -78,6 +78,8 @@ class GrokLink:
             await self._call("session/set_model", {
                 "sessionId": session, "modelId": self._conv.model,
                 "_meta": {"contextWindow": self._conv.context_window or 500_000}})
+            await self._call("session/set_config_option", {
+                "sessionId": session, "configId": "reasoning_effort", "value": self._conv.effort})
             return session
         except Exception as e:
             await self._proc.close()
@@ -163,6 +165,7 @@ class GrokLink:
         tracked = self._tools.get(call_id, {})
         name, tool_input = grok_tool(tracked.get("name") or str(call.get("title") or ""),
                                      tracked.get("input") or call.get("rawInput") or {})
+        tool_input = self._abs_paths(tool_input)
         options = params.get("options") or []
         request_id = str(rpc_id)
         if name == "Agent":  # spawn_subagent: spec allows it; dontAsk still asks because Agent is unrecognized
@@ -213,7 +216,7 @@ class GrokLink:
         if u.get("title"):
             tracked["name"] = u["title"]
         if u.get("rawInput"):
-            tracked["input"] = u["rawInput"]
+            tracked["input"] = self._abs_paths(u["rawInput"])
         status = u.get("status")
         if status in ("completed", "failed"):
             raw = u.get("rawOutput") or {}
@@ -277,6 +280,15 @@ class GrokLink:
             except OSError as e:
                 log.info("grok: reply not sent: %s", e)
         self._spawn(send())
+
+    def _abs_paths(self, tool_input: dict) -> dict:
+        """Grok file tools may send a path relative to cwd, which is the repo root (spike §3)."""
+        inp = dict(tool_input)
+        for key in ("file_path", "target_file"):
+            raw = inp.get(key)
+            if isinstance(raw, str) and raw and not Path(raw).is_absolute():
+                inp[key] = str((self._repo_root / raw).resolve())
+        return inp
 
     def _spawn(self, coro) -> None:
         task = asyncio.get_running_loop().create_task(coro)

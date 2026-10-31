@@ -74,6 +74,7 @@ def test_grok_tool_maps_write_and_edit_to_claude_shape():
 def test_research_permission_lists_allow_frameworks_ask_skill_deny_eval():
     assert "Edit(frameworks/**)" in RESEARCH_ALLOW and "Write(frameworks/**)" in RESEARCH_ALLOW
     assert "Bash(*)" in RESEARCH_ALLOW
+    assert "WebSearch" in RESEARCH_ALLOW and "WebFetch" in RESEARCH_ALLOW
     assert any("sediment-framework" in r for r in RESEARCH_ASK)
     assert "Write(**/eval/**)" in RESEARCH_DENY and "Edit(**/eval/**)" in RESEARCH_DENY
     assert "Bash(sudo *)" in RESEARCH_DENY

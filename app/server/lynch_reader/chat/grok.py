@@ -64,7 +64,8 @@ SKILL_ASK = (
     "Write(**/sediment-framework/**)",
 )
 RESEARCH_ALLOW: tuple[str, ...] = (
-    "Edit(frameworks/**)", "Write(frameworks/**)", "Bash(*)", "Read", "Grep", "MCPTool(wisburg__*)",
+    "Edit(frameworks/**)", "Write(frameworks/**)", "Bash(*)", "Read", "Grep", "Glob",
+    "WebSearch", "WebFetch", "MCPTool(wisburg__*)",
 )
 RESEARCH_ASK: tuple[str, ...] = SKILL_ASK
 RESEARCH_DENY: tuple[str, ...] = (

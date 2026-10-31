@@ -67,6 +67,31 @@ def test_research_grok_resumes_its_session_after_restart(tmp_path):
     assert any(r.get("method") == "session/resume" and r["params"]["sessionId"] == sid for r in acp_log(tmp_path))
 
 
+@pytest.mark.parametrize("allow,reply", [(True, "edited"), (False, "（Grok 结束了本轮）")])
+def test_research_grok_skill_edit_allow_and_deny(tmp_path, allow, reply):
+    async def main():
+        svc, _ = make_service(tmp_path)
+        skill = tmp_path / "frameworks/.claude/skills/sediment-framework/SKILL.md"
+        skill.parent.mkdir(parents=True, exist_ok=True)
+        skill.write_text("a\n")
+        conv = await start(svc, "skill")
+        q = svc.subscribe(conv.id)
+        approval = await next_event(q, "approval")
+        await svc.answer_approval(conv.id, approval["request_id"], allow)
+        await idle(svc, conv.id)
+        snap = svc.snapshot(conv.id)
+        with pytest.raises(Conflict):
+            await svc.answer_approval(conv.id, approval["request_id"], allow)
+        await svc.shutdown()
+        return approval, snap
+    approval, snap = asyncio.run(main())
+    assert approval["path"] == "frameworks/.claude/skills/sediment-framework/SKILL.md"
+    assert approval["tool"] == "Edit"
+    tool = next(i for i in snap["items"] if i["kind"] == "tool")
+    assert tool["denied"] is (not allow)
+    assert snap["items"][-1]["text"] == reply
+
+
 def test_research_grok_stop_clears_pending_approval(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)

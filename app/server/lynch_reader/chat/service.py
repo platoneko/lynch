@@ -399,7 +399,7 @@ class ChatService:
             raise Conflict("这处改动已不在等待审批")
         self._broadcast(conv_id, "approval_done", {"request_id": request_id})
         try:
-            if conv.agent == "opencode":
+            if conv.agent in ("opencode", "grok"):
                 await live.proc.answer(request_id, allow)
             else:
                 await live.proc.respond(request_id, {"behavior": "allow", "updatedInput": approval.tool_input} if allow

@@ -69,6 +69,8 @@ def test_start_sets_model_and_window(tmp_path):
     setm = next(r for r in methods if r.get("method") == "session/set_model")
     assert setm["params"]["modelId"] == "grok-4.6"
     assert setm["params"]["_meta"]["contextWindow"] == 500000
+    effort = next(r for r in methods if r.get("method") == "session/set_config_option")
+    assert effort["params"]["configId"] == "reasoning_effort" and effort["params"]["value"] == "high"
     assert sid
     launch = grok_launches(tmp_path)[0]
     assert launch["argv"][-2:] == ["agent", "stdio"]
@@ -91,6 +93,23 @@ def test_rule_denial_shows_as_refused(tmp_path):
     run_turn(tmp_path, "denied")
     tool = next(i for i in history(tmp_path).items if i["kind"] == "tool")
     assert tool["is_error"] is True and tool["denied"] is True
+
+
+def test_relative_skill_path_reaches_permission(tmp_path):
+    async def main():
+        link, rec = make_link(tmp_path)
+        await link.start()
+        await link.prompt("skillrel")
+        await until(lambda: rec.permissions)
+        _rid, _id, name, tool_input = rec.permissions[0]
+        await link.answer(_rid, False)
+        await until(lambda: rec.turn_ends)
+        await link.close()
+        return name, tool_input
+    name, tool_input = asyncio.run(main())
+    assert name == "Edit"
+    assert Path(tool_input["file_path"]).is_absolute()
+    assert "sediment-framework" in tool_input["file_path"]
 
 
 def test_permission_reaches_events_with_claude_shape(tmp_path):
