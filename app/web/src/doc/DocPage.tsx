@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode }
 import type { Tagged } from '../api';
 import { useOnForeground } from '../foreground';
 import { useConnection } from '../offline/connection';
+import { docEarnings } from '../earnings/model';
 import { AxisLine } from '../home/AxisLine';
 import { consensusText, extraBands, rowZone, type ExtraBand } from '../home/listModel';
 import { fmt, priceDecimals } from '../home/PriceBar';
@@ -223,7 +224,7 @@ function headingText(s: DocSection, sections: DocSection[]): string {
   return s.level === 2 ? sectionLabel(s, sections) : s.title;
 }
 
-/** A framework's head: its zone, extra bands, and the axes it is mounted on. */
+/** A framework's head: its zone, extra bands, the axes it is mounted on, and its earnings dates. */
 export function TickerDocHead({ ticker, row, targets, axes, zoneLabel, onOpenAxis }: {
   ticker: string;
   row: TickerRow | undefined;
@@ -240,7 +241,19 @@ export function TickerDocHead({ ticker, row, targets, axes, zoneLabel, onOpenAxi
         <BandBlock key={b.kind} band={b} targets={targets} zoneLabel={zoneLabel} dp={priceDecimals(ticker)} />
       ))}
       {row && <AxisLine row={row} axes={axes} onOpenAxis={onOpenAxis} />}
+      {row && <EarningsLine row={row} />}
     </>
+  );
+}
+
+function EarningsLine({ row }: { row: TickerRow }) {
+  const line = docEarnings(row);
+  if (!line) return null;
+  return (
+    <p className="earnings-line">
+      {line.text}
+      {line.stale && <span className="tag tag-stale">财报后未更新</span>}
+    </p>
   );
 }
 

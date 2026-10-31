@@ -6,12 +6,12 @@ import re
 import subprocess
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
 
-from eval.lib.frameworks import list_framework_paths
+from eval.lib.frameworks import list_framework_paths, load_framework
 from eval.lib.zones import zone_of
 from eval.lib.price import SessionQuote
 from lynch_reader import catalog as catalog_module
@@ -66,7 +66,22 @@ def test_parsed_row_is_zoned_on_the_live_price(repo, quotes):
         "band": {"price": 25.0, "session": None, "as_of": AS_OF, "zone": zone_of(25.0, 10, 20, 40),
                  "option_zone": None, "candidate_zone": None},
         "quote_error": None, "error": None, "archived": False,
+        "framework_updated": "2026-09-21", "last_earnings": None, "next_earnings": None, "stale_after_earnings": False,
     }
+
+
+def test_earnings_dates_are_asked_with_each_frameworks_header_day(repo, quotes):
+    asked = []
+
+    def dates(updated):
+        asked.append(dict(updated))
+        # A broken framework is still in the pool, so the calendar answers for it too.
+        return {t: {"last_earnings": {"date": "2026-09-18"}, "stale_after_earnings": True} for t in ("AAA.US", "0001.HK")}
+    rows = {r["ticker"]: r for r in catalog(repo, quotes, earnings_dates=dates)["tickers"]}
+    assert asked == [{"AAA.US": date(2026, 9, 21), "BBB.US": date(2026, 9, 21)}]
+    assert (rows["AAA.US"]["last_earnings"], rows["AAA.US"]["stale_after_earnings"]) == ({"date": "2026-09-18"}, True)
+    assert (rows["BBB.US"]["last_earnings"], rows["BBB.US"]["stale_after_earnings"]) == (None, False)
+    assert rows["0001.HK"]["stale_after_earnings"] is False  # a broken framework is never flagged
 
 
 def test_option_and_candidate_zones(repo, fetch, quotes):
@@ -447,6 +462,12 @@ def test_no_option_band_is_null(repo, quotes, outputs):
 
 @needs_content
 def test_real_frameworks_options(quotes):
+    """The book's bands survive the parse; what each is worth is the book's business, not the test's.
+
+    The amounts move whenever a framework is recomputed, and that ticker's own eval script is what
+    reconciles them against the document (`just check`); a copy here would only be a second number
+    to keep in sync, and when it reds it cannot say whether the book moved or the code broke.
+    """
     rows = rows_by_ticker(FRAMEWORKS_DIR, quotes)
     with_option = {t: r["option"] for t, r in rows.items() if r["option"] is not None}
     assert len(with_option) >= 20
@@ -455,13 +476,14 @@ def test_real_frameworks_options(quotes):
         # Every credited band today keeps the strict ladder: no ties.
         assert option["L"] < option["M"] < option["H"], ticker
         assert option["line"] and option["line"].startswith("\\(V_{opt}\\)"), ticker
-    # A V_opt = 0 disclosure line is no band.
-    assert rows["0700.HK"]["option"] is None
-    cohr = with_option["COHR.US"]
-    assert cohr["v_opt"] == 18.17
-    assert [round(cohr[k], 2) for k in "LMH"] == [77.82, 197.51, 331.15]
-    assert [r["id"] for r in cohr["rows"]] == ["A12"]
-    assert cohr["rows"][0]["text"].startswith("**SiC 子公司不进底牌")
+        # The rows the line cites are the option's background in the app: a citation the §2 table
+        # does not hold would silently drop out of it.
+        cited = set(catalog_module._ASSUMPTION_ID.findall(option["line"]))
+        assert {r["id"] for r in option["rows"]} == cited, ticker
+    # A V_opt = 0 line is a disclosure, not a band (test_no_option_band_is_null owns the rule).
+    zero = [p.stem for p in list_framework_paths(FRAMEWORKS_DIR) if load_framework(p).v_opt == 0]
+    for ticker in zero:
+        assert rows[ticker]["option"] is None, ticker
 
 
 def ny(day: int, hh: int, mm: int = 0) -> float:

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 
 from eval.lib.frameworks import (
@@ -114,6 +115,21 @@ class ParseTests(unittest.TestCase):
         for p in list_framework_paths():
             m = load_framework(p)
             self.assertEqual(m.ticker, p.stem)
+
+
+class UpdatedTests(unittest.TestCase):
+    """The header's 更新 day: the app tells from it whether a framework was revised after earnings."""
+
+    def test_header_day_is_read(self) -> None:
+        self.assertEqual(ParseTests._load_md(OptionTests._MD.replace("{outputs}", "")).updated, date(2026, 9, 20))
+
+    def test_an_impossible_day_is_no_day(self) -> None:
+        md = OptionTests._MD.replace("{outputs}", "").replace("2026-09-20", "2026-13-45")
+        self.assertIsNone(ParseTests._load_md(md).updated)
+
+    def test_only_the_header_line_counts(self) -> None:
+        md = OptionTests._MD.replace("{outputs}", "").replace(" | 更新：2026-09-20", "")
+        self.assertIsNone(ParseTests._load_md(md + "\n> 更新：2026-10-01\n").updated)
 
 
 class OptionTests(unittest.TestCase):

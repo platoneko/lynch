@@ -11,7 +11,7 @@ export interface EarningsItem {
   slot: EarningsSlot;
   release_at: string; // ISO moment the release counts as out
   period: string; // the calendar's wording, e.g. "2026 财年第 3 季度"
-  researched: boolean; // a 讨论 chat on the ticker was started after the release
+  researched: boolean; // the framework was revised after the release (earnings.py `updated_since`)
   ignored: boolean;
   anomaly: AnomalyHit | null; // the ticker's anomaly filed under this row rather than the anomaly page
 }

@@ -1,3 +1,5 @@
+import type { EarningsSlot } from './earnings/types';
+
 export type ZoneId = 'deep_discount' | 'conservative' | 'neutral' | 'optimistic' | 'stretched';
 
 export interface Labeled {
@@ -71,6 +73,20 @@ export interface TickerRow {
   quote_error: string | null; // why `band` is null for this row alone
   error: string | null;
   archived: boolean; // put away from the list in the app; its document and eval script stay
+  framework_updated: string | null; // the header's 更新 day, YYYY-MM-DD
+  // From the server's earnings calendar; null for archived tickers, which it does not cover.
+  last_earnings: EarningsDate | null; // the latest release out within 30 days
+  next_earnings: EarningsDate | null;
+  stale_after_earnings: boolean; // the framework was not revised after last_earnings
+}
+
+/** A release on a ticker's row, judged on the market's clock by the server (earnings.py). */
+export interface EarningsDate {
+  date: string; // market-local release date, YYYY-MM-DD
+  slot: EarningsSlot;
+  period: string;
+  release_at: string;
+  day_offset: number; // release date minus the market's local today
 }
 
 export interface Catalog {

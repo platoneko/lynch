@@ -8,9 +8,9 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable, Set
+from collections.abc import Callable, Mapping, Set
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import date, datetime
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -35,7 +35,7 @@ from lynch_reader.market_hours import in_opening_auction, traded_between, us_reg
 
 __all__ = [
     "FRAMEWORKS_DIR", "REPO_ROOT", "Quote", "QuoteBatch", "QuoteCache", "QuotePoller", "QuoteSnapshot",
-    "axis_path_in", "catalog", "framework_path", "quote_failure", "quote_pool",
+    "axis_path_in", "catalog", "framework_path", "framework_updates", "quote_failure", "quote_pool",
 ]
 
 log = logging.getLogger("lynch_reader")
@@ -43,7 +43,10 @@ log = logging.getLogger("lynch_reader")
 ROW_KEYS = (
     "ticker", "name", "market", "lynch_primary", "lynch_secondary", "currency",
     "L", "M", "H", "option", "candidate", "axes", "ref_axes", "consensus", "band", "quote_error", "error", "archived",
+    "framework_updated", "last_earnings", "next_earnings", "stale_after_earnings",
 )
+# ticker -> its earnings fields (earnings.py `Earnings.ticker_dates`), given each framework's header 更新 day.
+EarningsDates = Callable[[Mapping[str, date | None]], Mapping[str, dict[str, Any]]]
 # Only scenario axes sit on cards and filters; the rates axis mounts every USD ticker
 # and gives sensitivity readings, never anchors (AGENTS.md「r_f 读数行」).
 SCENARIO_AXIS = "shared_scenario_axis"
@@ -216,7 +219,8 @@ class _ParsedFiles:
             return out
 
 
-def catalog(frameworks_dir: Path, quotes: QuoteCache, archived: Set[str] = frozenset()) -> dict[str, Any]:
+def catalog(frameworks_dir: Path, quotes: QuoteCache, archived: Set[str] = frozenset(),
+            earnings_dates: EarningsDates | None = None) -> dict[str, Any]:
     # Step 1: framework header fields; a bad file costs only its own row. Archived rows stay in the
     # list, quotes included: the web hides them unless asked to show them. Kept parses are shared, so each
     # read fills its own copy of the row.
@@ -238,6 +242,13 @@ def catalog(frameworks_dir: Path, quotes: QuoteCache, archived: Set[str] = froze
         for row, meta in priced:
             _price_row(row, meta, snap.batch, us_close)
 
+    # Step 3: earnings dates from the calendar cache, for the tickers it covers (archived ones are not). A broken
+    # framework has no header day to judge by, so it carries none.
+    if earnings_dates is not None:
+        found = earnings_dates(framework_updates(frameworks_dir))
+        for row, _ in priced:
+            row.update(found.get(row["ticker"], {}))
+
     return {
         "zones": [{"id": z, "label": ZONE_CN[z]} for z in ZONE_ORDER],
         "lynch_classes": [{"id": k, "label": v} for k, v in LYNCH_CN.items()],
@@ -250,6 +261,12 @@ def catalog(frameworks_dir: Path, quotes: QuoteCache, archived: Set[str] = froze
 def quote_pool(frameworks_dir: Path) -> list[str]:
     """Every framework, archived ones included (展示归档 shows their prices): the one symbol list quotes cover."""
     return [p.stem for p in list_framework_paths(frameworks_dir)]
+
+
+def framework_updates(frameworks_dir: Path) -> dict[str, date | None]:
+    """Each parsed framework's header 更新 day, from the list's kept parses."""
+    return {meta.ticker: meta.updated
+            for _, meta in _framework_rows(list_framework_paths(frameworks_dir)) if meta is not None}
 
 
 def framework_path(ticker: str, frameworks_dir: Path) -> Path | None:
@@ -294,6 +311,7 @@ def _consensus_json(c: Consensus | None) -> dict[str, str] | None:
 def _ticker_row(path: Path) -> tuple[dict[str, Any], FrameworkMeta | None]:
     row: dict[str, Any] = dict.fromkeys(ROW_KEYS)
     row["ticker"] = path.stem
+    row["stale_after_earnings"] = False
     try:
         meta = load_framework(path)
         md = path.read_text(encoding="utf-8")
@@ -315,6 +333,7 @@ def _ticker_row(path: Path) -> tuple[dict[str, Any], FrameworkMeta | None]:
         candidate=_candidate(meta, assumptions),
         axes=[],
         consensus=_consensus_json(meta.consensus),
+        framework_updated=meta.updated.isoformat() if meta.updated else None,
     )
     return row, meta
 

@@ -9,7 +9,8 @@ function row(ticker: string, over: Partial<TickerRow> = {}): TickerRow {
     ticker, name: `${ticker} name`, market: 'US', lynch_primary: 'stalwart', lynch_secondary: null,
     currency: 'USD', L: 10, M: 20, H: 40, option: null, candidate: null, axes: [], ref_axes: [], consensus: null,
     band: { price: 25, session: null, as_of: '2026-09-26T09:03:00+08:00', zone: 'neutral', option_zone: null, candidate_zone: null },
-    quote_error: null, error: null, archived: false, ...over,
+    quote_error: null, error: null, archived: false,
+    framework_updated: '2026-09-20', last_earnings: null, next_earnings: null, stale_after_earnings: false, ...over,
   };
 }
 const withZone = (t: string, zone: ZoneId | null) =>
@@ -32,6 +33,12 @@ describe('search', () => {
 });
 
 describe('filters', () => {
+  it('财报后未更新 keeps only frameworks unrevised since their last release', () => {
+    const rows = [row('A.US', { stale_after_earnings: true }), row('B.US'), row('C.US', { stale_after_earnings: true, archived: true })];
+    expect(tickers(applyFilter(rows, { ...DEFAULT_FILTER, staleOnly: true }, ZONES))).toEqual(['A.US']);
+    expect(tickers(applyFilter(rows, { ...DEFAULT_FILTER, staleOnly: true, showArchived: true }, ZONES))).toEqual(['A.US', 'C.US']);
+    expect(tickers(applyFilter(rows, DEFAULT_FILTER, ZONES))).toEqual(['A.US', 'B.US']);
+  });
   it('zone filter is multi-select and drops rows without a zone', () => {
     const rows = [withZone('A.US', 'neutral'), withZone('B.US', 'stretched'), withZone('C.US', 'conservative'),
       row('D.US', { band: null }), withZone('E.US', null)];
