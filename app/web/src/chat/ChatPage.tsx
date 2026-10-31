@@ -6,6 +6,7 @@ import { CandidateCards } from './CandidateCards';
 import { costText, DISCOVER_OPENER, partialText } from './candidateModel';
 import {
   agentModelText, applyEvent, compactText, contextText, contextWarn, diffLineClass, editableUuids, formatTokens, fromSnapshot,
+  newChatBody,
   inputJumps, isBusy, isClaude, stateText, toolDetail, toolSummary, turnDocLinks, usageText, type ChatView, type InputJumps,
   type Queued,
 } from './chatModel';
@@ -87,8 +88,9 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
   const discover = conv ? conv.kind === 'discover' : newDiscover;
   const claude = conv ? isClaude(conv) : !newDiscover && agent === 'claude';
   const discoverModel = options?.discover.models.find((m) => m.id === model);
-  const pickDiscoverModel = (id: string) => {
-    const m = options?.discover.models.find((x) => x.id === id);
+  const grokModel = options?.grok.models.find((m) => m.id === model);
+  const pickWindowedModel = (models: { id: string; windows: number[]; efforts: string[]; default_effort: string }[] | undefined, id: string) => {
+    const m = models?.find((x) => x.id === id);
     if (!m) return;
     setModel(m.id);
     if (!m.efforts.includes(effort)) setEffort(m.default_effort);
@@ -99,6 +101,15 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
   const pickAgent = (a: ChatAgent) => {
     if (!options) return;
     setAgent(a);
+    if (a === 'grok') {
+      const g = options.grok;
+      const m = g.models.find((x) => x.id === g.default_model) ?? g.models[0];
+      if (!m) return;
+      setModel(m.id);
+      setEffort(m.efforts.includes(g.default_effort) ? g.default_effort : m.default_effort);
+      setCtxWindow(m.windows.includes(g.default_window) ? g.default_window : m.windows[0]);
+      return;
+    }
     setModel(a === 'opencode' ? options.opencode.default_model : options.default_model);
     setEffort(a === 'opencode' ? 'default' : options.default_effort);
   };
@@ -228,10 +239,10 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
     try {
       if (id === null) {
         setCreating(body);
-        const created = await createChat({
-          kind: discover ? 'discover' : newTicker ? 'ticker' : 'research', ticker: discover ? null : newTicker,
-          text: body, model, effort, ...(discover ? { context_window: ctxWindow, lookback_days: lookbackDays } : { agent }),
-        });
+        const created = await createChat(newChatBody({
+          discover, kind: discover ? 'discover' : newTicker ? 'ticker' : 'research',
+          ticker: discover ? null : newTicker, text: body, model, effort, agent, ctxWindow, lookbackDays,
+        }));
         clearDraft(draftKey);
         onCreated(created.id, body);
         return;
@@ -415,13 +426,29 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
             <select value={agent} onChange={(e) => pickAgent(e.target.value as ChatAgent)}>
               {options.agents.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
             </select>
-            <select value={model} onChange={(e) => setModel(e.target.value)}>
-              {(agent === 'opencode' ? options.opencode.models : options.models).map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
-            </select>
-            {agent === 'claude' && (
-              <select value={effort} onChange={(e) => setEffort(e.target.value)}>
-                {options.efforts.map((x) => <option key={x} value={x}>{x}</option>)}
-              </select>
+            {agent === 'grok' && grokModel ? (
+              <>
+                <select value={model} onChange={(e) => pickWindowedModel(options.grok.models, e.target.value)}>
+                  {options.grok.models.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+                </select>
+                <select value={ctxWindow} onChange={(e) => setCtxWindow(Number(e.target.value))}>
+                  {grokModel.windows.map((w) => <option key={w} value={w}>{formatTokens(w)}</option>)}
+                </select>
+                <select value={effort} onChange={(e) => setEffort(e.target.value)}>
+                  {grokModel.efforts.map((x) => <option key={x} value={x}>{x}</option>)}
+                </select>
+              </>
+            ) : (
+              <>
+                <select value={model} onChange={(e) => setModel(e.target.value)}>
+                  {(agent === 'opencode' ? options.opencode.models : options.models).map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+                </select>
+                {agent === 'claude' && (
+                  <select value={effort} onChange={(e) => setEffort(e.target.value)}>
+                    {options.efforts.map((x) => <option key={x} value={x}>{x}</option>)}
+                  </select>
+                )}
+              </>
             )}
           </div>
         )}
@@ -430,7 +457,7 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
             {options.discover.hint && <div className="banner-muted">{options.discover.hint}</div>}
             {discoverModel && (
               <div className="model-picker">
-                <select value={model} onChange={(e) => pickDiscoverModel(e.target.value)}>
+                <select value={model} onChange={(e) => pickWindowedModel(options.discover.models, e.target.value)}>
                   {options.discover.models.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
                 </select>
                 <select value={ctxWindow} onChange={(e) => setCtxWindow(Number(e.target.value))}>

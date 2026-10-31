@@ -1,6 +1,7 @@
 import { discoverModelText } from './candidateModel';
 import type {
-  Approval, ChatEvent, ChatItem, ChatState, ChatSummary, ContextUsage, Snapshot, ToolItem, ToolResult, Usage,
+  Approval, ChatAgent, ChatEvent, ChatItem, ChatKind, ChatState, ChatSummary, ContextUsage, Snapshot, ToolItem,
+  ToolResult, Usage,
 } from './types';
 
 /**
@@ -44,6 +45,23 @@ export function effortText(effort: string): string {
 export function agentModelText(c: ChatSummary): string {
   if (c.agent === 'grok') return `${c.agent_label} · ${discoverModelText(c)}`;
   return `${c.agent_label} · ${c.model_label} · ${effortText(c.effort)}`;
+}
+
+/** POST /api/chats body for a blank-page first message. */
+export function newChatBody(args: {
+  discover: boolean; kind: ChatKind; ticker: string | null; text: string; model: string; effort: string;
+  agent: ChatAgent; ctxWindow: number; lookbackDays: number;
+}): {
+  kind: ChatKind; ticker: string | null; text: string; model: string; effort: string;
+  context_window?: number; lookback_days?: number; agent?: ChatAgent;
+} {
+  const { discover, kind, ticker, text, model, effort, agent, ctxWindow, lookbackDays } = args;
+  if (discover) {
+    return { kind, ticker: null, text, model, effort, context_window: ctxWindow, lookback_days: lookbackDays };
+  }
+  return agent === 'grok'
+    ? { kind, ticker, text, model, effort, agent, context_window: ctxWindow }
+    : { kind, ticker, text, model, effort, agent };
 }
 
 /**

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   agentModelText, applyEvent, compactText, contextText, contextWarn, diffLineClass, editableUuids, effortText, formatTokens,
-  fromSnapshot, inputJumps, isClaude, toChatEvent, toolDetail, toolSummary, turnDocLinks, type Queued,
+  fromSnapshot, inputJumps, isClaude, newChatBody, toChatEvent, toolDetail, toolSummary, turnDocLinks, type Queued,
 } from './chatModel';
 import type { Approval, ChatItem, ChatSummary, Snapshot, ToolItem } from './types';
 
@@ -248,6 +248,23 @@ describe('agentModelText', () => {
     expect(agentModelText({ ...conv, kind: 'discover', agent: 'grok', agent_label: 'Grok', model: 'grok-4.6',
       model_label: 'grok-4.6', context_window: 500000, effort: 'high', lookback_days: 2 }))
       .toBe('Grok · grok-4.6-500k · high · 2天');
+  });
+  it('shows Grok research without lookback days', () => {
+    expect(agentModelText({ ...conv, kind: 'research', agent: 'grok', agent_label: 'Grok',
+      model: 'grok-4.6', model_label: 'grok-4.6', context_window: 500000, effort: 'high' }))
+      .toBe('Grok · grok-4.6-500k · high');
+  });
+  it('puts context_window on a Grok research create body and lookback only on discover', () => {
+    expect(newChatBody({ discover: false, kind: 'research', ticker: null, text: 'hi', model: 'grok-4.6',
+      effort: 'high', agent: 'grok', ctxWindow: 500000, lookbackDays: 2 })).toEqual({
+      kind: 'research', ticker: null, text: 'hi', model: 'grok-4.6', effort: 'high', agent: 'grok',
+      context_window: 500000,
+    });
+    expect(newChatBody({ discover: true, kind: 'discover', ticker: null, text: 'hi', model: 'grok-4.6',
+      effort: 'high', agent: 'grok', ctxWindow: 256000, lookbackDays: 3 })).toEqual({
+      kind: 'discover', ticker: null, text: 'hi', model: 'grok-4.6', effort: 'high',
+      context_window: 256000, lookback_days: 3,
+    });
   });
   it('names the default effort in Chinese and leaves the rest', () => {
     expect(effortText('default')).toBe('默认');
