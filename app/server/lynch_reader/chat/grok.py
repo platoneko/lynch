@@ -1,7 +1,9 @@
-"""How the app launches Grok for a discover chat: models, isolation, argv, environment and the message each turn sends.
+"""How the app launches Grok: discover (search-only `grok -p`) and research/ticker (persistent `grok agent stdio`).
 
-Flags and tool names were verified against grok 1.0.46 on 2026-10-02 (spec §1); tests/test_chat_grok_live.py
-guards them. Run it after every grok upgrade.
+Discover flags and tool names were verified against grok 1.0.46 on 2026-10-02 (spec §1); tests/test_chat_grok_live.py
+guards them. Research ACP (GROK_HOME permission overlay, tool ACP shape, `_meta.rules`) was verified against
+grok 1.0.70 on 2026-10-31 (spike §§1–8); tests/test_chat_grok_research_live.py guards that. Run both after a grok
+upgrade.
 """
 from __future__ import annotations
 
@@ -15,9 +17,12 @@ from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
+from lynch_reader.chat.config import GIT_BLOCKED_COMMANDS, GIT_RULE_TAIL, LONGBRIDGE_BLOCKED_COMMANDS, SHARED_RULES, scope_line
 from lynch_reader.chat.index import Conversation
 
 DEFAULT_GROK_MODEL = "grok-4.5"  # the user's choice for new discover chats (2026-10-03)
+DEFAULT_RESEARCH_MODEL = "grok-4.6"  # the user's choice for new 研究 / 讨论 chats (2026-10-31)
+DEFAULT_RESEARCH_EFFORT = "high"
 DEFAULT_WINDOW = 500_000
 MAX_TURNS = 40  # twice a full KOL search's turns (5 on 2026-10-02, grok 1.0.46), floor 40
 
@@ -49,13 +54,43 @@ DISALLOWED_TOOLS: tuple[str, ...] = (
 # 2026-10-03). MCPTool(*) is what keeps their tools uncallable; APP_CONTEXT tells grok not to try.
 DENY_RULES: tuple[str, ...] = ("Bash", "Edit", "Write", "Read", "Grep", "MCPTool(*)")
 
+# Research chats cannot use discover's CLI --deny/--permission-mode: `grok agent stdio` ignores those top-level
+# flags (spike §2). A per-chat GROK_HOME config.toml overrides the user's always-approve without writing the repo
+# `.grok/config.toml` or `~/.grok/config.toml`. Child skill edits do reach session/request_permission (spike §8).
+SKILL_ASK = (
+    "Edit(frameworks/.claude/skills/sediment-framework/**)",
+    "Write(frameworks/.claude/skills/sediment-framework/**)",
+    "Edit(**/sediment-framework/**)",
+    "Write(**/sediment-framework/**)",
+)
+RESEARCH_ALLOW: tuple[str, ...] = (
+    "Edit(frameworks/**)", "Write(frameworks/**)", "Bash(*)", "Read", "Grep", "MCPTool(wisburg__*)",
+)
+RESEARCH_ASK: tuple[str, ...] = SKILL_ASK
+RESEARCH_DENY: tuple[str, ...] = (
+    "Write(**/eval/**)", "Edit(**/eval/**)", "Bash(sudo *)",
+    *(f"Bash(git *{c}*)" for c in GIT_BLOCKED_COMMANDS),
+    *(f"Bash(longbridge {c}*)" for c in LONGBRIDGE_BLOCKED_COMMANDS),
+    "MCPTool(longbridge__*)", "MCPTool(ida__*)", "MCPTool(github-nekomoto__*)",
+)
+RESEARCH_ENV: dict[str, str] = {
+    "GROK_CURSOR_MCPS_ENABLED": "0",  # Cursor GitHub MCP must not load (spike §1)
+    "GROK_DISABLE_AUTOUPDATER": "1",
+    "GROK_MEMORY": "0",
+}
+_RESEARCH_TOOL_RULES = f"""\
+- 改 sediment-framework skill（frameworks/.claude/skills/sediment-framework/）和改框架一样，要用户明确同意；\
+同意后，每次用 write 或 search_replace 改都会把 diff 推到用户手机上，等用户答复。其他需要审批的调用一律拒绝。
+- 写文件只用 write 和 search_replace 工具，且只写 frameworks/ 下。{GIT_RULE_TAIL}
+- 对话里提示已连接的 MCP 外部工具服务，仓库 .mcp.json 以外的一律调用不了，也不要尝试。"""
+
 
 @dataclass(frozen=True)
 class GrokConfig:
     grok_cmd: tuple[str, ...]  # ("grok",); tests put a fake script here
     workdir: Path  # every grok process runs here: an empty git root of its own
     home: Path  # holds ~/.grok/models_cache.json
-    logs: Path  # the app's own discover transcripts (chat/app_log.py)
+    logs: Path  # app transcripts (discover and research grok jsonl) plus research rules / GROK_HOME
     invest_root: Path  # where the KOL list comes from (chat/kol.py)
     skill: Path  # .agents/skills/discover-kol/references/search.md, sent whole every turn (discover_prompt)
 
@@ -73,18 +108,24 @@ class GrokModel:
                 "default_effort": self.default_effort}
 
 
-def grok_models(home: Path) -> list[GrokModel]:
-    """Models that can search X, from grok's own catalog cache (`grok models` refreshes it); [] when unreadable."""
+def grok_models(home: Path, *, search_only: bool = True) -> list[GrokModel]:
+    """Models from grok's catalog cache (`grok models` refreshes it); [] when unreadable.
+
+    `search_only=True` (discover) keeps those that can search X; `False` (research) keeps every visible model
+    that advertises reasoning efforts.
+    """
     try:
         catalog = json.loads((home / ".grok" / "models_cache.json").read_text(encoding="utf-8"))["models"]
-        return [m for m in map(_model, catalog.values()) if m is not None]
+        return [m for m in (_model(v, search_only=search_only) for v in catalog.values()) if m is not None]
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return []
 
 
-def _model(entry: dict) -> GrokModel | None:
+def _model(entry: dict, *, search_only: bool = True) -> GrokModel | None:
     info = entry["info"]
-    if info.get("hidden") or not info.get("supports_backend_search"):
+    if info.get("hidden"):
+        return None
+    if search_only and not info.get("supports_backend_search"):
         return None
     windows = tuple(int(w) for w in info.get("context_windows") or [info["context_window"]])
     efforts = tuple(str(e["id"]) for e in info.get("reasoning_efforts") or [])
@@ -96,6 +137,92 @@ def _model(entry: dict) -> GrokModel | None:
 
 def grok_env(base: Mapping[str, str]) -> dict[str, str]:
     return {**base, **ISOLATION_ENV}
+
+
+def research_env(base: Mapping[str, str], grok_home: Path | None = None) -> dict[str, str]:
+    """Discover isolation is off: the chat must see AGENTS.md and sediment-framework. Cursor MCP stays off."""
+    env = {**base, **RESEARCH_ENV}
+    if grok_home is not None:
+        env["GROK_HOME"] = str(grok_home)
+    return env
+
+
+def research_argv(cfg: GrokConfig) -> list[str]:
+    """Persistent ACP. Permission rules are the GROK_HOME config, not CLI flags (spike §2)."""
+    return [*cfg.grok_cmd, "--no-auto-update", "agent", "stdio"]
+
+
+def research_prompt(conv: Conversation) -> str:
+    return f"{scope_line(conv)}\n{SHARED_RULES}\n{_RESEARCH_TOOL_RULES}"
+
+
+def write_research_rules(cfg: GrokConfig, conv: Conversation) -> Path:
+    """Rewritten at every launch so a resumed chat gets the current rules; GrokLink puts this on session/new `_meta.rules`."""
+    path = cfg.logs / f"{conv.id}.rules.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(research_prompt(conv), encoding="utf-8")
+    return path
+
+
+def write_research_home(cfg: GrokConfig, conv: Conversation, real_home: Path) -> Path:
+    """A per-chat grok home so dontAsk / allow / ask / deny override the user's always-approve (spike §2)."""
+    home = cfg.logs / f"{conv.id}.grok-home"
+    home.mkdir(parents=True, exist_ok=True)
+    home.joinpath("config.toml").write_text(_research_config_toml(), encoding="utf-8")
+    for name in ("auth.json", "models_cache.json"):
+        src, dest = real_home / name, home / name
+        if dest.is_symlink() or dest.exists():
+            dest.unlink()
+        if src.exists():
+            dest.symlink_to(src)
+    return home
+
+
+def _research_config_toml() -> str:
+    def block(key: str, rules: tuple[str, ...]) -> str:
+        body = "".join(f'    "{r}",\n' for r in rules)
+        return f"{key} = [\n{body}]"
+    return "\n".join([
+        "[ui]",
+        'permission_mode = "dontAsk"',
+        "",
+        "[permission]",
+        block("allow", RESEARCH_ALLOW),
+        block("ask", RESEARCH_ASK),
+        block("deny", RESEARCH_DENY),
+        "",
+    ])
+
+
+def grok_tool(name: str, raw_input: dict) -> tuple[str, dict]:
+    """Grok ACP tool_call title/rawInput in the Claude shape the app's items and approvals know (spike §3)."""
+    variant = str(raw_input.get("variant") or "")
+    title = name.strip()
+    head = title.split()[0].lower() if title else ""
+
+    def pick(*keys: str) -> dict:
+        return {k: raw_input[k] for k in keys if k in raw_input}
+
+    if head == "write" or variant == "Write":
+        return "Write", pick("file_path", "content")
+    if head in ("search_replace", "edit") or variant == "SearchReplace":
+        return "Edit", {**pick("file_path", "old_string", "new_string"),
+                        "replace_all": bool(raw_input.get("replace_all", False))}
+    if head in ("read_file", "read") or variant == "ReadFile":
+        inp = pick("offset", "limit")
+        path = raw_input.get("target_file") or raw_input.get("file_path")
+        if path is not None:
+            inp["file_path"] = path
+        return "Read", inp
+    if head in ("run_terminal_command", "bash") or variant == "Bash" or title.startswith("Execute "):
+        return "Bash", pick("command")
+    if head == "grep" or variant == "Grep":
+        return "Grep", pick("pattern", "path", "glob")
+    if title.lower().startswith("web search") or variant == "WebSearch":
+        return "WebSearch", pick("query") or dict(raw_input)
+    if head == "spawn_subagent" or variant == "Task":
+        return "Agent", raw_input
+    return name, raw_input
 
 
 def prepare_workdir(workdir: Path) -> None:
