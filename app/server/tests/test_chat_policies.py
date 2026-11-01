@@ -14,7 +14,7 @@ def texts(snap):
 
 
 async def ready(svc, text="one", kind="ticker", ticker="AAA.US"):
-    conv = await svc.create(kind, ticker, text, "claude-opus-5-5", "medium")
+    conv = await svc.create(kind, ticker, text, "claude-opus-5-5", "medium", agent="claude")
     await until(lambda: state_of(svc, conv.id) == "idle")
     return conv
 
@@ -22,7 +22,7 @@ async def ready(svc, text="one", kind="ticker", ticker="AAA.US"):
 def test_compact_refused_while_running_and_passed_through_when_idle(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("ticker", "AAA.US", "slow", "claude-opus-5-5", "medium")
+        conv = await svc.create("ticker", "AAA.US", "slow", "claude-opus-5-5", "medium", agent="claude")
         await until(lambda: state_of(svc, conv.id) == "running")
         with pytest.raises(Conflict):
             await svc.send(conv.id, "/compact keep numbers")
@@ -123,7 +123,7 @@ def test_archive_kills_running_and_idle_processes(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)
         idle = await ready(svc, "one")
-        busy = await svc.create("ticker", "AAA.US", "slow", "claude-opus-5-5", "medium")
+        busy = await svc.create("ticker", "AAA.US", "slow", "claude-opus-5-5", "medium", agent="claude")
         await until(lambda: state_of(svc, busy.id) == "running")
         procs = [svc._live[idle.id].proc, svc._live[busy.id].proc]
         await svc.archive(idle.id)
@@ -205,7 +205,7 @@ def test_idle_processes_are_reaped_but_running_ones_are_not(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path, monotonic=lambda: clock["t"], idle_timeout_s=100)
         idle = await ready(svc, "one")
-        busy = await svc.create("ticker", "AAA.US", "slow", "claude-opus-5-5", "medium")
+        busy = await svc.create("ticker", "AAA.US", "slow", "claude-opus-5-5", "medium", agent="claude")
         await until(lambda: state_of(svc, busy.id) == "running")
         clock["t"] = 1000
         await svc.reap_idle()

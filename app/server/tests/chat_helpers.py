@@ -112,7 +112,8 @@ def grok_config(tmp_path: Path) -> GrokConfig:
 
 
 def fake_grok_env(tmp_path: Path) -> dict[str, str]:
-    return {"FAKE_GROK_SESSIONS": str(tmp_path / "grok-sessions"), "FAKE_GROK_LOG": str(tmp_path / "grok-launches.jsonl")}
+    return {"FAKE_GROK_SESSIONS": str(tmp_path / "grok-sessions"), "FAKE_GROK_LOG": str(tmp_path / "grok-launches.jsonl"),
+            "FAKE_GROK_ACP_LOG": str(tmp_path / "grok-acp.jsonl")}
 
 
 def grok_launches(tmp_path: Path) -> list[dict]:

@@ -1,6 +1,7 @@
 import { discoverModelText } from './candidateModel';
 import type {
-  Approval, ChatEvent, ChatItem, ChatState, ChatSummary, ContextUsage, Snapshot, ToolItem, ToolResult, Usage,
+  Approval, ChatAgent, ChatEvent, ChatItem, ChatKind, ChatState, ChatSummary, ContextUsage, GrokResearchOptions,
+  Snapshot, ToolItem, ToolResult, Usage,
 } from './types';
 
 /**
@@ -35,6 +36,31 @@ export function isClaude(c: Pick<ChatSummary, 'agent'>): boolean {
   return c.agent === 'claude';
 }
 
+/** Which model list the blank 研究 / 讨论 picker shows. Grok never falls through to Claude's models. */
+export function researchPickerAgent(agent: ChatAgent): 'grok' | 'opencode' | 'claude' {
+  return agent === 'grok' || agent === 'opencode' ? agent : 'claude';
+}
+
+/**
+ * The Grok model / window / effort the blank page should send. An empty or Claude id (the first paint,
+ * before state catches up) maps onto Grok's default, not Opus.
+ */
+export function grokSelection(
+  g: GrokResearchOptions, modelId: string, effort = '', ctxWindow = 0,
+): { model: string; effort: string; ctxWindow: number } | null {
+  const m = g.models.find((x) => x.id === modelId)
+    ?? g.models.find((x) => x.id === g.default_model)
+    ?? g.models[0];
+  if (!m) return null;
+  return {
+    model: m.id,
+    effort: m.efforts.includes(effort) ? effort
+      : (m.efforts.includes(g.default_effort) ? g.default_effort : m.default_effort),
+    ctxWindow: m.windows.includes(ctxWindow) ? ctxWindow
+      : (m.windows.includes(g.default_window) ? g.default_window : m.windows[0]),
+  };
+}
+
 /** "default": the model has no effort levels to pick from (opencode's). */
 export function effortText(effort: string): string {
   return effort === 'default' ? '默认' : effort;
@@ -44,6 +70,23 @@ export function effortText(effort: string): string {
 export function agentModelText(c: ChatSummary): string {
   if (c.agent === 'grok') return `${c.agent_label} · ${discoverModelText(c)}`;
   return `${c.agent_label} · ${c.model_label} · ${effortText(c.effort)}`;
+}
+
+/** POST /api/chats body for a blank-page first message. */
+export function newChatBody(args: {
+  discover: boolean; kind: ChatKind; ticker: string | null; text: string; model: string; effort: string;
+  agent: ChatAgent; ctxWindow: number; lookbackDays: number;
+}): {
+  kind: ChatKind; ticker: string | null; text: string; model: string; effort: string;
+  context_window?: number; lookback_days?: number; agent?: ChatAgent;
+} {
+  const { discover, kind, ticker, text, model, effort, agent, ctxWindow, lookbackDays } = args;
+  if (discover) {
+    return { kind, ticker: null, text, model, effort, context_window: ctxWindow, lookback_days: lookbackDays };
+  }
+  return agent === 'grok'
+    ? { kind, ticker, text, model, effort, agent, context_window: ctxWindow }
+    : { kind, ticker, text, model, effort, agent };
 }
 
 /**

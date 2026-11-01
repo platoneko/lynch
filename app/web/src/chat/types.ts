@@ -47,6 +47,7 @@ export interface ChatOptions {
   default_model: string;
   default_effort: string;
   discover: DiscoverOptions;
+  grok: GrokResearchOptions; // 研究 / 讨论 Grok: models, window, effort; no lookback
   agents: { id: ChatAgent; label: string }[]; // the agents a 研究 / 讨论 chat can run on
   default_agent: ChatAgent;
   opencode: { models: { id: string; label: string }[]; default_model: string };
@@ -130,6 +131,14 @@ export interface DiscoverOptions {
   lookback_days: number[]; // the lookback choices, in days
   default_lookback_days: number;
   hint: string | null; // why the list is empty
+}
+
+export interface GrokResearchOptions {
+  models: DiscoverModel[];
+  default_model: string | null;
+  default_window: number;
+  default_effort: string;
+  hint?: string | null;
 }
 
 export type Stance = 'bullish' | 'bearish' | 'neutral';

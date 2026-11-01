@@ -6,6 +6,7 @@ import { CandidateCards } from './CandidateCards';
 import { costText, DISCOVER_OPENER, partialText } from './candidateModel';
 import {
   agentModelText, applyEvent, compactText, contextText, contextWarn, diffLineClass, editableUuids, formatTokens, fromSnapshot,
+  grokSelection, newChatBody, researchPickerAgent,
   inputJumps, isBusy, isClaude, stateText, toolDetail, toolSummary, turnDocLinks, usageText, type ChatView, type InputJumps,
   type Queued,
 } from './chatModel';
@@ -60,10 +61,10 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
   const [compactOpen, setCompactOpen] = useState(false);
   const [compactHint, setCompactHint] = useState('');
   const [renaming, setRenaming] = useState<string | null>(null); // the title being typed, while the sheet is open
-  const [agent, setAgent] = useState<ChatAgent>('claude'); // 研究 / 讨论: the agent picked on the blank page
+  const [agent, setAgent] = useState<ChatAgent>(() => options?.default_agent ?? 'grok'); // 研究 / 讨论
   const [model, setModel] = useState('');
   const [effort, setEffort] = useState('');
-  const [ctxWindow, setCtxWindow] = useState(0); // discover: the context window picked on the blank page
+  const [ctxWindow, setCtxWindow] = useState(0); // Grok / discover: the context window picked on the blank page
   const [lookbackDays, setLookbackDays] = useState(0); // discover: how many days back, picked on the blank page
   // discover: tickers in the candidate list; null until loaded, so the cards' first ticks can skip them
   const [savedTickers, setSavedTickers] = useState<ReadonlySet<string> | null>(null);
@@ -87,8 +88,10 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
   const discover = conv ? conv.kind === 'discover' : newDiscover;
   const claude = conv ? isClaude(conv) : !newDiscover && agent === 'claude';
   const discoverModel = options?.discover.models.find((m) => m.id === model);
-  const pickDiscoverModel = (id: string) => {
-    const m = options?.discover.models.find((x) => x.id === id);
+  const grokPick = options && researchPickerAgent(agent) === 'grok' ? grokSelection(options.grok, model, effort, ctxWindow) : null;
+  const grokModel = grokPick ? options?.grok.models.find((m) => m.id === grokPick.model) : undefined;
+  const pickWindowedModel = (models: { id: string; windows: number[]; efforts: string[]; default_effort: string }[] | undefined, id: string) => {
+    const m = models?.find((x) => x.id === id);
     if (!m) return;
     setModel(m.id);
     if (!m.efforts.includes(effort)) setEffort(m.default_effort);
@@ -99,16 +102,34 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
   const pickAgent = (a: ChatAgent) => {
     if (!options) return;
     setAgent(a);
+    if (a === 'grok') {
+      const picked = grokSelection(options.grok, '');
+      if (!picked) return;
+      setModel(picked.model);
+      setEffort(picked.effort);
+      setCtxWindow(picked.ctxWindow);
+      return;
+    }
     setModel(a === 'opencode' ? options.opencode.default_model : options.default_model);
     setEffort(a === 'opencode' ? 'default' : options.default_effort);
   };
 
   useEffect(() => {
-    if (!options || model) return;
+    if (!options) return;
     if (!newDiscover) {
-      pickAgent(options.default_agent);
+      if (researchPickerAgent(agent) === 'grok') {
+        const picked = grokSelection(options.grok, model, effort, ctxWindow);
+        if (picked && (picked.model !== model || picked.effort !== effort || picked.ctxWindow !== ctxWindow)) {
+          setModel(picked.model);
+          setEffort(picked.effort);
+          setCtxWindow(picked.ctxWindow);
+        }
+        return;
+      }
+      if (!model) pickAgent(options.default_agent);
       return;
     }
+    if (model) return;
     const d = options.discover;
     const m = d.models.find((x) => x.id === d.default_model) ?? d.models[0];
     if (!m) return;
@@ -116,7 +137,7 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
     setEffort(m.default_effort);
     setCtxWindow(m.windows.includes(d.default_window) ? d.default_window : m.windows[0]);
     setLookbackDays(d.default_lookback_days);
-  }, [options, model, newDiscover]);
+  }, [options, model, effort, ctxWindow, agent, newDiscover]);
 
   useEffect(() => {
     if (id === null || !discover) return;
@@ -228,10 +249,12 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
     try {
       if (id === null) {
         setCreating(body);
-        const created = await createChat({
-          kind: discover ? 'discover' : newTicker ? 'ticker' : 'research', ticker: discover ? null : newTicker,
-          text: body, model, effort, ...(discover ? { context_window: ctxWindow, lookback_days: lookbackDays } : { agent }),
-        });
+        const created = await createChat(newChatBody({
+          discover, kind: discover ? 'discover' : newTicker ? 'ticker' : 'research',
+          ticker: discover ? null : newTicker, text: body,
+          model: grokPick?.model ?? model, effort: grokPick?.effort ?? effort, agent,
+          ctxWindow: grokPick?.ctxWindow ?? ctxWindow, lookbackDays,
+        }));
         clearDraft(draftKey);
         onCreated(created.id, body);
         return;
@@ -415,13 +438,33 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
             <select aria-label="对话工具" value={agent} onChange={(e) => pickAgent(e.target.value as ChatAgent)}>
               {options.agents.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
             </select>
-            <select aria-label="模型" value={model} onChange={(e) => setModel(e.target.value)}>
-              {(agent === 'opencode' ? options.opencode.models : options.models).map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
-            </select>
-            {agent === 'claude' && (
-              <select aria-label="思考强度" value={effort} onChange={(e) => setEffort(e.target.value)}>
-                {options.efforts.map((x) => <option key={x} value={x}>{x}</option>)}
-              </select>
+            {researchPickerAgent(agent) === 'grok' ? (
+              grokModel && grokPick ? (
+                <>
+                  <select aria-label="模型" value={grokPick.model} onChange={(e) => pickWindowedModel(options.grok.models, e.target.value)}>
+                    {options.grok.models.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+                  </select>
+                  <select aria-label="上下文长度" value={grokPick.ctxWindow} onChange={(e) => setCtxWindow(Number(e.target.value))}>
+                    {grokModel.windows.map((w) => <option key={w} value={w}>{formatTokens(w)}</option>)}
+                  </select>
+                  <select aria-label="思考强度" value={grokPick.effort} onChange={(e) => setEffort(e.target.value)}>
+                    {grokModel.efforts.map((x) => <option key={x} value={x}>{x}</option>)}
+                  </select>
+                </>
+              ) : (
+                options.grok.hint ? <span className="banner-muted">{options.grok.hint}</span> : null
+              )
+            ) : (
+              <>
+                <select aria-label="模型" value={model} onChange={(e) => setModel(e.target.value)}>
+                  {(agent === 'opencode' ? options.opencode.models : options.models).map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+                </select>
+                {agent === 'claude' && (
+                  <select aria-label="思考强度" value={effort} onChange={(e) => setEffort(e.target.value)}>
+                    {options.efforts.map((x) => <option key={x} value={x}>{x}</option>)}
+                  </select>
+                )}
+              </>
             )}
           </div>
         )}
@@ -430,7 +473,7 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
             {options.discover.hint && <div className="banner-muted">{options.discover.hint}</div>}
             {discoverModel && (
               <div className="model-picker">
-                <select aria-label="模型" value={model} onChange={(e) => pickDiscoverModel(e.target.value)}>
+                <select aria-label="模型" value={model} onChange={(e) => pickWindowedModel(options.discover.models, e.target.value)}>
                   {options.discover.models.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
                 </select>
                 <select aria-label="上下文长度" value={ctxWindow} onChange={(e) => setCtxWindow(Number(e.target.value))}>
@@ -454,7 +497,8 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
             placeholder={id === null ? (discover ? '想看 KOL 最近推了什么？（直接发送即可）' : newTicker ? `围绕 ${newTicker} 说点什么` : '想调研哪只票？') : '输入消息'} />
           <button className="send-btn" onClick={submit}
             disabled={sending || gone || (editing !== null && busy) || (!claude && busy)
-              || (discover && id === null ? !discoverModel : !text.trim())}>
+              || (discover && id === null ? !discoverModel : !text.trim())
+              || (id === null && !discover && researchPickerAgent(agent) === 'grok' && !grokPick)}>
             {sending ? '发送中' : !claude && busy ? '等这一轮结束' : '发送'}
           </button>
         </div>

@@ -72,9 +72,9 @@ def test_due_from_the_earliest_day_and_researched_by_a_chat_started_since(tmp_pa
 def test_only_a_ticker_chat_saves_a_card_on_its_own_ticker(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)
-        research = await svc.create("research", None, block(card()), "claude-opus-5-5", "medium")
-        other = await svc.create("ticker", "MSFT.US", block(card()), "claude-opus-5-5", "medium")
-        own = await svc.create("ticker", "SOFI.US", block(card()), "claude-opus-5-5", "medium")
+        research = await svc.create("research", None, block(card()), "claude-opus-5-5", "medium", agent="claude")
+        other = await svc.create("ticker", "MSFT.US", block(card()), "claude-opus-5-5", "medium", agent="claude")
+        own = await svc.create("ticker", "SOFI.US", block(card()), "claude-opus-5-5", "medium", agent="claude")
         for conv in (research, other, own):
             await until(lambda: state_of(svc, conv.id) == "idle")
         key = lambda conv: [i for i in svc.snapshot(conv.id)["items"] if i.get("watch")][0]["key"]
