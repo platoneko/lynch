@@ -89,6 +89,10 @@ def chat_routes(service: ChatService, frameworks_dir: Path) -> list[Route]:
     async def options(request: Request) -> Response:
         return JSONResponse(service.options())
 
+    async def codex_options(request: Request) -> Response:
+        await service.refresh_codex_models()
+        return JSONResponse(service.options()["codex"])
+
     async def create(request: Request) -> Response:
         body = await _body(request)
         kind, ticker = body.get("kind"), body.get("ticker")
@@ -98,7 +102,7 @@ def chat_routes(service: ChatService, frameworks_dir: Path) -> list[Route]:
         # 发现新票 names model, effort, window and lookback.
         agent = body.get("agent")
         window = body.get("context_window")
-        if kind == "discover":
+        if kind == "discover" or agent == "codex":
             model, effort = None, None
         elif agent == "opencode":
             model, effort = DEFAULT_OPENCODE_MODEL, OPENCODE_EFFORT
@@ -185,6 +189,7 @@ def chat_routes(service: ChatService, frameworks_dir: Path) -> list[Route]:
         Route("/api/chats", _guarded(list_chats), methods=["GET"]),
         Route("/api/chats", _guarded(create), methods=["POST"]),
         Route("/api/chats/options", _guarded(options), methods=["GET"]),
+        Route("/api/chats/codex/options", _guarded(codex_options), methods=["GET"]),
         Route("/api/chats/archive", _guarded(archive_ticker), methods=["POST"]),
         Route("/api/chats/{id}/events", _guarded(events), methods=["GET"]),
         Route("/api/chats/{id}/messages", _guarded(message), methods=["POST"]),
