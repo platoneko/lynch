@@ -426,10 +426,11 @@ def test_options_list_agents_with_grok_default(tmp_path):
     opts = make_service(tmp_path)[0].options()
     assert opts["default_agent"] == "grok"
     assert opts["agents"][0] == {"id": "grok", "label": "Grok"}
-    assert {a["id"] for a in opts["agents"]} == {"grok", "claude", "opencode"}
+    assert {a["id"] for a in opts["agents"]} == {"grok", "claude", "opencode", "codex"}
     assert opts["grok"]["default_model"] == "grok-4.6"
     assert opts["grok"]["default_window"] == 500000
     assert opts["grok"]["default_effort"] == "high"
+    assert opts["codex"]["models"] == [] and opts["codex"]["default_model"] is None
     assert opts["opencode"] == {"models": [{"id": "0g/deepseek-v4.1-flash", "label": "DeepSeek V4.1 Flash"}],
                                 "default_model": "0g/deepseek-v4.1-flash"}
 

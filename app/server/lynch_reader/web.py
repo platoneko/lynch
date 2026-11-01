@@ -38,6 +38,7 @@ from lynch_reader.chat.candidates import CANDIDATES_FILE, CandidateStore
 from lynch_reader.chat.config import LaunchConfig
 from lynch_reader.chat.grok import GrokConfig
 from lynch_reader.chat.opencode import OpencodeConfig
+from lynch_reader.chat.codex import CodexConfig
 from lynch_reader.chat.index import ChatIndex
 from lynch_reader.chat.kol import INVEST_ROOT
 from lynch_reader.chat.routes import _body, _guarded, chat_lifespan, chat_routes
@@ -248,6 +249,7 @@ def main(argv: list[str] | None = None) -> None:
         candidates=CandidateStore(CANDIDATES_FILE),
         watch=WatchStore(WATCH_FILE),
         opencode=OpencodeConfig((shutil.which("opencode") or "opencode",), REPO_ROOT, output / "chat" / "opencode"),
+        codex=CodexConfig((shutil.which("codex") or "codex",), REPO_ROOT, output / "chat" / "codex"),
     )
     # An open chat stream never ends by itself: without a graceful-shutdown timeout, SIGTERM waits on it
     # forever and the lifespan shutdown that stops the claude processes never runs.

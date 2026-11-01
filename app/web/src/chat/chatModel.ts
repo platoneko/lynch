@@ -1,7 +1,7 @@
-import { discoverModelText } from './candidateModel';
+import { costText, discoverModelText } from './candidateModel';
 import type {
-  Approval, ChatAgent, ChatEvent, ChatItem, ChatKind, ChatState, ChatSummary, ContextUsage, GrokResearchOptions,
-  Snapshot, ToolItem, ToolResult, Usage,
+  Approval, ChatAgent, ChatEvent, ChatItem, ChatKind, ChatOptions, ChatState, ChatSummary, ContextUsage,
+  GrokResearchOptions, Snapshot, ToolItem, ToolResult, Usage,
 } from './types';
 
 /**
@@ -37,8 +37,8 @@ export function isClaude(c: Pick<ChatSummary, 'agent'>): boolean {
 }
 
 /** Which model list the blank 研究 / 讨论 picker shows. Grok never falls through to Claude's models. */
-export function researchPickerAgent(agent: ChatAgent): 'grok' | 'opencode' | 'claude' {
-  return agent === 'grok' || agent === 'opencode' ? agent : 'claude';
+export function researchPickerAgent(agent: ChatAgent): ChatAgent {
+  return agent;
 }
 
 /**
@@ -59,6 +59,47 @@ export function grokSelection(
     ctxWindow: m.windows.includes(ctxWindow) ? ctxWindow
       : (m.windows.includes(g.default_window) ? g.default_window : m.windows[0]),
   };
+}
+
+/** Research / ticker choices; Codex advertises effort levels separately for each model. */
+export function researchSettings(options: ChatOptions, agent: ChatAgent, model = '', effort = '', ctxWindow = 0) {
+  if (agent === 'grok') {
+    const picked = grokSelection(options.grok, model, effort, ctxWindow);
+    const selected = options.grok.models.find((m) => m.id === picked?.model);
+    return {
+      models: options.grok.models, model: picked?.model ?? '', effort: picked?.effort ?? '',
+      efforts: selected?.efforts ?? [], windows: selected?.windows ?? [], ctxWindow: picked?.ctxWindow ?? 0,
+      hint: options.grok.hint ?? null,
+    };
+  }
+  const source = agent === 'codex' ? options.codex : agent === 'opencode' ? options.opencode : options;
+  const models = source.models;
+  const selected = models.find((m) => m.id === model)
+    ?? models.find((m) => m.id === source.default_model) ?? models[0];
+  const codexModel = agent === 'codex' ? options.codex.models.find((m) => m.id === selected?.id) : null;
+  const efforts = agent === 'codex' ? codexModel?.efforts ?? [] : agent === 'opencode' ? [] : options.efforts;
+  const defaultEffort = agent === 'codex' ? codexModel?.default_effort ?? ''
+    : agent === 'opencode' ? 'default' : options.default_effort;
+  return {
+    models, model: selected?.id ?? '', efforts, windows: [] as number[], ctxWindow: 0,
+    effort: efforts.includes(effort) ? effort : defaultEffort,
+    hint: agent === 'codex' ? options.codex.hint ?? (!selected ? '暂时无法获取 Codex 模型，请检查本机登录状态' : null) : null,
+  };
+}
+
+/** Reject stale model / effort state as well as a missing Codex model list. */
+export function canStartResearch(options: ChatOptions | null, agent: ChatAgent, model: string, effort: string): boolean {
+  if (!options) return false;
+  if (agent === 'grok') return grokSelection(options.grok, model, effort) !== null;
+  if (!model) return false;
+  const selected = researchSettings(options, agent, model, effort);
+  return selected.model === model && selected.effort === effort;
+}
+
+/** Subscription agents do not expose per-chat USD pricing. */
+export function chatCostText(c: ChatSummary): string {
+  if (c.agent === 'grok' || (c.agent === 'opencode' && c.cost_usd)) return costText(c.cost_usd);
+  return '';
 }
 
 /** "default": the model has no effort levels to pick from (opencode's). */

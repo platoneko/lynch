@@ -12,6 +12,10 @@ export async function fetchChatOptions(): Promise<ChatOptions> {
   return (await get('/api/chats/options')).json();
 }
 
+export async function fetchCodexOptions(): Promise<ChatOptions['codex']> {
+  return (await get('/api/chats/codex/options')).json();
+}
+
 export async function createChat(body: {
   kind: ChatKind; ticker: string | null; text: string; model: string; effort: string; context_window?: number;
   lookback_days?: number; agent?: ChatAgent;

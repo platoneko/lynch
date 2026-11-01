@@ -31,6 +31,12 @@ Agent 应加载 skill **`sediment-framework`**：**先持续对话**对齐分类
 | `.mcp.json` | Wisburg MCP（本地，gitignore） |
 | `_local/` | 个人草稿，不入库 |
 
+## 手机 app 的 Codex 对话
+
+新建「研究新票」或「讨论已有框架」时，在「对话工具」选择 **Codex**，等模型加载后再选 GPT 模型和推理强度；加载只影响 Codex，不耽误其他工具。服务端自动启动本机 `codex app-server`，沿用已有 Codex 登录 / provider 配置，支持流式回答、工具记录、停止和重启续聊。框架仍需明确说「可以落盘」才写，修改 sediment-framework skill 会在手机显示 diff 等待批准。
+
+运行 app 服务的环境需要能找到 `codex`；模型清单不可用时，页面会提示原因。若提示需要登录，在终端执行 `codex login`。安装 Codex 或修改 PATH 后，重新运行 `just app-install` 更新服务环境；代码更新后先运行 `(cd app/server && uv sync --locked)` 安装锁定依赖，再运行 `just app-web`、`just app-start`。Codex 对话暂不支持编辑旧消息、手动压缩和自动标题。
+
 ## 林奇六类
 
 `slow_grower` · `stalwart` · `fast_grower` · `cyclical` · `turnaround` · `asset_play`  
