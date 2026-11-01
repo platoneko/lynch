@@ -339,7 +339,7 @@ def test_an_unusable_workdir_is_a_conflict_on_send(tmp_path):
 def test_only_a_discover_chat_saves_candidates(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("research", None, "hello", "claude-opus-5-5", "medium")
+        conv = await svc.create("research", None, "hello", "claude-opus-5-5", "medium", agent="claude")
         await until(lambda: state_of(svc, conv.id) == "idle")
         key = svc.snapshot(conv.id)["items"][-1]["key"]
         with pytest.raises(Invalid, match="发现新票"):
@@ -373,7 +373,7 @@ def test_save_candidates_from_the_reply(tmp_path):
 def test_claude_chats_are_unchanged_by_discover(tmp_path):
     async def main():
         svc, log = make_service(tmp_path)
-        conv = await svc.create("research", None, "hello", "claude-opus-5-5", "medium")
+        conv = await svc.create("research", None, "hello", "claude-opus-5-5", "medium", agent="claude")
         await until(lambda: state_of(svc, conv.id) == "idle")
         snap = svc.snapshot(conv.id)
         await svc.shutdown()

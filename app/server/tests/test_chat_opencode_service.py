@@ -143,10 +143,10 @@ def test_opencode_link_is_evicted_when_idle(tmp_path):
         await idle(svc, oc.id)
         link = svc._live[oc.id].proc
         clock["t"] = 10
-        claude = await svc.create("ticker", "AAA.US", "two", "claude-opus-5-5", "medium")
+        claude = await svc.create("ticker", "AAA.US", "two", "claude-opus-5-5", "medium", agent="claude")
         await idle(svc, claude.id)
         clock["t"] = 20
-        third = await svc.create("ticker", "AAA.US", "three", "claude-opus-5-5", "medium")
+        third = await svc.create("ticker", "AAA.US", "three", "claude-opus-5-5", "medium", agent="claude")
         await idle(svc, third.id)
         states = state_of(svc, oc.id), state_of(svc, claude.id)
         await svc.shutdown()

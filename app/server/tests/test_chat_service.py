@@ -16,7 +16,7 @@ def texts(snapshot):
 def test_create_launches_with_session_id_and_replies(tmp_path):
     async def main():
         svc, log = make_service(tmp_path)
-        conv = await svc.create("ticker", "AAA.US", "hello", "claude-opus-5-5", "medium")
+        conv = await svc.create("ticker", "AAA.US", "hello", "claude-opus-5-5", "medium", agent="claude")
         await until(lambda: state_of(svc, conv.id) == "idle")
         snap = svc.snapshot(conv.id)
         await svc.shutdown()
@@ -33,7 +33,7 @@ def test_create_launches_with_session_id_and_replies(tmp_path):
 def test_second_message_reuses_the_process(tmp_path):
     async def main():
         svc, log = make_service(tmp_path)
-        conv = await svc.create("research", None, "one", "claude-opus-5-5", "medium")
+        conv = await svc.create("research", None, "one", "claude-opus-5-5", "medium", agent="claude")
         await until(lambda: state_of(svc, conv.id) == "idle")
         await svc.send(conv.id, "two")
         await until(lambda: len(svc.snapshot(conv.id)["items"]) == 4)
@@ -45,7 +45,7 @@ def test_second_message_reuses_the_process(tmp_path):
 def test_dormant_conversation_resumes_after_restart(tmp_path):
     async def main():
         svc, log = make_service(tmp_path)
-        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium")
+        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium", agent="claude")
         await until(lambda: state_of(svc, conv.id) == "idle")
         await svc.shutdown()
         svc2, _ = make_service(tmp_path)  # same index and projects dir: a server restart
@@ -64,7 +64,7 @@ def test_dormant_conversation_resumes_after_restart(tmp_path):
 def test_interjection_while_running(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("ticker", "AAA.US", "slow", "claude-opus-5-5", "medium")
+        conv = await svc.create("ticker", "AAA.US", "slow", "claude-opus-5-5", "medium", agent="claude")
         await until(lambda: any(i["kind"] == "tool" for i in svc.snapshot(conv.id)["items"]))
         assert state_of(svc, conv.id) == "running"
         await svc.send(conv.id, "more")
@@ -78,7 +78,7 @@ def test_interjection_while_running(tmp_path):
 def test_interrupt_leaves_a_stopped_notice(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("ticker", "AAA.US", "slow", "claude-opus-5-5", "medium")
+        conv = await svc.create("ticker", "AAA.US", "slow", "claude-opus-5-5", "medium", agent="claude")
         await until(lambda: any(i["kind"] == "tool" for i in svc.snapshot(conv.id)["items"]))
         await svc.interrupt(conv.id)
         await until(lambda: state_of(svc, conv.id) == "idle")
@@ -91,7 +91,7 @@ def test_interrupt_leaves_a_stopped_notice(tmp_path):
 def test_interrupt_on_a_process_that_just_died_is_a_conflict(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("ticker", "AAA.US", "slow", "claude-opus-5-5", "medium")
+        conv = await svc.create("ticker", "AAA.US", "slow", "claude-opus-5-5", "medium", agent="claude")
         await until(lambda: any(i["kind"] == "tool" for i in svc.snapshot(conv.id)["items"]))
 
         async def dead_pipe():  # the process exits between the alive check and the write
@@ -108,7 +108,7 @@ def test_interrupt_on_a_process_that_just_died_is_a_conflict(tmp_path):
 def test_crash_broadcasts_a_notice_and_goes_dormant(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium")
+        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium", agent="claude")
         await until(lambda: state_of(svc, conv.id) == "idle")
         q = svc.subscribe(conv.id)
         await svc.send(conv.id, "crash")
@@ -124,7 +124,7 @@ def test_start_failure_leaves_a_notice_and_dormant(tmp_path):
     # dormant, never stuck "running", and the user must learn why (a 409 reason or a notice with stderr).
     async def main():
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium")
+        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium", agent="claude")
         await until(lambda: state_of(svc, conv.id) == "idle")
         await svc.shutdown()
         q = svc.subscribe(conv.id)
@@ -151,7 +151,7 @@ def test_start_failure_leaves_a_notice_and_dormant(tmp_path):
 def test_concurrent_sends_to_a_dormant_chat_share_one_process(tmp_path):
     async def main():
         svc, log = make_service(tmp_path)
-        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium")
+        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium", agent="claude")
         await until(lambda: state_of(svc, conv.id) == "idle")
         await svc.shutdown()
         await asyncio.gather(svc.send(conv.id, "two"), svc.send(conv.id, "three"))
@@ -168,7 +168,7 @@ def test_concurrent_sends_to_a_dormant_chat_share_one_process(tmp_path):
 def test_a_send_during_a_stop_keeps_its_new_process(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium")
+        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium", agent="claude")
         await until(lambda: state_of(svc, conv.id) == "idle")
         stopping = asyncio.create_task(svc._stop(conv.id))
         await asyncio.sleep(0)  # the stop detaches the old process and waits for it to close
@@ -189,7 +189,7 @@ def test_a_send_during_a_stop_keeps_its_new_process(tmp_path):
 def test_a_stray_status_outside_a_turn_keeps_idle(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium")
+        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium", agent="claude")
         await until(lambda: state_of(svc, conv.id) == "idle")
         svc._on_message(conv.id, svc._live[conv.id].proc, {"type": "system", "subtype": "status", "status": None})
         state = state_of(svc, conv.id)
@@ -207,7 +207,7 @@ def test_an_api_retry_shows_until_the_model_answers_or_the_turn_ends(tmp_path):
 
     async def main():
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium")
+        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium", agent="claude")
         await until(lambda: state_of(svc, conv.id) == "idle")
         q = svc.subscribe(conv.id)
         proc = svc._live[conv.id].proc
@@ -228,7 +228,7 @@ def test_an_api_retry_shows_until_the_model_answers_or_the_turn_ends(tmp_path):
 def test_context_window_comes_from_the_conversation_model(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium")
+        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium", agent="claude")
         await until(lambda: state_of(svc, conv.id) == "idle")
         svc._on_message(conv.id, svc._live[conv.id].proc, {"type": "result", "modelUsage": {
             "claude-haiku-4-5": {"contextWindow": 200000},
@@ -242,7 +242,7 @@ def test_context_window_comes_from_the_conversation_model(tmp_path):
 def test_a_subagent_message_does_not_move_the_context_count(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium")
+        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium", agent="claude")
         await until(lambda: state_of(svc, conv.id) == "idle")
         svc._on_message(conv.id, svc._live[conv.id].proc, {
             "type": "assistant", "uuid": "sub-1", "parent_tool_use_id": "toolu_1",
@@ -257,10 +257,10 @@ def test_a_subagent_message_does_not_move_the_context_count(tmp_path):
 def test_a_new_conversation_starts_with_the_window_last_seen_for_its_model(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)
-        first = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium")
+        first = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium", agent="claude")
         await until(lambda: state_of(svc, first.id) == "idle")
-        same = await svc.create("ticker", "BBB.US", "two", "claude-opus-5-5", "medium")
-        other = await svc.create("ticker", "CCC.US", "three", "claude-haiku-4-5", "low")
+        same = await svc.create("ticker", "BBB.US", "two", "claude-opus-5-5", "medium", agent="claude")
+        other = await svc.create("ticker", "CCC.US", "three", "claude-haiku-4-5", "low", agent="claude")
         await svc.shutdown()
         return same.context_window, other.context_window
     assert asyncio.run(main()) == (200000, None)
@@ -269,7 +269,7 @@ def test_a_new_conversation_starts_with_the_window_last_seen_for_its_model(tmp_p
 def test_rename_sets_the_title_and_tells_an_open_page(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("ticker", "AAA.US", "a long first question", "claude-opus-5-5", "medium")
+        conv = await svc.create("ticker", "AAA.US", "a long first question", "claude-opus-5-5", "medium", agent="claude")
         await until(lambda: state_of(svc, conv.id) == "idle")
         q = svc.subscribe(conv.id)
         svc.rename(conv.id, "  AAA   估值  ")
@@ -291,7 +291,7 @@ def test_rename_sets_the_title_and_tells_an_open_page(tmp_path):
 def test_a_new_conversation_takes_claudes_title_after_its_first_reply(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("ticker", "AAA.US", "what is priced in", "claude-opus-5-5", "medium")
+        conv = await svc.create("ticker", "AAA.US", "what is priced in", "claude-opus-5-5", "medium", agent="claude")
         q = svc.subscribe(conv.id)
         event = await next_event(q, "conv", lambda d: d["title"] != "what is priced in")
         await svc.send(conv.id, "second")
@@ -307,7 +307,7 @@ def test_a_new_conversation_takes_claudes_title_after_its_first_reply(tmp_path):
 def test_a_rename_beats_a_title_still_on_its_way(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium")
+        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium", agent="claude")
         await until(lambda: svc._index.get(conv.id).title == "title: one")
         live = svc._live[conv.id]
         live.title_request = "title-late"  # as if a request were still out
@@ -323,7 +323,7 @@ def test_a_rename_beats_a_title_still_on_its_way(tmp_path):
 def test_a_rename_before_the_first_reply_ends_skips_the_title_request(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("ticker", "AAA.US", "slow", "claude-opus-5-5", "medium")  # a turn that waits
+        conv = await svc.create("ticker", "AAA.US", "slow", "claude-opus-5-5", "medium", agent="claude")  # a turn that waits
         await until(lambda: state_of(svc, conv.id) == "running")
         svc.rename(conv.id, "mine")
         await svc.interrupt(conv.id)  # the first reply ends here
@@ -339,7 +339,7 @@ def test_a_rename_before_the_first_reply_ends_skips_the_title_request(tmp_path):
 def test_deltas_stream_then_clear_on_the_full_text(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium")
+        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium", agent="claude")
         await until(lambda: state_of(svc, conv.id) == "idle")
         q = svc.subscribe(conv.id)
         await svc.send(conv.id, "hello")
@@ -356,7 +356,7 @@ def test_deltas_stream_then_clear_on_the_full_text(tmp_path):
 def test_snapshot_mid_turn_shows_running_and_partial(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("ticker", "AAA.US", "slow", "claude-opus-5-5", "medium")
+        conv = await svc.create("ticker", "AAA.US", "slow", "claude-opus-5-5", "medium", agent="claude")
         await until(lambda: any(i["kind"] == "tool" for i in svc.snapshot(conv.id)["items"]))
         svc._live[conv.id].partial = "half a sen"  # as if a delta had arrived
         snap = svc.snapshot(conv.id)
@@ -370,7 +370,7 @@ def test_snapshot_mid_turn_shows_running_and_partial(tmp_path):
 def test_unfinished_transcript_gets_a_notice_when_dormant(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium")
+        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium", agent="claude")
         await until(lambda: state_of(svc, conv.id) == "idle")
         await svc.shutdown()
         path = tmp_path / "projects" / f"{conv.id}.jsonl"
@@ -387,7 +387,7 @@ def test_unfinished_transcript_gets_a_notice_when_dormant(tmp_path):
 def test_list_counts_running_and_hides_missing_transcripts(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)
-        busy = await svc.create("ticker", "AAA.US", "slow", "claude-opus-5-5", "medium")
+        busy = await svc.create("ticker", "AAA.US", "slow", "claude-opus-5-5", "medium", agent="claude")
         # Wait for the tool call, not just "running": only then has the fake written the transcript.
         await until(lambda: any(i["kind"] == "tool" for i in svc.snapshot(busy.id)["items"]))
         listing = svc.list()
@@ -422,10 +422,14 @@ def test_options_lists_models_and_defaults(tmp_path):
     assert {"id": "claude-haiku-4-5", "label": "Haiku 4.5"} in opts["models"]
 
 
-def test_options_list_agents_with_claude_default(tmp_path):
+def test_options_list_agents_with_grok_default(tmp_path):
     opts = make_service(tmp_path)[0].options()
-    assert opts["default_agent"] == "claude"
-    assert opts["agents"] == [{"id": "claude", "label": "Claude Code"}, {"id": "opencode", "label": "opencode"}]
+    assert opts["default_agent"] == "grok"
+    assert opts["agents"][0] == {"id": "grok", "label": "Grok"}
+    assert {a["id"] for a in opts["agents"]} == {"grok", "claude", "opencode"}
+    assert opts["grok"]["default_model"] == "grok-4.6"
+    assert opts["grok"]["default_window"] == 500000
+    assert opts["grok"]["default_effort"] == "high"
     assert opts["opencode"] == {"models": [{"id": "0g/deepseek-v4.1-flash", "label": "DeepSeek V4.1 Flash"}],
                                 "default_model": "0g/deepseek-v4.1-flash"}
 
@@ -433,7 +437,7 @@ def test_options_list_agents_with_claude_default(tmp_path):
 def test_summary_carries_agent_and_model_labels(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("ticker", "AAA.US", "hello", "claude-opus-5-5", "medium")
+        conv = await svc.create("ticker", "AAA.US", "hello", "claude-opus-5-5", "medium", agent="claude")
         await until(lambda: state_of(svc, conv.id) == "idle")
         row = svc.list()["chats"][0]
         await svc.shutdown()
@@ -452,7 +456,7 @@ def test_summary_label_falls_back_to_the_model_id(tmp_path):
     assert row["model_label"] == "claude-retired-1"
 
 
-@pytest.mark.parametrize("kind,agent", [("discover", "claude"), ("research", "grok"), ("research", "gpt")])
+@pytest.mark.parametrize("kind,agent", [("discover", "claude"), ("research", "gpt")])
 def test_create_rejects_an_agent_the_kind_cannot_use(tmp_path, kind, agent):
     svc, _ = make_service(tmp_path)
     with pytest.raises(Invalid):

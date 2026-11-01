@@ -146,10 +146,12 @@ export function HomePage({ catalog, filter, onFilter, onOpen, onOpenAxis,
               财报后未更新{staleCount > 0 ? `（${staleCount}）` : ''}
             </button>
           </div>
-          <select value={filter.sort} onChange={(e) => onFilter({ ...filter, sort: e.target.value as SortKey })}>
-            {SORTS.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
-          </select>
-          <span>{rows.length} / {total}</span>
+          <div className="home-meta-end">
+            <select value={filter.sort} onChange={(e) => onFilter({ ...filter, sort: e.target.value as SortKey })}>
+              {SORTS.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+            </select>
+            <span>{rows.length} / {total}</span>
+          </div>
         </div>
       </header>
       {catalog.quote_error && <p className="banner-muted">{catalog.quote_error}</p>}

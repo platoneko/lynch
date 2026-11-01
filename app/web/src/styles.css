@@ -56,9 +56,11 @@ button { font: inherit; color: inherit; }
 .chips { display: flex; gap: 6px; overflow-x: auto; padding-top: 8px; scrollbar-width: none; }
 .chip { flex: none; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); font-size: 13px; }
 .chip-on { border-color: transparent; background: var(--accent); color: #fff; }
-.home-meta { display: flex; justify-content: space-between; align-items: center; padding-top: 8px; color: var(--muted); font-size: 13px; }
+.home-meta { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; padding-top: 8px; color: var(--muted); font-size: 13px; }
 .home-meta select { font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 2px 6px; }
-.home-meta .chips { padding-top: 0; }
+/* Keep the longest chip's intrinsic width; the sort row wraps when it cannot fit beside it. */
+.home-meta .chips { flex: 1; flex-wrap: wrap; overflow: visible; padding-top: 0; }
+.home-meta-end { display: flex; flex: none; align-items: center; gap: 8px; margin-left: auto; white-space: nowrap; }
 /* The axis chips unfold as a wrapped block: a dozen of them would scroll far off the side. */
 .chips-wrap { flex-wrap: wrap; overflow-x: visible; }
 .cards { padding: 10px 16px; display: flex; flex-direction: column; gap: 10px; }
@@ -251,8 +253,8 @@ button { font: inherit; color: inherit; }
 .input-jumps svg.flip { transform: rotate(180deg); }
 .chat-editing { display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-size: 12px; }
 .chat-editing button { border: 0; background: none; color: var(--accent); }
-.model-picker { display: flex; gap: 8px; margin-bottom: 6px; }
-.model-picker select { font: inherit; font-size: 13px; color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 2px 6px; }
+.model-picker { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
+.model-picker select { min-width: 0; max-width: 100%; min-height: 32px; font: inherit; font-size: 13px; color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 2px 6px; }
 .chat-status { color: var(--muted); font-size: 11px; margin-bottom: 4px; }
 .chat-input-row { display: flex; gap: 6px; align-items: flex-end; }
 .chat-input-row textarea { flex: 1; min-width: 0; resize: none; padding: 8px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); color: var(--text); font: inherit; font-size: 16px; }

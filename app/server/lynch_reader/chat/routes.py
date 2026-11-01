@@ -14,6 +14,7 @@ from starlette.routing import Route
 
 from lynch_reader.catalog import framework_path
 from lynch_reader.chat.config import DEFAULT_EFFORT, DEFAULT_MODEL
+from lynch_reader.chat.grok import DEFAULT_RESEARCH_EFFORT, DEFAULT_RESEARCH_MODEL, DEFAULT_WINDOW
 from lynch_reader.chat.opencode import DEFAULT_OPENCODE_MODEL, OPENCODE_EFFORT
 from lynch_reader.chat.service import ChatService, Conflict, Invalid, NotFound
 
@@ -93,17 +94,22 @@ def chat_routes(service: ChatService, frameworks_dir: Path) -> list[Route]:
         kind, ticker = body.get("kind"), body.get("ticker")
         if kind == "ticker" and framework_path(str(ticker or ""), frameworks_dir) is None:
             raise Invalid("unknown ticker")
-        # A Claude or opencode chat may leave model and effort to its agent's defaults; a Grok chat names model,
-        # effort, window and how many days back to look.
+        # 研究 / 讨论 default Grok (model, effort, window); Claude / opencode leave those to their agent defaults.
+        # 发现新票 names model, effort, window and lookback.
+        agent = body.get("agent")
+        window = body.get("context_window")
         if kind == "discover":
             model, effort = None, None
-        elif body.get("agent") == "opencode":
+        elif agent == "opencode":
             model, effort = DEFAULT_OPENCODE_MODEL, OPENCODE_EFFORT
-        else:
+        elif agent == "claude":
             model, effort = DEFAULT_MODEL, DEFAULT_EFFORT
+        else:
+            model, effort = DEFAULT_RESEARCH_MODEL, DEFAULT_RESEARCH_EFFORT
+            window = window or DEFAULT_WINDOW
         conv = await service.create(kind, ticker, str(body.get("text", "")), body.get("model") or model,
-                                    body.get("effort") or effort, body.get("context_window"), body.get("lookback_days"),
-                                    body.get("agent"))
+                                    body.get("effort") or effort, window, body.get("lookback_days"),
+                                    agent)
         return JSONResponse({"id": conv.id})
 
     async def archive_ticker(request: Request) -> Response:

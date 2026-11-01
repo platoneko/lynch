@@ -45,8 +45,9 @@ def test_default_model_and_effort(repo, tmp_path, quotes):
     with c:
         conv_id = c.post("/api/chats", json={"kind": "research", "text": "hi"}).json()["id"]
         row = c.get("/api/chats").json()["chats"][0]
-        assert (row["id"], row["model"], row["effort"]) == (conv_id, "claude-opus-5-5", "medium")
-        assert row["agent"] == "claude"  # a client that does not send an agent gets Claude Code
+        assert (row["id"], row["model"], row["effort"], row["context_window"]) == (
+            conv_id, "grok-4.6", "high", 500000)
+        assert row["agent"] == "grok"
 
 
 
@@ -61,7 +62,7 @@ def test_opencode_chat_defaults_its_model_and_effort(repo, tmp_path, quotes):
 def test_event_stream_starts_with_a_snapshot_then_live_events(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium")
+        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium", agent="claude")
         await until(lambda: state_of(svc, conv.id) == "idle")
         stop = asyncio.Event()
 
@@ -92,7 +93,7 @@ def test_a_quiet_stream_sends_a_heartbeat_the_page_can_see(tmp_path, monkeypatch
 
     async def main():
         svc, _ = make_service(tmp_path)
-        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium")
+        conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium", agent="claude")
         await until(lambda: state_of(svc, conv.id) == "idle")
 
         async def connected():
@@ -191,7 +192,8 @@ def test_answer_an_approval(repo, tmp_path, quotes):
     f.write_text("alpha\n")
     c, svc = client(repo, tmp_path, quotes)
     with c:
-        conv_id = c.post("/api/chats", json={"kind": "research", "text": f"ask-edit {f}"}).json()["id"]
+        conv_id = c.post("/api/chats", json={"kind": "research", "text": f"ask-edit {f}",
+                                             "agent": "claude"}).json()["id"]
         deadline = time.monotonic() + 5
         while not svc.snapshot(conv_id)["approvals"] and time.monotonic() < deadline:
             time.sleep(0.02)
@@ -239,7 +241,8 @@ def test_watch_save_list_and_remove(repo, tmp_path, quotes):
             '"waits": [{"what": "卖方刷新（约一两周）", "date": "2026-11-10"}]}\n```')
     c, svc = client(repo, tmp_path, quotes)
     with c:
-        conv_id = c.post("/api/chats", json={"kind": "ticker", "ticker": "AAA.US", "text": card}).json()["id"]
+        conv_id = c.post("/api/chats", json={"kind": "ticker", "ticker": "AAA.US", "text": card,
+                                             "agent": "claude"}).json()["id"]
         asyncio.run(until(lambda: state_of(svc, conv_id) == "idle"
                           and any(i.get("watch") for i in svc.snapshot(conv_id)["items"])))
         [item] = [i for i in svc.snapshot(conv_id)["items"] if i.get("watch")]

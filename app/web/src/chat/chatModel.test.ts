@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   agentModelText, applyEvent, compactText, contextText, contextWarn, diffLineClass, editableUuids, effortText, formatTokens,
-  fromSnapshot, inputJumps, isClaude, toChatEvent, toolDetail, toolSummary, turnDocLinks, type Queued,
+  fromSnapshot, grokSelection, inputJumps, isClaude, newChatBody, researchPickerAgent, toChatEvent, toolDetail, toolSummary,
+  turnDocLinks, type Queued,
 } from './chatModel';
-import type { Approval, ChatItem, ChatSummary, Snapshot, ToolItem } from './types';
+import type { Approval, ChatItem, ChatSummary, GrokResearchOptions, Snapshot, ToolItem } from './types';
 
 const conv: ChatSummary = {
   id: 'c1', kind: 'ticker', ticker: 'NVDA.US', title: 't', model: 'claude-opus-5-5', effort: 'medium',
@@ -248,6 +249,38 @@ describe('agentModelText', () => {
     expect(agentModelText({ ...conv, kind: 'discover', agent: 'grok', agent_label: 'Grok', model: 'grok-4.6',
       model_label: 'grok-4.6', context_window: 500000, effort: 'high', lookback_days: 2 }))
       .toBe('Grok · grok-4.6-500k · high · 2天');
+  });
+  it('shows Grok research without lookback days', () => {
+    expect(agentModelText({ ...conv, kind: 'research', agent: 'grok', agent_label: 'Grok',
+      model: 'grok-4.6', model_label: 'grok-4.6', context_window: 500000, effort: 'high' }))
+      .toBe('Grok · grok-4.6-500k · high');
+  });
+  it('keeps Grok on the Grok picker even when the current model is still Opus', () => {
+    expect(researchPickerAgent('grok')).toBe('grok');
+    expect(researchPickerAgent('claude')).toBe('claude');
+    expect(researchPickerAgent('opencode')).toBe('opencode');
+  });
+  it('maps an empty or Claude model id onto the Grok default, never Opus', () => {
+    const grok: GrokResearchOptions = {
+      models: [{ id: 'grok-4.6', label: 'Grok 4.6', windows: [256000, 500000], efforts: ['high', 'medium'], default_effort: 'high' }],
+      default_model: 'grok-4.6', default_window: 500000, default_effort: 'high', hint: null,
+    };
+    expect(grokSelection(grok, '')).toEqual({ model: 'grok-4.6', effort: 'high', ctxWindow: 500000 });
+    expect(grokSelection(grok, 'claude-opus-5-5')).toEqual({ model: 'grok-4.6', effort: 'high', ctxWindow: 500000 });
+    expect(grokSelection(grok, 'grok-4.6', 'medium', 256000)).toEqual(
+      { model: 'grok-4.6', effort: 'medium', ctxWindow: 256000 });
+  });
+  it('puts context_window on a Grok research create body and lookback only on discover', () => {
+    expect(newChatBody({ discover: false, kind: 'research', ticker: null, text: 'hi', model: 'grok-4.6',
+      effort: 'high', agent: 'grok', ctxWindow: 500000, lookbackDays: 2 })).toEqual({
+      kind: 'research', ticker: null, text: 'hi', model: 'grok-4.6', effort: 'high', agent: 'grok',
+      context_window: 500000,
+    });
+    expect(newChatBody({ discover: true, kind: 'discover', ticker: null, text: 'hi', model: 'grok-4.6',
+      effort: 'high', agent: 'grok', ctxWindow: 256000, lookbackDays: 3 })).toEqual({
+      kind: 'discover', ticker: null, text: 'hi', model: 'grok-4.6', effort: 'high',
+      context_window: 256000, lookback_days: 3,
+    });
   });
   it('names the default effort in Chinese and leaves the rest', () => {
     expect(effortText('default')).toBe('默认');
