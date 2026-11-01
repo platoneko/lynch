@@ -412,14 +412,14 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
         )}
         {id === null && options && !discover && (
           <div className="model-picker">
-            <select value={agent} onChange={(e) => pickAgent(e.target.value as ChatAgent)}>
+            <select aria-label="对话工具" value={agent} onChange={(e) => pickAgent(e.target.value as ChatAgent)}>
               {options.agents.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
             </select>
-            <select value={model} onChange={(e) => setModel(e.target.value)}>
+            <select aria-label="模型" value={model} onChange={(e) => setModel(e.target.value)}>
               {(agent === 'opencode' ? options.opencode.models : options.models).map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
             </select>
             {agent === 'claude' && (
-              <select value={effort} onChange={(e) => setEffort(e.target.value)}>
+              <select aria-label="思考强度" value={effort} onChange={(e) => setEffort(e.target.value)}>
                 {options.efforts.map((x) => <option key={x} value={x}>{x}</option>)}
               </select>
             )}
@@ -430,16 +430,16 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
             {options.discover.hint && <div className="banner-muted">{options.discover.hint}</div>}
             {discoverModel && (
               <div className="model-picker">
-                <select value={model} onChange={(e) => pickDiscoverModel(e.target.value)}>
+                <select aria-label="模型" value={model} onChange={(e) => pickDiscoverModel(e.target.value)}>
                   {options.discover.models.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
                 </select>
-                <select value={ctxWindow} onChange={(e) => setCtxWindow(Number(e.target.value))}>
+                <select aria-label="上下文长度" value={ctxWindow} onChange={(e) => setCtxWindow(Number(e.target.value))}>
                   {discoverModel.windows.map((w) => <option key={w} value={w}>{formatTokens(w)}</option>)}
                 </select>
-                <select value={effort} onChange={(e) => setEffort(e.target.value)}>
+                <select aria-label="思考强度" value={effort} onChange={(e) => setEffort(e.target.value)}>
                   {discoverModel.efforts.map((x) => <option key={x} value={x}>{x}</option>)}
                 </select>
-                <select value={lookbackDays} onChange={(e) => setLookbackDays(Number(e.target.value))}>
+                <select aria-label="回看范围" value={lookbackDays} onChange={(e) => setLookbackDays(Number(e.target.value))}>
                   {options.discover.lookback_days.map((d) => <option key={d} value={d}>最近 {d} 天</option>)}
                 </select>
               </div>
