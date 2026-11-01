@@ -1,12 +1,14 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { renderFragment, type LinkTargets } from '../doc/buildDoc';
 import { Menu } from '../Menu';
-import { answerApproval, createChat, editMessage, fetchCandidates, interruptChat, openChatEvents, renameChat, sendMessage } from './api';
+import { answerApproval, createChat, editMessage, fetchCandidates, fetchCodexOptions, interruptChat, openChatEvents, renameChat, sendMessage } from './api';
 import { CandidateCards } from './CandidateCards';
-import { costText, DISCOVER_OPENER, partialText } from './candidateModel';
+import { ResearchModelPicker } from './ResearchModelPicker';
+import { DISCOVER_OPENER, partialText } from './candidateModel';
+import { CODEX_LOADING, requestCodexOptions, type CodexCatalogState } from './codexOptions';
 import {
-  agentModelText, applyEvent, compactText, contextText, contextWarn, diffLineClass, editableUuids, formatTokens, fromSnapshot,
-  grokSelection, newChatBody, researchPickerAgent,
+  agentModelText, applyEvent, canStartResearch, chatCostText, compactText, contextText, contextWarn, diffLineClass, editableUuids, formatTokens, fromSnapshot,
+  grokSelection, newChatBody, researchPickerAgent, researchSettings,
   inputJumps, isBusy, isClaude, stateText, toolDetail, toolSummary, turnDocLinks, usageText, type ChatView, type InputJumps,
   type Queued,
 } from './chatModel';
@@ -36,7 +38,7 @@ type RenderedText = Map<string, { text: string; html: string }>; // item key →
  * One conversation; with `id === null`, the blank page before its first message (a Grok discover chat when `newDiscover`).
  * `firstMessage`: the text the blank page just created this conversation with, pending until claude replays it.
  */
-export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, targets, onBack, onOpenDoc, onCreated }: {
+export function ChatPage({ id, newTicker, newDiscover, firstMessage, options: providedOptions, targets, onBack, onOpenDoc, onCreated }: {
   id: string | null;
   newTicker: string | null;
   newDiscover: boolean; // the blank page of a 发现新票 chat
@@ -47,6 +49,9 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
   onOpenDoc: (ticker: string) => void;
   onCreated: (id: string, text: string) => void;
 }) {
+  const [codexCatalog, setCodexCatalog] = useState<CodexCatalogState>(CODEX_LOADING);
+  const cancelCodexRequest = useRef<() => void>(() => {});
+  const options = useMemo(() => providedOptions && { ...providedOptions, codex: codexCatalog.options }, [providedOptions, codexCatalog]);
   const draftKey = id ?? (newDiscover ? 'new-discover/' : `new/${newTicker ?? ''}`);
   const [view, setView] = useState<ChatView | null>(null);
   const [input, setInput] = useState<Composer>(() => composer(loadDraft(draftKey)));
@@ -64,6 +69,7 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
   const [agent, setAgent] = useState<ChatAgent>(() => options?.default_agent ?? 'grok'); // 研究 / 讨论
   const [model, setModel] = useState('');
   const [effort, setEffort] = useState('');
+  const initialized = useRef(false); // do not replace an explicitly selected unavailable agent
   const [ctxWindow, setCtxWindow] = useState(0); // Grok / discover: the context window picked on the blank page
   const [lookbackDays, setLookbackDays] = useState(0); // discover: how many days back, picked on the blank page
   // discover: tickers in the candidate list; null until loaded, so the cards' first ticks can skip them
@@ -89,7 +95,8 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
   const claude = conv ? isClaude(conv) : !newDiscover && agent === 'claude';
   const discoverModel = options?.discover.models.find((m) => m.id === model);
   const grokPick = options && researchPickerAgent(agent) === 'grok' ? grokSelection(options.grok, model, effort, ctxWindow) : null;
-  const grokModel = grokPick ? options?.grok.models.find((m) => m.id === grokPick.model) : undefined;
+  const ready = id !== null || (discover ? !!discoverModel
+    : !(agent === 'codex' && codexCatalog.loading) && canStartResearch(options, agent, model, effort));
   const pickWindowedModel = (models: { id: string; windows: number[]; efforts: string[]; default_effort: string }[] | undefined, id: string) => {
     const m = models?.find((x) => x.id === id);
     if (!m) return;
@@ -101,7 +108,15 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
   // A new 研究 / 讨论 chat starts on the server's default agent, never the last one used (user, 2026-10-18).
   const pickAgent = (a: ChatAgent) => {
     if (!options) return;
+    cancelCodexRequest.current(); // a response may arrive before the effect cleanup runs
+    initialized.current = true;
     setAgent(a);
+    if (a === 'codex') {
+      setCodexCatalog(CODEX_LOADING);
+      setModel('');
+      setEffort('');
+      return;
+    }
     if (a === 'grok') {
       const picked = grokSelection(options.grok, '');
       if (!picked) return;
@@ -110,8 +125,20 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
       setCtxWindow(picked.ctxWindow);
       return;
     }
-    setModel(a === 'opencode' ? options.opencode.default_model : options.default_model);
-    setEffort(a === 'opencode' ? 'default' : options.default_effort);
+    const picked = researchSettings(options, a);
+    setModel(picked.model);
+    setEffort(picked.effort);
+  };
+
+  const pickResearchModel = (id: string) => {
+    if (!options) return;
+    if (agent === 'grok') {
+      pickWindowedModel(options.grok.models, id);
+      return;
+    }
+    const picked = researchSettings(options, agent, id, effort);
+    setModel(picked.model);
+    setEffort(picked.effort);
   };
 
   useEffect(() => {
@@ -126,7 +153,7 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
         }
         return;
       }
-      if (!model) pickAgent(options.default_agent);
+      if (!initialized.current) pickAgent(options.default_agent);
       return;
     }
     if (model) return;
@@ -138,6 +165,20 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
     setCtxWindow(m.windows.includes(d.default_window) ? d.default_window : m.windows[0]);
     setLookbackDays(d.default_lookback_days);
   }, [options, model, effort, ctxWindow, agent, newDiscover]);
+
+  useEffect(() => {
+    if (id !== null || newDiscover || !providedOptions) return;
+    const cancel = requestCodexOptions(agent, fetchCodexOptions, (next) => {
+      setCodexCatalog(next);
+      if (!next.loading) {
+        const picked = researchSettings({ ...providedOptions, codex: next.options }, 'codex');
+        setModel(picked.model);
+        setEffort(picked.effort);
+      }
+    });
+    cancelCodexRequest.current = cancel;
+    return cancel;
+  }, [id, newDiscover, agent, providedOptions]);
 
   useEffect(() => {
     if (id === null || !discover) return;
@@ -242,7 +283,7 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
   const submit = async () => {
     // A blank 发现新票 page may send with no text: the opener asks for the default KOL sweep.
     const body = text.trim() || (discover && id === null ? DISCOVER_OPENER : '');
-    if (!body || inFlight.current) return;
+    if (!body || !ready || inFlight.current) return;
     inFlight.current = true;
     setSending(true);
     setError(null);
@@ -314,8 +355,7 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
     }
   };
 
-  // opencode reports a cost only when its provider prices the model; 0 says nothing.
-  const cost = conv && !claude && !(conv.agent === 'opencode' && !conv.cost_usd) ? costText(conv.cost_usd) : '';
+  const cost = conv ? chatCostText(conv) : '';
   const title = conv?.title ?? (id !== null ? '对话' : newDiscover ? '发现新票' : newTicker ? `讨论 ${newTicker}` : '新票调研');
   const ticker = conv?.ticker ?? newTicker;
 
@@ -434,39 +474,9 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
           <div className="chat-editing">编辑消息：发送后将截断此后的对话（文件改动不会撤销）<button onClick={() => setInput(cancelEdit)}>取消</button></div>
         )}
         {id === null && options && !discover && (
-          <div className="model-picker">
-            <select aria-label="对话工具" value={agent} onChange={(e) => pickAgent(e.target.value as ChatAgent)}>
-              {options.agents.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
-            </select>
-            {researchPickerAgent(agent) === 'grok' ? (
-              grokModel && grokPick ? (
-                <>
-                  <select aria-label="模型" value={grokPick.model} onChange={(e) => pickWindowedModel(options.grok.models, e.target.value)}>
-                    {options.grok.models.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
-                  </select>
-                  <select aria-label="上下文长度" value={grokPick.ctxWindow} onChange={(e) => setCtxWindow(Number(e.target.value))}>
-                    {grokModel.windows.map((w) => <option key={w} value={w}>{formatTokens(w)}</option>)}
-                  </select>
-                  <select aria-label="思考强度" value={grokPick.effort} onChange={(e) => setEffort(e.target.value)}>
-                    {grokModel.efforts.map((x) => <option key={x} value={x}>{x}</option>)}
-                  </select>
-                </>
-              ) : (
-                options.grok.hint ? <span className="banner-muted">{options.grok.hint}</span> : null
-              )
-            ) : (
-              <>
-                <select aria-label="模型" value={model} onChange={(e) => setModel(e.target.value)}>
-                  {(agent === 'opencode' ? options.opencode.models : options.models).map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
-                </select>
-                {agent === 'claude' && (
-                  <select aria-label="思考强度" value={effort} onChange={(e) => setEffort(e.target.value)}>
-                    {options.efforts.map((x) => <option key={x} value={x}>{x}</option>)}
-                  </select>
-                )}
-              </>
-            )}
-          </div>
+          <ResearchModelPicker options={options} agent={agent} model={model} effort={effort}
+            ctxWindow={ctxWindow} onContextWindow={setCtxWindow}
+            onAgent={pickAgent} onModel={pickResearchModel} onEffort={setEffort} />
         )}
         {id === null && options && discover && (
           <>
@@ -496,9 +506,8 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options, ta
           <textarea ref={inputEl} rows={1} value={text} disabled={gone} onChange={(e) => setInput((c) => typed(c, e.target.value))}
             placeholder={id === null ? (discover ? '想看 KOL 最近推了什么？（直接发送即可）' : newTicker ? `围绕 ${newTicker} 说点什么` : '想调研哪只票？') : '输入消息'} />
           <button className="send-btn" onClick={submit}
-            disabled={sending || gone || (editing !== null && busy) || (!claude && busy)
-              || (discover && id === null ? !discoverModel : !text.trim())
-              || (id === null && !discover && researchPickerAgent(agent) === 'grok' && !grokPick)}>
+            disabled={!ready || sending || gone || (editing !== null && busy) || (!claude && busy)
+              || (discover && id === null ? !discoverModel : !text.trim())}>
             {sending ? '发送中' : !claude && busy ? '等这一轮结束' : '发送'}
           </button>
         </div>

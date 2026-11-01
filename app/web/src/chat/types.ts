@@ -6,7 +6,7 @@ export type ChatState = 'running' | 'compacting' | 'idle' | 'dormant';
 export type ChatKind = 'research' | 'ticker' | 'discover';
 
 /** Which program runs a chat; `kind` stays what it is about. discover is always grok. */
-export type ChatAgent = 'claude' | 'opencode' | 'grok';
+export type ChatAgent = 'claude' | 'opencode' | 'grok' | 'codex';
 
 export interface ChatSummary {
   id: string;
@@ -26,6 +26,7 @@ export interface ChatSummary {
   agent_label: string; // e.g. Claude Code
   model_label: string; // the model's name, or its id when the server knows none
   opencode_session?: string | null;
+  codex_thread?: string | null;
 }
 
 export interface Usage {
@@ -51,6 +52,11 @@ export interface ChatOptions {
   agents: { id: ChatAgent; label: string }[]; // the agents a 研究 / 讨论 chat can run on
   default_agent: ChatAgent;
   opencode: { models: { id: string; label: string }[]; default_model: string };
+  codex: {
+    models: { id: string; label: string; efforts: string[]; default_effort: string }[];
+    default_model: string | null;
+    hint: string | null;
+  };
 }
 
 export interface ContextUsage {

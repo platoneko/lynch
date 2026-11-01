@@ -9,7 +9,7 @@ import logging
 import time
 import uuid
 from collections.abc import Callable, Mapping
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -17,6 +17,8 @@ from lynch_reader.chat import transcript
 from lynch_reader.chat.approvals import (AUTO_DENY_MESSAGE, USER_DENY_MESSAGE, Approval, approvable_path,
                                          new_approval)
 from lynch_reader.chat.candidates import CandidateStore
+from lynch_reader.chat.codex import CodexConfig, CodexModel, codex_env
+from lynch_reader.chat.codex_link import CodexLink, CodexSetupError, discover_models
 from lynch_reader.chat.watch import WatchStore
 from lynch_reader.chat.config import (CHAT_EFFORTS, CHAT_MODELS, DEFAULT_EFFORT, DEFAULT_MODEL, IDLE_TIMEOUT_S,
                                       MAX_PROCESSES, LaunchConfig, launch_argv, launch_env)
@@ -41,7 +43,8 @@ log = logging.getLogger(__name__)
 BUSY = ("running", "compacting")
 COMPACT_COMMAND = "/compact"
 KINDS = ("research", "ticker", "discover")
-AGENT_LABELS = {"claude": "Claude Code", "opencode": "opencode", "grok": "Grok"}
+AGENT_LABELS = {"claude": "Claude Code", "opencode": "opencode", "grok": "Grok", "codex": "Codex"}
+CODEX_MODELS_TTL_S = 300.0
 
 
 def _process_name(agent: str) -> str:
@@ -78,7 +81,7 @@ class Invalid(Exception):
 class Live:
     """Runtime state of one conversation. No entry means dormant with nobody watching."""
     state: str = "dormant"  # running | compacting | idle | dormant
-    proc: ChatProcess | OpencodeLink | None = None
+    proc: ChatProcess | OpencodeLink | GrokLink | CodexLink | None = None
     last_used: float = 0.0
     partial: str = ""  # streamed text not yet closed by its full message
     retry: str | None = None  # the API request being retried, until the model answers or the turn ends
@@ -107,6 +110,7 @@ class ChatService:
     def __init__(self, index: ChatIndex, launch: LaunchConfig, projects_dir: Path, base_env: Mapping[str, str], *,
                  grok: GrokConfig | None = None, candidates: CandidateStore | None = None,
                  watch: WatchStore | None = None, opencode: OpencodeConfig | None = None,
+                 codex: CodexConfig | None = None,
                  monotonic: Callable[[], float] = time.monotonic, wall: Callable[[], float] = time.time,
                  idle_timeout_s: float = IDLE_TIMEOUT_S, max_processes: int = MAX_PROCESSES) -> None:
         self._index = index
@@ -118,6 +122,12 @@ class ChatService:
         self._grok_logs: dict[str, AppLog] = {}
         self._opencode = opencode
         self._opencode_env = dict(base_env)  # opencode bills its own providers; the Claude billing guard is moot
+        self._codex = codex
+        self._codex_env = codex_env(base_env)
+        self._codex_models: list[CodexModel] = []
+        self._codex_hint: str | None = "Codex 模型清单尚未读取" if codex else "Codex 未配置"
+        self._codex_models_at: float | None = None
+        self._codex_models_lock = asyncio.Lock()
         self.candidates = candidates
         self.watch = watch
         self._now, self._wall = monotonic, wall
@@ -135,10 +145,31 @@ class ChatService:
         grok = self._grok_block(research_models, DEFAULT_RESEARCH_MODEL, lookback=False)
         return {"models": [{"id": m, "label": label} for m, label in CHAT_MODELS], "efforts": list(CHAT_EFFORTS),
                 "default_model": DEFAULT_MODEL, "default_effort": DEFAULT_EFFORT, "discover": discover,
-                "agents": [{"id": a, "label": AGENT_LABELS[a]} for a in ("grok", "claude", "opencode")],
+                "agents": [{"id": a, "label": AGENT_LABELS[a]} for a in ("grok", "claude", "opencode", "codex")],
                 "default_agent": "grok", "grok": grok,
                 "opencode": {"models": [{"id": m, "label": label} for m, label in OPENCODE_MODELS],
-                             "default_model": DEFAULT_OPENCODE_MODEL}}
+                             "default_model": DEFAULT_OPENCODE_MODEL},
+                "codex": {"models": [m.public() for m in self._codex_models],
+                          "default_model": self._codex_default().id if self._codex_models else None,
+                          "hint": self._codex_hint}}
+
+    async def refresh_codex_models(self) -> None:
+        """Probe the local account/catalog at most once per five minutes, including failed probes."""
+        if self._codex is None:
+            return
+        async with self._codex_models_lock:
+            if self._codex_models_at is not None and self._now() - self._codex_models_at < CODEX_MODELS_TTL_S:
+                return
+            try:
+                self._codex_models = await discover_models(self._codex, self._codex_env)
+                self._codex_hint = None if self._codex_models else "Codex 没有可用模型，请在终端检查 codex 登录与模型配置"
+            except (CodexSetupError, OSError) as e:
+                self._codex_models = []
+                self._codex_hint = f"无法读取 Codex 模型：{e}"
+            self._codex_models_at = self._now()
+
+    def _codex_default(self) -> CodexModel:
+        return next((m for m in self._codex_models if m.is_default), self._codex_models[0])
 
     def _grok_block(self, models: list, preferred: str, *, lookback: bool) -> dict:
         default = next((m for m in models if m.id == preferred), models[0] if models else None)
@@ -190,11 +221,12 @@ class ChatService:
 
     # ---- commands
 
-    async def create(self, kind: str, ticker: str | None, text: str, model: str, effort: str,
+    async def create(self, kind: str, ticker: str | None, text: str, model: str | None, effort: str | None,
                      context_window: object = None, lookback_days: object = None,
                      agent: str | None = None) -> Conversation:
         # The values come from a JSON body; a list or dict would break the membership tests below.
-        if (not all(isinstance(v, str) for v in (kind, text, model, effort))
+        if (not all(isinstance(v, str) for v in (kind, text))
+                or not all(isinstance(v, str | None) for v in (model, effort))
                 or not all(isinstance(v, str | None) for v in (ticker, agent))):
             raise Invalid("fields must be strings")
         if kind not in KINDS:
@@ -203,10 +235,14 @@ class ChatService:
             raise Invalid("empty message")
         # 发现新票 runs only on Grok; 研究 / 讨论 default Grok, Claude Code and opencode still selectable.
         agent = agent or "grok"
-        allowed = ("grok",) if kind == "discover" else ("grok", "claude", "opencode")
+        allowed = ("grok",) if kind == "discover" else ("grok", "claude", "opencode", "codex")
         if agent not in allowed:
             raise Invalid(f"agent {agent!r} cannot run a {kind} chat")
-        if kind == "discover":
+        if agent == "codex":
+            conv = await self._new_codex(kind, ticker, text, model, effort)
+        elif not all(isinstance(v, str) for v in (model, effort)):
+            raise Invalid("fields must be strings")
+        elif kind == "discover":
             conv = await self._new_discover(text, model, effort, context_window, lookback_days)
         elif agent == "grok":
             conv = self._new_research_grok(kind, ticker, text, model, effort, context_window)
@@ -294,6 +330,26 @@ class ChatService:
                             effort=effort, created_at=now, updated_at=now, context_window=window,
                             grok_session=session, lookback_days=days, agent="grok")
 
+    async def _new_codex(self, kind: str, ticker: str | None, text: str, model: str | None,
+                         effort: str | None) -> Conversation:
+        self._require_codex()
+        if kind == "ticker" and not ticker:
+            raise Invalid("a ticker conversation needs a ticker")
+        await self.refresh_codex_models()
+        if not self._codex_models:
+            raise Conflict(self._codex_hint or "Codex 没有可用模型")
+        model = model or self._codex_default().id
+        chosen = next((m for m in self._codex_models if m.id == model), None)
+        if chosen is None:
+            raise Invalid(f"unknown Codex model {model!r}")
+        effort = effort or chosen.default_effort
+        if effort not in chosen.efforts:
+            raise Invalid(f"unknown Codex effort {effort!r}")
+        now = self._wall()
+        return Conversation(id=str(uuid.uuid4()), kind=kind, ticker=ticker if kind == "ticker" else None,
+                            title=make_title(text), model=model, effort=effort, created_at=now, updated_at=now,
+                            agent="codex")
+
     async def send(self, conv_id: str, text: str) -> None:
         conv = self._conv(conv_id)
         if not text.strip():
@@ -309,6 +365,9 @@ class ChatService:
                 return
             if conv.agent == "opencode":
                 await self._send_opencode(conv, live, text)
+                return
+            if conv.agent == "codex":
+                await self._send_codex(conv, live, text)
                 return
             if text.lstrip().startswith(COMPACT_COMMAND) and live.state in BUSY:
                 raise Conflict("等这一轮结束再压缩")
@@ -399,7 +458,7 @@ class ChatService:
             raise Conflict("这处改动已不在等待审批")
         self._broadcast(conv_id, "approval_done", {"request_id": request_id})
         try:
-            if conv.agent in ("opencode", "grok"):
+            if conv.agent in ("opencode", "grok", "codex"):
                 await live.proc.answer(request_id, allow)
             else:
                 await live.proc.respond(request_id, {"behavior": "allow", "updatedInput": approval.tool_input} if allow
@@ -628,7 +687,44 @@ class ChatService:
         live.last_used = self._now()
         self._set_state(conv.id, "idle")
 
-    def _link_events(self, conv_id: str, link: Callable[[], object]) -> LinkEvents:
+    async def _send_codex(self, conv: Conversation, live: Live, text: str) -> None:
+        if live.state in BUSY:
+            raise Conflict("回答进行中，等这一轮结束或先停止")
+        if text.lstrip().startswith(COMPACT_COMMAND):
+            raise Invalid("Codex 对话不支持压缩上下文")
+        if live.proc is None or not live.proc.alive:
+            await self._spawn_codex(conv)
+        link = live.proc
+        live.last_used = self._now()
+        self._index.update(conv.id, updated_at=self._wall())
+        self._set_state(conv.id, "running")
+        try:
+            await link.prompt(text)
+        except (CodexSetupError, OSError) as e:
+            if live.proc is link:
+                self._set_state(conv.id, "idle")
+            raise Conflict(f"Codex 无法发送消息：{e}") from e
+
+    async def _spawn_codex(self, conv: Conversation) -> None:
+        cfg = self._require_codex()
+        await self._make_room()
+        live = self._live.setdefault(conv.id, Live())
+        link = CodexLink(cfg, conv, self._codex_env, AppLog(self._transcript(conv.id)),
+                         self._link_events(conv.id, lambda: link))
+        try:
+            thread = await link.start()
+        except (CodexSetupError, OSError) as e:
+            await link.close()
+            raise Conflict(f"无法启动 Codex：{e}") from e
+        if conv.codex_thread != thread:
+            self._index.update(conv.id, codex_thread=thread)
+        self._clear_approvals(conv.id, live)
+        live.proc = link
+        live.partial = ""
+        live.last_used = self._now()
+        self._set_state(conv.id, "idle")
+
+    def _link_events(self, conv_id: str, link: Callable[[], OpencodeLink | GrokLink | CodexLink]) -> LinkEvents:
         """The link's callbacks, each ignored once the link is no longer the chat's (stopped or replaced)."""
         def current(handler: Callable[..., None]) -> Callable[..., None]:
             def run(*args) -> None:
@@ -673,7 +769,7 @@ class ChatService:
                           on_turn_end=current(on_turn_end),
                           on_exit=lambda expected, err: self._on_exit(conv_id, link(), expected, err))
 
-    async def _answer_link(self, conv_id: str, link: object, request_id: str) -> None:
+    async def _answer_link(self, conv_id: str, link: OpencodeLink | GrokLink | CodexLink, request_id: str) -> None:
         try:
             await link.answer(request_id, False)
         except OSError as e:  # the process died: its exit already told the page
@@ -877,7 +973,13 @@ class ChatService:
         root = self._launch.repo_root
         try:
             path = approvable_path(str(request.get("tool_name", "")), request.get("input") or {}, root)
-            return new_approval(request_id, request, path, root) if path is not None else None
+            if path is None:
+                return None
+            approval = new_approval(request_id, request, path, root)
+            native_diff = (request.get("input") or {}).get("_codex_diff")
+            if self._agent(conv_id) == "codex" and isinstance(native_diff, str):
+                approval = replace(approval, diff=native_diff)
+            return approval
         except Exception:
             log.exception("chat %s: permission request %s not understood", conv_id, request_id)
             return None
@@ -969,6 +1071,8 @@ class ChatService:
         live = self._live.get(conv.id)
         # Grok's label is its model id, which the page already shows (grok's catalog is a file read per row).
         labels = dict(CHAT_MODELS if conv.agent == "claude" else OPENCODE_MODELS if conv.agent == "opencode" else ())
+        if conv.agent == "codex":
+            labels = {m.id: m.label for m in self._codex_models}
         return {**asdict(conv), "state": live.state if live else "dormant", "agent_label": AGENT_LABELS[conv.agent],
                 "model_label": labels.get(conv.model, conv.model)}
 
@@ -986,6 +1090,11 @@ class ChatService:
             raise Invalid("opencode 未配置")
         return self._opencode
 
+    def _require_codex(self) -> CodexConfig:
+        if self._codex is None:
+            raise Invalid("Codex 未配置")
+        return self._codex
+
     def _grok_log(self, conv_id: str) -> AppLog:
         if conv_id not in self._grok_logs:
             self._grok_logs[conv_id] = AppLog(self._transcript(conv_id))
@@ -1001,6 +1110,8 @@ class ChatService:
             return self._require_grok().logs / f"{conv_id}.jsonl"
         if agent == "opencode":
             return self._require_opencode().logs / f"{conv_id}.jsonl"
+        if agent == "codex":
+            return self._require_codex().logs / f"{conv_id}.jsonl"
         return self._projects / f"{conv_id}.jsonl"
 
     def _visible(self, conv: Conversation) -> bool:

@@ -3,7 +3,12 @@ name = "lynch-reader"
 version = "0.1.0"
 description = "HTTP surface for the lynch mobile app: reader and chats"
 requires-python = ">=3.12"
-dependencies = ["starlette>=0.47", "uvicorn>=0.35"]
+dependencies = [
+    "starlette>=0.47",
+    "tree-sitter>=0.25,<0.27",
+    "tree-sitter-bash>=0.25,<0.26",
+    "uvicorn>=0.35",
+]
 
 [dependency-groups]
 dev = ["pytest>=8", "httpx>=0.28"]
