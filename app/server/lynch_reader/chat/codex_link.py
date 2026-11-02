@@ -163,7 +163,9 @@ class CodexLink:
         self._done.clear()
         try:
             result = await self._rpc.call("turn/start", {"threadId": self._thread,
-                "input": [{"type": "text", "text": text}], "model": self._conv.model, "effort": self._conv.effort})
+                "input": [{"type": "text", "text": text}], "model": self._conv.model, "effort": self._conv.effort,
+                # Queries need the network on new and resumed threads; native patches still require approval.
+                "sandboxPolicy": {"type": "readOnly", "networkAccess": True}})
             if self._active:
                 self._turn = result["turn"]["id"]
                 self._starting = False
