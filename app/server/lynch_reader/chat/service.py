@@ -19,13 +19,13 @@ from lynch_reader.chat.approvals import (AUTO_DENY_MESSAGE, USER_DENY_MESSAGE, A
 from lynch_reader.chat.candidates import CandidateStore
 from lynch_reader.chat.codex import CodexConfig, CodexModel, codex_env
 from lynch_reader.chat.codex_link import CodexLink, CodexSetupError, discover_models
+from lynch_reader.chat.events import LinkEvents
 from lynch_reader.chat.watch import WatchStore
 from lynch_reader.chat.config import (CHAT_EFFORTS, CHAT_MODELS, DEFAULT_EFFORT, DEFAULT_MODEL, IDLE_TIMEOUT_S,
                                       MAX_PROCESSES, LaunchConfig, launch_argv, launch_env)
 from lynch_reader.chat.grok import (DEFAULT_GROK_MODEL, DEFAULT_RESEARCH_EFFORT, DEFAULT_RESEARCH_MODEL, DEFAULT_WINDOW,
                                     MAX_TURNS, GrokConfig, GrokSetupError, discover_prompt, grok_argv, grok_env,
-                                    grok_models, new_session, prepare_workdir, research_env, write_research_home,
-                                    write_research_rules)
+                                    grok_models, new_session, prepare_workdir, research_env, write_research_home)
 from lynch_reader.chat.grok_link import GrokLink
 from lynch_reader.chat.app_log import AppLog
 from lynch_reader.chat.index import ChatIndex, Conversation, make_title
@@ -35,7 +35,7 @@ from lynch_reader.chat.kol import (DEFAULT_LOOKBACK_DAYS, LOOKBACK_DAYS, KolSour
                                    kol_sources)
 from lynch_reader.chat.opencode import (DEFAULT_OPENCODE_MODEL, OPENCODE_EFFORT, OPENCODE_MODELS, OpencodeConfig,
                                         opencode_env, write_rules)
-from lynch_reader.chat.opencode_link import LinkEvents, OpencodeLink, OpencodeSetupError
+from lynch_reader.chat.opencode_link import OpencodeLink, OpencodeSetupError
 from lynch_reader.chat.process import ChatProcess
 
 log = logging.getLogger(__name__)
@@ -52,17 +52,21 @@ def _process_name(agent: str) -> str:
     return "Claude" if agent == "claude" else AGENT_LABELS[agent]
 
 
-def _grok_failure(result: dict) -> str | None:
-    """What to tell the user when grok's `result` line is an error subtype; None for a successful turn."""
-    if result.get("subtype") == "success" and result.get("is_error") not in (True, "True"):
+def _result_failure(result: dict, agent: str) -> str | None:
+    """A stream-json result can be the only place the agent reports a failure."""
+    subtype = str(result.get("subtype") or "")
+    failed = (result.get("is_error") in (True, "True") or subtype.startswith("error")
+              or (agent == "grok" and subtype != "success"))
+    if not failed:
         return None
-    if result.get("subtype") == "error_max_turns":
+    if agent == "grok" and subtype == "error_max_turns":
         return (f"Grok 达到单轮步数上限（{MAX_TURNS} 步），本轮提前结束。"
                 "可以缩小搜索范围再试：少看几位 KOL，或缩短回看时长。")
     errors = result.get("errors")
     detail = "；".join(map(str, errors)) if isinstance(errors, list) else str(result.get("result") or "")
     detail = detail.strip()[:300]
-    return f"Grok 本轮出错结束：{detail}" if detail else "Grok 本轮出错结束"
+    label = _process_name(agent)
+    return f"{label} 本轮出错结束：{detail}" if detail else f"{label} 本轮出错结束"
 
 
 class NotFound(Exception):
@@ -99,6 +103,8 @@ class Live:
     # Skill edits the agent is waiting on the phone to allow or deny, by request id, in arrival order.
     # They belong to `proc`: whatever ends it (exit, stop, edit, archive) drops them.
     approvals: dict[str, Approval] = field(default_factory=dict)
+    framework_writes: dict[str, str] = field(default_factory=dict)  # tool id → ticker, awaiting a successful result
+    interrupted: bool = False  # Claude already displayed its native stop marker for this turn
     # Held by public commands that spawn or stop this chat's own process (send, edit, archive),
     # so two of them never race on `proc`. `_spawn` / `_stop` / `_make_room` never take it:
     # `_make_room` stops other chats' idle processes without their lock, so no lock-order deadlock.
@@ -361,13 +367,10 @@ class ChatService:
                 if conv.kind == "discover":
                     await self._start_grok_turn(conv, live, text)
                 else:
-                    await self._send_research_grok(conv, live, text)
+                    await self._send_link(conv, live, text)
                 return
-            if conv.agent == "opencode":
-                await self._send_opencode(conv, live, text)
-                return
-            if conv.agent == "codex":
-                await self._send_codex(conv, live, text)
+            if conv.agent in ("opencode", "codex"):
+                await self._send_link(conv, live, text)
                 return
             if text.lstrip().startswith(COMPACT_COMMAND) and live.state in BUSY:
                 raise Conflict("等这一轮结束再压缩")
@@ -609,23 +612,31 @@ class ChatService:
             if not answered:
                 self._broadcast_entry(conv_id, self._grok_log(conv_id).interrupted())
 
-    async def _send_opencode(self, conv: Conversation, live: Live, text: str) -> None:
-        """One session/prompt per turn on the chat's long-lived link. Called under the chat's lock."""
-        if live.state in BUSY:  # opencode takes no message mid-turn
+    async def _send_link(self, conv: Conversation, live: Live, text: str) -> None:
+        """Start one turn under the chat lock; completion callbacks own its ending state."""
+        label = AGENT_LABELS[conv.agent]
+        if live.state in BUSY:
             raise Conflict("回答进行中，等这一轮结束或先停止")
         if text.lstrip().startswith(COMPACT_COMMAND):
-            raise Invalid("opencode 对话不支持压缩上下文")
+            raise Invalid(f"{label} 对话不支持压缩上下文")
         if live.proc is None or not live.proc.alive:
-            await self._spawn_opencode(conv)
+            spawn = {"opencode": self._spawn_opencode, "grok": self._spawn_research_grok,
+                     "codex": self._spawn_codex}[conv.agent]
+            await spawn(conv)
         link = live.proc
+        self._index.update(conv.id, updated_at=self._wall())
+        live.last_used = self._now()
+        self._set_state(conv.id, "running")
         try:
             await link.prompt(text)
-        except (BrokenPipeError, ConnectionResetError) as e:
-            raise Conflict("opencode 进程已退出，原因见对话里的提示") from e
-        self._index.update(conv.id, updated_at=self._wall())
-        if live.proc is link:  # else it exited while we wrote; its exit set dormant and said why
-            live.last_used = self._now()
-            self._set_state(conv.id, "running")
+        except BaseException as e:
+            # A failed/cancelled write may already have delivered the prompt. Close that uncertain turn
+            # before another send, and never overwrite a completion callback after a successful write.
+            if live.proc is link:
+                await self._stop(conv.id)
+            if isinstance(e, (CodexSetupError, OSError)):
+                raise Conflict(f"{label} 无法发送消息：{e}") from e
+            raise
 
     async def _spawn_opencode(self, conv: Conversation) -> None:
         cfg = self._require_opencode()
@@ -647,29 +658,11 @@ class ChatService:
         live.last_used = self._now()
         self._set_state(conv.id, "idle")
 
-    async def _send_research_grok(self, conv: Conversation, live: Live, text: str) -> None:
-        if live.state in BUSY:
-            raise Conflict("回答进行中，等这一轮结束或先停止")
-        if text.lstrip().startswith(COMPACT_COMMAND):
-            raise Invalid("Grok 对话不支持压缩上下文")
-        if live.proc is None or not live.proc.alive:
-            await self._spawn_research_grok(conv)
-        link = live.proc
-        try:
-            await link.prompt(text)
-        except (BrokenPipeError, ConnectionResetError) as e:
-            raise Conflict("Grok 进程已退出，原因见对话里的提示") from e
-        self._index.update(conv.id, updated_at=self._wall())
-        if live.proc is link:
-            live.last_used = self._now()
-            self._set_state(conv.id, "running")
-
     async def _spawn_research_grok(self, conv: Conversation) -> None:
         cfg = self._require_grok()
         await self._make_room()
         live = self._live.setdefault(conv.id, Live())
         home = write_research_home(cfg, conv, cfg.home / ".grok")
-        write_research_rules(cfg, conv)
         env = research_env(self._env, home)
         link = GrokLink(cfg, conv, env, AppLog(self._transcript(conv.id)),
                         self._link_events(conv.id, lambda: link), self._launch.repo_root)
@@ -686,24 +679,6 @@ class ChatService:
         live.partial = ""
         live.last_used = self._now()
         self._set_state(conv.id, "idle")
-
-    async def _send_codex(self, conv: Conversation, live: Live, text: str) -> None:
-        if live.state in BUSY:
-            raise Conflict("回答进行中，等这一轮结束或先停止")
-        if text.lstrip().startswith(COMPACT_COMMAND):
-            raise Invalid("Codex 对话不支持压缩上下文")
-        if live.proc is None or not live.proc.alive:
-            await self._spawn_codex(conv)
-        link = live.proc
-        live.last_used = self._now()
-        self._index.update(conv.id, updated_at=self._wall())
-        self._set_state(conv.id, "running")
-        try:
-            await link.prompt(text)
-        except (CodexSetupError, OSError) as e:
-            if live.proc is link:
-                self._set_state(conv.id, "idle")
-            raise Conflict(f"Codex 无法发送消息：{e}") from e
 
     async def _spawn_codex(self, conv: Conversation) -> None:
         cfg = self._require_codex()
@@ -762,6 +737,7 @@ class ChatService:
             live.partial = ""
             live.last_used = self._now()
             self._clear_approvals(conv_id, live)
+            live.framework_writes.clear()
             self._set_state(conv_id, "idle")
 
         return LinkEvents(on_delta=current(on_delta), on_entry=current(lambda live, e: self._show(conv_id, live, e)),
@@ -794,6 +770,7 @@ class ChatService:
             return
         proc, live.proc = live.proc, None  # detach first: its exit is then ignored as stale
         self._clear_approvals(conv_id, live)
+        live.framework_writes.clear()
         if proc is not None:
             await proc.close()
         # While we waited, an archive may have dropped this chat, or a send attached a new process.
@@ -820,6 +797,7 @@ class ChatService:
                                 and live.result_seen)  # discover grok exits by itself once its turn is done
         live.proc = None
         self._clear_approvals(conv_id, live)
+        live.framework_writes.clear()
         live.partial = ""
         live.pending_cut = None  # an edit whose process died unwritten is lost: the next resume sees the old tip
         self._set_state(conv_id, "dormant")
@@ -877,10 +855,13 @@ class ChatService:
         """A transcript message's items to the open pages; tool results patch the call they answer."""
         for item in message_items(msg):
             if item["kind"] == "tool_result":
+                self._on_tool_result(conv_id, live, item)
                 self._broadcast(conv_id, "tool_result", item)
                 continue
             if item["kind"] == "text":
                 live.partial = ""
+            elif item["kind"] == "notice" and item["text"] == "已停止":
+                live.interrupted = True
             self._broadcast(conv_id, "item", item)
             if item["kind"] == "tool":
                 self._on_tool(conv_id, item)
@@ -901,11 +882,11 @@ class ChatService:
 
     def _on_result(self, conv_id: str, live: Live, msg: dict) -> None:
         conv = self._index.get(conv_id)
+        failure = _result_failure(msg, conv.agent)
+        if failure is not None and not live.interrupted:
+            self._notice(conv_id, failure)
         if conv.agent == "grok":
             live.result_seen = True  # even an error result: grok's exit after it is the normal end of the turn
-            failure = _grok_failure(msg)
-            if failure is not None:
-                self._notice(conv_id, failure)
             cost = msg.get("total_cost_usd")
             changes = ({"cost_usd": (conv.cost_usd or 0.0) + cost}
                        if isinstance(cost, (int, float)) and not isinstance(cost, bool) else {})
@@ -915,6 +896,7 @@ class ChatService:
         live.partial = ""
         live.last_used = self._now()
         self._clear_approvals(conv_id, live)  # an interrupted turn whose cancel never arrived
+        live.framework_writes.clear()
         # A discover turn ends when grok exits (`_on_exit`): until then it still writes its session, so a
         # second resume, an eviction or a reap must not start.
         if conv.agent != "grok" or conv.kind != "discover":
@@ -1015,13 +997,26 @@ class ChatService:
             self._notice(conv_id, f"订阅额度已满，{when} 重置")
 
     def _on_tool(self, conv_id: str, item: dict) -> None:
-        """A research conversation joins the ticker whose framework it writes first."""
+        """Remember a possible framework write until its tool result confirms success."""
         conv = self._index.get(conv_id)
         if conv is None or conv.kind != "research" or conv.ticker is not None or item["name"] not in ("Write", "Edit"):
             return
-        ticker = framework_ticker(str(item["input"].get("file_path", "")), self._launch.repo_root)
+        inputs = item["input"]
+        if inputs.get("operation") == "delete":
+            return
+        ticker = framework_ticker(str(inputs.get("move_path") or inputs.get("file_path", "")),
+                                  self._launch.repo_root)
         if ticker is not None:
+            self._live[conv_id].framework_writes[item["id"]] = ticker
+
+    def _on_tool_result(self, conv_id: str, live: Live, item: dict) -> None:
+        ticker = live.framework_writes.pop(item["id"], None)
+        if ticker is None or item["is_error"]:
+            return
+        conv = self._index.get(conv_id)
+        if conv is not None and conv.kind == "research" and conv.ticker is None:
             conv = self._index.update(conv_id, ticker=ticker)
+            live.framework_writes.clear()
             self._broadcast(conv_id, "conv", self._summary(conv))
 
     # ---- helpers
@@ -1036,6 +1031,8 @@ class ChatService:
         if state not in BUSY:
             self._set_retry(conv_id, None)  # the turn is over, however it ended
         if live.state != state:
+            if state in BUSY and live.state not in BUSY:
+                live.interrupted = False
             live.state = state
             self._broadcast(conv_id, "state", {"state": state})
 

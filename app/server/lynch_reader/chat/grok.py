@@ -69,7 +69,7 @@ RESEARCH_ALLOW: tuple[str, ...] = (
 )
 RESEARCH_ASK: tuple[str, ...] = SKILL_ASK
 RESEARCH_DENY: tuple[str, ...] = (
-    "Write(**/eval/**)", "Edit(**/eval/**)", "Bash(sudo *)",
+    "Write(eval/**)", "Edit(eval/**)", "Bash(sudo *)",
     *(f"Bash(git *{c}*)" for c in GIT_BLOCKED_COMMANDS),
     *(f"Bash(longbridge {c}*)" for c in LONGBRIDGE_BLOCKED_COMMANDS),
     "MCPTool(longbridge__*)", "MCPTool(ida__*)", "MCPTool(github-nekomoto__*)",

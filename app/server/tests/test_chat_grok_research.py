@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from fnmatch import fnmatchcase
+import tomllib
+
+import pytest
+
 from lynch_reader.chat.config import GIT_BLOCKED_COMMANDS, LONGBRIDGE_BLOCKED_COMMANDS
 from lynch_reader.chat.grok import (DEFAULT_RESEARCH_EFFORT, DEFAULT_RESEARCH_MODEL, RESEARCH_ASK, RESEARCH_ALLOW,
                                     RESEARCH_DENY, grok_models, grok_tool, research_argv, research_env,
@@ -76,7 +81,7 @@ def test_research_permission_lists_allow_frameworks_ask_skill_deny_eval():
     assert "Bash(*)" in RESEARCH_ALLOW
     assert "WebSearch" in RESEARCH_ALLOW and "WebFetch" in RESEARCH_ALLOW
     assert any("sediment-framework" in r for r in RESEARCH_ASK)
-    assert "Write(**/eval/**)" in RESEARCH_DENY and "Edit(**/eval/**)" in RESEARCH_DENY
+    assert "Write(eval/**)" in RESEARCH_DENY and "Edit(eval/**)" in RESEARCH_DENY
     assert "Bash(sudo *)" in RESEARCH_DENY
     assert all(f"Bash(git *{c}*)" in RESEARCH_DENY for c in GIT_BLOCKED_COMMANDS)
     assert all(f"Bash(longbridge {c}*)" in RESEARCH_DENY for c in LONGBRIDGE_BLOCKED_COMMANDS)
@@ -94,3 +99,17 @@ def test_write_research_home_is_dontAsk_with_symlinked_auth(tmp_path):
     assert 'permission_mode = "dontAsk"' in text
     assert "Edit(frameworks/**)" in text and "sediment-framework" in text
     assert (home / "auth.json").resolve() == (real / "auth.json").resolve()
+
+
+@pytest.mark.parametrize("tool,path,denied", [
+    ("Write", "frameworks/eval/AAA.US.py", False),
+    ("Edit", "frameworks/eval/AAA.US.py", False),
+    ("Write", "eval/lib/core.py", True),
+    ("Edit", "eval/lib/core.py", True),
+])
+def test_emitted_file_denies_protect_code_eval_without_blocking_framework_eval(tmp_path, tool, path, denied):
+    home = write_research_home(cfg(tmp_path), conv(), tmp_path / "fake-home")
+    permissions = tomllib.loads((home / "config.toml").read_text())["permission"]
+    patterns = [rule[len(tool) + 1:-1] for rule in permissions["deny"] if rule.startswith(f"{tool}(")]
+    # These emitted patterns are path globs; full matching catches an accidental **/eval/** scope.
+    assert any(fnmatchcase(path, pattern) for pattern in patterns) is denied

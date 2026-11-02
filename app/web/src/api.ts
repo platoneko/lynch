@@ -28,8 +28,8 @@ async function answered(res: Response): Promise<Response> {
   return res;
 }
 
-export async function get(path: string): Promise<Response> {
-  return answered(await send(path, { cache: 'no-store' }));
+export async function get(path: string, signal?: AbortSignal): Promise<Response> {
+  return answered(await send(path, { cache: 'no-store', signal }));
 }
 
 /** A server answer and its tag (ETag), held to ask next time whether the answer changed. */

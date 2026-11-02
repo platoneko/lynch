@@ -8,10 +8,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
-from dataclasses import dataclass
 
 from lynch_reader.chat.app_log import AppLog
+from lynch_reader.chat.events import LinkEvents
 from lynch_reader.chat.index import Conversation
 from lynch_reader.chat.opencode import (OPENCODE_MODE, SETUP_TIMEOUT_S, OpencodeConfig, claude_tool, mcp_servers,
                                         opencode_argv)
@@ -30,16 +29,6 @@ class OpencodeSetupError(Exception):
 
 class _RpcError(OpencodeSetupError):
     """opencode answered a setup request with a JSON-RPC error (as opposed to no answer or an exit)."""
-
-
-@dataclass
-class LinkEvents:
-    on_delta: Callable[[str], None]  # streamed reply text
-    on_entry: Callable[[dict], None]  # an AppLog entry just appended
-    on_usage: Callable[[int | None, int | None, float | None], None]  # context tokens, window, session cost USD
-    on_permission: Callable[[str, str, str, dict], None]  # request id, tool call id, Claude tool name, its input
-    on_turn_end: Callable[[str | None, str | None], None]  # stopReason, or None and the prompt's error text
-    on_exit: Callable[[bool, str], None]  # expected, stderr tail
 
 
 class OpencodeLink:
@@ -96,14 +85,17 @@ class OpencodeLink:
                     await self._call("session/set_config_option",
                                      {"sessionId": session, "configId": config_id, "value": value})
             return session
-        except Exception as e:  # whatever failed (a bad answer, an unreadable .mcp.json), no process outlives it
+        except BaseException as e:  # cancellation must also release the not-yet-attached process
             await self._proc.close()
+            if not isinstance(e, Exception):
+                raise
             raise e if isinstance(e, OpencodeSetupError) else OpencodeSetupError(f"{type(e).__name__}: {e}") from e
 
     async def prompt(self, text: str) -> None:
         """Sends one user message; the turn's end arrives as on_turn_end. opencode never echoes the message, so
         the app records it."""
         self._events.on_entry(self._log.user(text))
+        self._used = None
         self._closed_turn = False
         self._prompt_id = self._new_id()
         await self._proc.send_json({"jsonrpc": "2.0", "id": self._prompt_id, "method": "session/prompt",
@@ -138,8 +130,8 @@ class OpencodeLink:
         rpc_id = self._new_id()
         future = asyncio.get_running_loop().create_future()
         self._calls[rpc_id] = future
-        await self._proc.send_json({"jsonrpc": "2.0", "id": rpc_id, "method": method, "params": params})
         try:
+            await self._proc.send_json({"jsonrpc": "2.0", "id": rpc_id, "method": method, "params": params})
             return await asyncio.wait_for(future, self._setup_timeout_s)
         except TimeoutError as e:
             raise OpencodeSetupError(f"opencode 没有响应（{method}）") from e

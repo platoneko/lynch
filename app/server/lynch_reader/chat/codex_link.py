@@ -2,16 +2,16 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import Callable
-from pathlib import Path
 
 from lynch_reader.chat.app_log import AppLog
 from lynch_reader.chat.approvals import APPROVABLE_SKILL, AUTO_DENY_MESSAGE
 from lynch_reader.chat.codex import (SETUP_TIMEOUT_S, CodexConfig, CodexModel, codex_argv, command_allowed,
-                                    file_scope, parse_models, system_prompt)
+                                    file_scope, native_file_changes, parse_models, system_prompt)
 from lynch_reader.chat.index import Conversation
-from lynch_reader.chat.opencode_link import LinkEvents
+from lynch_reader.chat.events import LinkEvents
 from lynch_reader.chat.process import ChatProcess
 
 log = logging.getLogger(__name__)
@@ -267,20 +267,19 @@ class CodexLink:
                 return
             skill = (self._cfg.repo_root / APPROVABLE_SKILL).resolve()
             to_ask = []
-            for n, change in enumerate(changes):
-                path = Path(change["path"])
-                path = (path if path.is_absolute() else self._cfg.repo_root / path).resolve()
-                move = (change.get("kind") or {}).get("move_path")
-                if move and not path.is_relative_to(skill):
-                    destination = Path(move)
-                    path = (destination if destination.is_absolute() else self._cfg.repo_root / destination).resolve()
-                if path.is_relative_to(skill):
+            for n, change in enumerate(native_file_changes(self._cfg.repo_root, changes) or []):
+                path = next((p for p in (change.path, change.move_path)
+                             if p is not None and p.is_relative_to(skill)), None)
+                if path is not None:
                     to_ask.append((f"{rpc_id}:{n}", n, path, change))
             remaining = {request_id for request_id, _, _, _ in to_ask}
             for request_id, n, path, change in to_ask:
                 self._asks[request_id] = (rpc_id, remaining)
+                diff = change.diff
+                if change.move_path is not None:
+                    diff = f"操作：{change.operation}\n来源：{change.path}\n目标：{change.move_path}\n\n{diff}"
                 self._events.on_permission(request_id, f"{item['id']}:{n}", "Write",
-                                           {"file_path": str(path), "content": "", "_codex_diff": change.get("diff") or ""})
+                                           {"file_path": str(path), "content": "", "_codex_diff": diff})
         else:
             self._rpc.reply(rpc_id, error="Unsupported request; ask the user in the conversation instead")
 
@@ -295,7 +294,7 @@ class CodexLink:
                 self._texts.pop(item_id, None)
                 self._done.add(item_id)
             return
-        if kind not in ("commandExecution", "fileChange", "webSearch", "mcpToolCall", "collabToolCall"):
+        if kind not in ("commandExecution", "fileChange", "webSearch", "mcpToolCall", "collabAgentToolCall"):
             return
         if item_id not in self._items:
             self._flush_text()
@@ -310,17 +309,20 @@ class CodexLink:
         item_id, kind = item["id"], item["type"]
         if kind == "fileChange":
             calls = []
-            for n, change in enumerate(item.get("changes") or []):
-                path = Path(change["path"])
-                path = path if path.is_absolute() else self._cfg.repo_root / path
-                calls.append((f"{item_id}:{n}", "Edit", {"file_path": str(path), "diff": change.get("diff") or ""}))
+            for n, change in enumerate(native_file_changes(self._cfg.repo_root, item.get("changes")) or []):
+                inputs = {"file_path": str(change.path), "diff": change.diff, "operation": change.operation}
+                if change.move_path is not None:
+                    inputs["move_path"] = str(change.move_path)
+                calls.append((f"{item_id}:{n}", "Edit", inputs))
             return calls
         if kind == "commandExecution":
             return [(item_id, "Bash", {"command": item.get("command") or ""})]
         if kind == "webSearch":
             return [(item_id, "WebSearch", {"query": item.get("query") or "", "action": item.get("action")})]
-        if kind == "collabToolCall":
-            return [(item_id, "Agent", {"prompt": item.get("prompt") or "", "tool": item.get("tool")})]
+        if kind == "collabAgentToolCall":
+            return [(item_id, "Agent", {"prompt": item.get("prompt") or "", "tool": item.get("tool"),
+                                        "senderThreadId": item.get("senderThreadId"),
+                                        "receiverThreadIds": item.get("receiverThreadIds") or []})]
         return [(item_id, f"mcp__{item.get('server')}__{item.get('tool')}", item.get("arguments") or {})]
 
     def _write_tools(self, item: dict) -> None:
@@ -333,6 +335,8 @@ class CodexLink:
         failed = interrupted or status in ("failed", "declined") or item.get("exitCode") not in (None, 0)
         output = ("已中断" if interrupted else AUTO_DENY_MESSAGE if status == "declined"
                   else item.get("aggregatedOutput") or item.get("error") or item.get("result") or "")
+        if item.get("type") == "collabAgentToolCall" and not interrupted and not output:
+            output = json.dumps(item.get("agentsStates") or {}, ensure_ascii=False)
         for call_id, _, _ in self._tool_calls(item):
             self._write("user", [{"type": "tool_result", "tool_use_id": call_id, "content": str(output), "is_error": failed}])
 
