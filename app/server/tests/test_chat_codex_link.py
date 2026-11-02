@@ -69,6 +69,29 @@ def test_stream_and_usage_are_persisted_once_and_resume_without_replay(tmp_path)
     assert history.context_tokens == 1234
 
 
+def test_every_turn_allows_network_without_bypassing_file_approval(tmp_path):
+    async def main():
+        cfg, env = setup(tmp_path)
+        thread = None
+        for prompts in (("one", "two"), ("resumed",)):
+            rec = LinkRecorder()
+            link = open_link(cfg, env, rec, thread)
+            try:
+                thread = await link.start()
+                for count, prompt in enumerate(prompts, 1):
+                    await link.prompt(prompt)
+                    await until(lambda: len(rec.turn_ends) == count)
+            finally:
+                await link.close()
+        return [json.loads(line) for line in (tmp_path / "rpc.jsonl").read_text().splitlines()]
+
+    calls = asyncio.run(main())
+    turns = [call for call in calls if call.get("method") == "turn/start"]
+    assert len(turns) == 3
+    for call in turns:
+        assert call["params"].get("sandboxPolicy") == {"type": "readOnly", "networkAccess": True}
+
+
 def test_interrupt_finishes_turn_and_records_stop(tmp_path):
     async def main():
         cfg, env = setup(tmp_path)

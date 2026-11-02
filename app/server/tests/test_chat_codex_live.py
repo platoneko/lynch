@@ -44,6 +44,15 @@ def test_local_codex_stream_patch_approval_and_resume(tmp_path):
                     await asyncio.sleep(0.05)
             assert recorder.turn_ends[-1][1] is None, recorder.turn_ends[-1]
 
+        async def check_filings(active, recorder):
+            before = len(recorder.entries)
+            await turn(active, recorder, "这是临时目录协议测试。只运行 longbridge filing AAPL.US --count 1 --format json，"
+                       "使用默认沙箱权限，不申请沙箱外执行，不重试，不读其他文件。然后简短报告结果。")
+            outputs = [str(block.get("content", "")) for entry in recorder.entries[before:]
+                       for block in entry["message"]["content"]
+                       if isinstance(block, dict) and block.get("type") == "tool_result"]
+            assert any('"title":' in output and '"file_urls":' in output for output in outputs), outputs
+
         (tmp_path / "frameworks/_local/tmp").mkdir(parents=True)
         skill = tmp_path / "frameworks/.claude/skills/sediment-framework"
         skill.mkdir(parents=True)
@@ -58,6 +67,7 @@ def test_local_codex_stream_patch_approval_and_resume(tmp_path):
             assert any("live-shell-ok" in str(block.get("content", ""))
                        for entry in rec.entries for block in entry["message"]["content"]
                        if isinstance(block, dict) and block.get("type") == "tool_result")
+            await check_filings(link, rec)
             await turn(link, rec, "这是临时目录协议测试，可以落盘。仅用 apply_patch 创建 "
                                   "frameworks/_local/tmp/probe.txt，内容为 live-ok 一行；不要使用 shell 写入，不要提交。")
             assert (tmp_path / "frameworks/_local/tmp/probe.txt").read_text().strip() == "live-ok"
@@ -75,8 +85,9 @@ def test_local_codex_stream_patch_approval_and_resume(tmp_path):
             assert rec2.entries == []
             await turn(resumed, rec2, "我一开始说的口令是什么？不要运行工具，仅回复口令。")
             assert "MANGO-73" in "".join(rec2.deltas)
+            await check_filings(resumed, rec2)
         finally:
             await resumed.close()
-        print(f"Codex {chosen.id}: stream, shell, file approval, rejected skill patch and resume verified")
+        print(f"Codex {chosen.id}: stream, shell, live filings before/after resume, file approval and rejected skill patch verified")
 
     asyncio.run(main())
