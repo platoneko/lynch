@@ -4,8 +4,8 @@ import type { ChatAgent, ChatEvent, ChatKind, ChatList, ChatOptions, SavedCandid
 
 const base = (id: string) => `/api/chats/${encodeURIComponent(id)}`;
 
-export async function fetchChats(): Promise<ChatList> {
-  return (await get('/api/chats')).json();
+export async function fetchChats(signal?: AbortSignal): Promise<ChatList> {
+  return (await get('/api/chats', signal)).json();
 }
 
 export async function fetchChatOptions(): Promise<ChatOptions> {
@@ -72,6 +72,7 @@ const EVENTS = ['delta', 'item', 'tool_result', 'state', 'retry', 'usage', 'cont
 
 /** Silence after which a stream counts as dead: three missed heartbeats (server chat/routes.py HEARTBEAT_S). */
 export const STALE_MS = 45_000;
+const RECOVERY_MS = 10_000;
 
 /** Delay before reopening a stream after `attempt` failed reopens: 1 s, 2 s, 4 s … capped at 30 s. */
 export function backoffMs(attempt: number): number {
@@ -99,37 +100,46 @@ export function openChatEvents(id: string, on: {
   let watchdog: ReturnType<typeof setTimeout> | undefined;
   let attempt = 0;
   let stopped = false;
+  let recovery: AbortController | null = null;
 
   function stop(): void {
     stopped = true;
     clearTimeout(timer);
     clearTimeout(watchdog);
+    recovery?.abort();
     es?.close();
+    es = null;
   }
 
   function connect(): void {
+    if (stopped) return;
     const source = new EventSource(`${base(id)}/events`);
     es = source;
+    const current = () => !stopped && es === source;
     const heard = () => {
+      if (!current()) return;
       clearTimeout(watchdog);
       watchdog = setTimeout(() => void recover(source), STALE_MS);
     };
     heard();
     source.addEventListener('ping', heard);
     source.addEventListener('snapshot', (m) => {
+      if (!current()) return;
       heard();
       attempt = 0;
       on.snapshot(JSON.parse((m as MessageEvent).data));
     });
     for (const type of EVENTS) {
       source.addEventListener(type, (m) => {
+        if (!current()) return;
         heard();
         const e = toChatEvent(type, JSON.parse((m as MessageEvent).data));
         if (e) on.event(e);
       });
     }
-    source.addEventListener('reset', () => on.reset());
+    source.addEventListener('reset', () => { if (current()) on.reset(); });
     source.addEventListener('archived', () => {
+      if (!current()) return;
       stop();
       on.gone();
     });
@@ -140,15 +150,31 @@ export function openChatEvents(id: string, on: {
   }
 
   async function recover(source: EventSource): Promise<void> {
+    if (stopped || es !== source) return;
+    // Retire the source before awaiting: repeated errors and queued frames belong to the old connection.
+    es = null;
     clearTimeout(watchdog);
     source.close();
+    const controller = new AbortController();
+    recovery = controller;
     on.lost();
     let listed = true; // the server being down is "try again later", not "gone"
+    let deadline: ReturnType<typeof setTimeout> | undefined;
     try {
-      listed = (await fetchChats()).chats.some((c) => c.id === id);
-    } catch { /* keep listed */ }
+      // Bound both fetching headers and reading the body, even if the request ignores cancellation.
+      const cancelled = new Promise<null>((resolve) => {
+        controller.signal.addEventListener('abort', () => resolve(null), { once: true });
+        deadline = setTimeout(() => controller.abort(), RECOVERY_MS);
+      });
+      const list = await Promise.race([fetchChats(controller.signal), cancelled]);
+      if (list) listed = list.chats.some((c) => c.id === id);
+    } catch { /* keep listed */ } finally {
+      clearTimeout(deadline);
+      recovery = null;
+    }
     if (stopped) return;
     if (!listed) {
+      stop();
       on.gone();
       return;
     }

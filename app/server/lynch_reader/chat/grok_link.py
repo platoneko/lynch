@@ -11,11 +11,11 @@ from pathlib import Path
 
 from lynch_reader.chat.app_log import AppLog
 from lynch_reader.chat.approvals import approvable_path
+from lynch_reader.chat.events import LinkEvents
 from lynch_reader.chat.grok import (ACP_TIMEOUT_S, GrokConfig, GrokSetupError, grok_tool, research_argv,
                                     research_prompt, write_research_rules)
 from lynch_reader.chat.index import Conversation
 from lynch_reader.chat.opencode import mcp_servers
-from lynch_reader.chat.opencode_link import LinkEvents
 from lynch_reader.chat.process import ChatProcess
 
 log = logging.getLogger(__name__)
@@ -81,12 +81,15 @@ class GrokLink:
             await self._call("session/set_config_option", {
                 "sessionId": session, "configId": "reasoning_effort", "value": self._conv.effort})
             return session
-        except Exception as e:
+        except BaseException as e:
             await self._proc.close()
+            if not isinstance(e, Exception):
+                raise
             raise e if isinstance(e, GrokSetupError) else GrokSetupError(f"{type(e).__name__}: {e}") from e
 
     async def prompt(self, text: str) -> None:
         self._events.on_entry(self._log.user(text))
+        self._used = None
         self._closed_turn = False
         self._prompt_id = self._new_id()
         await self._proc.send_json({"jsonrpc": "2.0", "id": self._prompt_id, "method": "session/prompt",
@@ -118,8 +121,8 @@ class GrokLink:
         rpc_id = self._new_id()
         future = asyncio.get_running_loop().create_future()
         self._calls[rpc_id] = future
-        await self._proc.send_json({"jsonrpc": "2.0", "id": rpc_id, "method": method, "params": params})
         try:
+            await self._proc.send_json({"jsonrpc": "2.0", "id": rpc_id, "method": method, "params": params})
             return await asyncio.wait_for(future, self._setup_timeout_s)
         except TimeoutError as e:
             raise GrokSetupError(f"grok 没有响应（{method}）") from e

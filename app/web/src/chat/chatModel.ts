@@ -141,7 +141,7 @@ export function fromSnapshot(s: Snapshot, prev: ChatView | null = null, sent: Qu
   for (const it of s.items) {
     if (it.kind === 'user' && !known.has(it.key)) queued = dropEcho(queued, it.text);
   }
-  if (prev && isBusy(prev.conv.state) && !isBusy(s.conv.state)) queued = turnEnded(queued);
+  queued = settleQueued(queued, prev?.conv.state ?? null, s.conv.state);
   return {
     conv: s.conv, items: s.items, partial: s.partial, retry: s.retry, usage: s.usage, context: s.context, queued,
     approvals: s.approvals,
@@ -155,13 +155,16 @@ function dropEcho(queued: Queued[], text: string): Queued[] {
 }
 
 /**
- * A turn ended. A message waiting on it without a replay went unanswered (the process died, the API gave
+ * A message waiting on a finished turn without a replay went unanswered (the process died, the API gave
  * up, the user stopped it), except a slash command, which claude runs itself and never replays.
- * A message sent behind the turn is next in line.
+ * A message sent behind the turn is next in line only while the process is still alive.
  */
-function turnEnded(queued: Queued[]): Queued[] {
+function settleQueued(queued: Queued[], previous: ChatState | null, state: ChatState): Queued[] {
+  if (isBusy(state)) return queued;
+  // Repeated idle snapshots and dormant → idle during wake-up do not end another turn.
+  if (state !== 'dormant' && previous !== null && !isBusy(previous)) return queued;
   return queued.flatMap((q): Queued[] => {
-    if (q.status === 'behind') return [{ ...q, status: 'waiting' }];
+    if (q.status === 'behind') return [{ ...q, status: state === 'dormant' ? 'unanswered' : 'waiting' }];
     if (q.status === 'waiting') return q.text.startsWith('/') ? [] : [{ ...q, status: 'unanswered' }];
     return [q];
   });
@@ -205,8 +208,7 @@ export function applyEvent(v: ChatView, e: ChatEvent): ChatView {
       return { ...v, items };
     }
     case 'state': {
-      // dormant → idle is a process waking up for a message, not the end of a turn
-      const queued = isBusy(v.conv.state) && !isBusy(e.state) ? turnEnded(v.queued) : v.queued;
+      const queued = settleQueued(v.queued, v.conv.state, e.state);
       return { ...v, conv: { ...v.conv, state: e.state }, partial: isBusy(e.state) ? v.partial : '', queued };
     }
     case 'retry':
@@ -273,6 +275,10 @@ function toolAction(t: ToolItem): string {
     case 'Write':
       return `${verb} ${repoPath(input.file_path)}`;
     case 'Edit':
+      if (typeof input.move_path === 'string') {
+        return `移动 ${repoPath(input.file_path)} → ${repoPath(input.move_path)}`;
+      }
+      if (typeof input.diff === 'string') return `${verb} ${repoPath(input.file_path)}`;
       return `${verb} ${repoPath(input.file_path)} +${lines(input.new_string)} −${lines(input.old_string)}`;
     case 'Bash':
       return `${verb} ${String(input.command ?? '').split('\n')[0].slice(0, 80)}`;
@@ -292,6 +298,7 @@ function toolAction(t: ToolItem): string {
 
 export function toolDetail(t: ToolItem): string {
   if (t.name === 'Edit') {
+    if (typeof t.input.diff === 'string') return `${toolAction(t)}\n\n${t.input.diff}`;
     const side = (mark: string, s: unknown) => String(s ?? '').split('\n').map((l) => `${mark} ${l}`).join('\n');
     return `${side('-', t.input.old_string)}\n${side('+', t.input.new_string)}`;
   }
@@ -318,8 +325,10 @@ export function turnDocLinks(items: ChatItem[]): Map<number, string[]> {
   const out = new Map<number, string[]>();
   let touched: string[] = [];
   items.forEach((it, n) => {
-    if (it.kind === 'tool' && (it.name === 'Write' || it.name === 'Edit')) {
-      const m = FRAMEWORK.exec(String(it.input.file_path ?? ''));
+    if (it.kind === 'tool' && (it.name === 'Write' || it.name === 'Edit')
+      && it.output !== null && !it.is_error && !it.denied && it.input.operation !== 'delete') {
+      const path = it.input.operation === 'move' ? it.input.move_path ?? it.input.file_path : it.input.file_path;
+      const m = FRAMEWORK.exec(String(path ?? ''));
       const ticker = m?.[1];
       if (ticker && !ticker.startsWith('_') && ticker !== 'AGENTS' && ticker !== 'README' && !touched.includes(ticker)) {
         touched = [...touched, ticker];

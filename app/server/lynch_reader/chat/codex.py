@@ -210,30 +210,58 @@ def _argv_allowed(argv: list[str], depth: int) -> bool:
     return True
 
 
+@dataclass(frozen=True)
+class NativeFileChange:
+    path: Path
+    move_path: Path | None
+    operation: str
+    diff: str
+
+
+def native_file_changes(repo_root: Path, changes: object) -> list[NativeFileChange] | None:
+    """Resolve native paths once per consumer; reject malformed or ambiguous moves as a whole."""
+    if not isinstance(changes, list) or not changes:
+        return None
+    out = []
+    for change in changes:
+        if not isinstance(change, dict):
+            return None
+        kind = change.get("kind")
+        if kind is None:
+            kind = {}
+        if not isinstance(kind, dict):
+            return None
+        # Keep the existing camel-case compatibility at the same boundary as the native spelling.
+        move = kind.get("move_path", kind.get("movePath"))
+        if "move_path" in kind and "movePath" in kind and kind["move_path"] != kind["movePath"]:
+            return None
+        raw_paths = [change.get("path")] + ([] if move is None else [move])
+        if any(not isinstance(raw, str) or not raw for raw in raw_paths):
+            return None
+        operation, diff = kind.get("type", "update"), change.get("diff") or ""
+        if not isinstance(operation, str) or not isinstance(diff, str):
+            return None
+        try:
+            paths = [(Path(raw) if Path(raw).is_absolute() else repo_root / raw).resolve() for raw in raw_paths]
+        except (OSError, RuntimeError, ValueError):
+            return None
+        out.append(NativeFileChange(paths[0], paths[1] if move is not None else None,
+                                    "move" if move is not None else operation, diff))
+    return out
+
+
 def file_scope(repo_root: Path, changes: object) -> str:
     """A whole native fileChange is allowed, needs skill approval, or is denied atomically."""
-    if not isinstance(changes, list) or not changes:
+    normalized = native_file_changes(repo_root, changes)
+    if normalized is None:
         return "deny"
     framework_root = (repo_root / "frameworks").resolve()
     skill_root = (repo_root / APPROVABLE_SKILL).resolve()
     ask = False
-    for change in changes:
-        if not isinstance(change, dict):
-            return "deny"
-        paths = [change.get("path")]
-        kind = change.get("kind") or {}
-        if isinstance(kind, dict):
-            move = kind.get("move_path") or kind.get("movePath")
-            if move:
-                paths.append(move)
-        for raw in paths:
-            if not isinstance(raw, str) or not raw:
-                return "deny"
-            try:
-                path = Path(raw)
-                path = (path if path.is_absolute() else repo_root / path).resolve()
-            except (OSError, RuntimeError):
-                return "deny"
+    for change in normalized:
+        for path in (change.path, change.move_path):
+            if path is None:
+                continue
             if not path.is_relative_to(framework_root):
                 return "deny"
             ask |= path.is_relative_to(skill_root)

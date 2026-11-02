@@ -69,6 +69,19 @@ describe('applyEvent', () => {
     const v = { ...fromSnapshot(snap([])), conv: { ...conv, state: 'running' as const }, queued: [pending('l1', 'next', 'behind')] };
     expect(applyEvent(v, { type: 'state', state: 'idle' }).queued).toEqual([pending('l1', 'next')]);
   });
+  it('makes queued inputs recoverable when the process exits, including after an idle transition', () => {
+    const v = { ...fromSnapshot(snap([])), conv: { ...conv, state: 'running' as const },
+      queued: [pending('l1', 'next', 'behind')] };
+    const dormant = applyEvent(v, { type: 'state', state: 'dormant' });
+    expect(dormant.queued).toEqual([pending('l1', 'next', 'unanswered')]);
+    expect(fromSnapshot({ ...snap([]), conv: { ...conv, state: 'dormant' } }, dormant).queued)
+      .toEqual([pending('l1', 'next', 'unanswered')]);
+
+    const idle = applyEvent(v, { type: 'state', state: 'idle' });
+    expect(applyEvent(idle, { type: 'state', state: 'idle' }).queued).toEqual([pending('l1', 'next')]);
+    expect(applyEvent(idle, { type: 'state', state: 'dormant' }).queued)
+      .toEqual([pending('l1', 'next', 'unanswered')]);
+  });
   it('leaves a waiting message alone while a dormant chat wakes up', () => {
     const v = { ...fromSnapshot(snap([])), conv: { ...conv, state: 'dormant' as const }, queued: [pending('l1', 'hi')] };
     expect(applyEvent(v, { type: 'state', state: 'idle' }).queued).toEqual([pending('l1', 'hi')]);
@@ -111,8 +124,24 @@ describe('fromSnapshot', () => {
   });
   it('starts a new chat with its first message pending until the transcript has it', () => {
     const first = [pending('l1', 'A')];
-    expect(fromSnapshot(snap([]), null, first).queued).toEqual(first);
+    expect(fromSnapshot({ ...snap([]), conv: { ...conv, state: 'running' } }, null, first).queued).toEqual(first);
     expect(fromSnapshot(snap([user('u1', 'A')]), null, first).queued).toEqual([]);
+  });
+  it.each(['idle', 'dormant'] as const)('recovers an unreplayed first input from an initial %s snapshot', (state) => {
+    const first = [pending('l1', 'A')];
+    const snapshot = { ...snap([]), conv: { ...conv, state } };
+    expect(fromSnapshot(snapshot, null, first).queued).toEqual([pending('l1', 'A', 'unanswered')]);
+    expect(fromSnapshot({ ...snapshot, items: [user('u1', 'A')] }, null, first).queued).toEqual([]);
+  });
+  it('recovers queued inputs on a dormant reconnect but keeps the next input waiting on idle', () => {
+    const prev = { ...fromSnapshot(snap([])), conv: { ...conv, state: 'running' as const },
+      queued: [pending('l1', 'A'), pending('l2', 'B', 'behind')] };
+    const idle = fromSnapshot(snap([user('u1', 'A')]), prev);
+    expect(idle.queued).toEqual([pending('l2', 'B')]);
+    expect(fromSnapshot(snap([user('u1', 'A')]), idle).queued).toEqual([pending('l2', 'B')]);
+    const dormant = { ...snap([user('u1', 'A')]), conv: { ...conv, state: 'dormant' as const } };
+    expect(fromSnapshot(dormant, prev).queued).toEqual([pending('l2', 'B', 'unanswered')]);
+    expect(fromSnapshot(dormant, idle).queued).toEqual([pending('l2', 'B', 'unanswered')]);
   });
   it("keeps an edit's new text pending across the cut branch's snapshot until claude replays it", () => {
     const edited = [pending('l1', 'B2')];
@@ -162,6 +191,21 @@ describe('tool text', () => {
   it('shows an edit as a diff', () => {
     expect(toolDetail(tool('1', 'Edit', { file_path: 'f', old_string: 'a', new_string: 'b' }))).toBe('- a\n+ b');
   });
+  it('shows the source and destination of a native move in the tool card and its detail', () => {
+    const moved = tool('move', 'Edit', {
+      file_path: '/repo/lynch/frameworks/OLD.US.md', move_path: '/repo/lynch/frameworks/NEW.US.md',
+      operation: 'move', diff: '@@ -1 +1 @@\n-before\n+after',
+    });
+    expect(toolSummary(moved)).toBe('移动 frameworks/OLD.US.md → frameworks/NEW.US.md ✓');
+    expect(toolDetail(moved)).toBe('移动 frameworks/OLD.US.md → frameworks/NEW.US.md\n\n@@ -1 +1 @@\n-before\n+after');
+  });
+  it('shows a native content diff without inventing old-string and new-string line counts', () => {
+    const changed = tool('native', 'Edit', {
+      file_path: 'frameworks/AAA.US.md', operation: 'update', diff: '@@ -1 +1 @@\n-old\n+new',
+    });
+    expect(toolSummary(changed)).toBe('修改 frameworks/AAA.US.md ✓');
+    expect(toolDetail(changed)).toBe('修改 frameworks/AAA.US.md\n\n@@ -1 +1 @@\n-old\n+new');
+  });
 });
 
 describe('turnDocLinks', () => {
@@ -172,6 +216,42 @@ describe('turnDocLinks', () => {
       user('u2'), reply('a2'),
     ];
     expect([...turnDocLinks(items)]).toEqual([[3, ['NEW.US']]]);
+  });
+  it.each(['Write', 'Edit'])('links a %s only after a successful result', (name) => {
+    const input = { file_path: 'frameworks/NEW.US.md' };
+    const pendingWrite = tool('t1', name, input, null);
+    let v = fromSnapshot(snap([user('u1'), pendingWrite, reply('a1')]));
+    expect([...turnDocLinks(v.items)]).toEqual([]);
+    for (const result of [
+      { output: 'failed', is_error: true, denied: false },
+      { output: 'denied', is_error: false, denied: true },
+      { output: '', is_error: false, denied: false },
+    ]) {
+      v = applyEvent(v, { type: 'tool_result', result: { kind: 'tool_result', id: 't1', ...result } });
+      expect([...turnDocLinks(v.items)]).toEqual(result.output === '' ? [[2, ['NEW.US']]] : []);
+    }
+  });
+  it('keeps a successful document link when a later write fails in the same turn', () => {
+    const items: ChatItem[] = [
+      user('u1'), tool('t1', 'Write', { file_path: 'frameworks/NEW.US.md' }),
+      { ...tool('t2', 'Edit', { file_path: 'frameworks/NEW.US.md' }), is_error: true },
+      { ...tool('t3', 'Write', { file_path: 'frameworks/OTHER.US.md' }), denied: true }, reply('a1'),
+    ];
+    expect([...turnDocLinks(items)]).toEqual([[4, ['NEW.US']]]);
+  });
+  it('does not link a framework that a successful patch deleted', () => {
+    const items: ChatItem[] = [
+      user('u1'), tool('t1', 'Edit', { file_path: 'frameworks/OLD.US.md', operation: 'delete' }), reply('a1'),
+    ];
+    expect([...turnDocLinks(items)]).toEqual([]);
+  });
+  it('links only the destination framework after a successful move', () => {
+    const items: ChatItem[] = [
+      user('u1'), tool('t1', 'Edit', {
+        file_path: 'frameworks/OLD.US.md', operation: 'move', move_path: 'frameworks/NEW.US.md',
+      }), reply('a1'),
+    ];
+    expect([...turnDocLinks(items)]).toEqual([[2, ['NEW.US']]]);
   });
 });
 
