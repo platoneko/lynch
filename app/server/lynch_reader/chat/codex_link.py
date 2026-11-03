@@ -124,6 +124,7 @@ class CodexLink:
         self._items: dict[str, dict] = {}
         self._texts: dict[str, str] = {}
         self._done: set[str] = set()
+        self._finished_turns: set[str] = set()
         self._pending = ""
         self._used: int | None = None
         self._asks: dict[str, tuple[int | str, set[str]]] = {}
@@ -131,6 +132,7 @@ class CodexLink:
         self._child_turns: dict[str, str] = {}
         self._child_items: dict[tuple[str, str], dict] = {}
         self._closed_turn = True
+        self._manual_compact = False
 
     @property
     def alive(self) -> bool:
@@ -158,18 +160,26 @@ class CodexLink:
 
     async def prompt(self, text: str) -> None:
         self._events.on_entry(self._log.user(text))
+        await self._start_turn("turn/start", {"threadId": self._thread,
+            "input": [{"type": "text", "text": text}], "model": self._conv.model, "effort": self._conv.effort,
+            # Reapply both settings on resumed threads, including threads originally created read-only.
+            "approvalPolicy": "untrusted", "sandboxPolicy": {"type": "dangerFullAccess"}})
+
+    async def compact(self) -> None:
+        self._manual_compact = True
+        await self._start_turn("thread/compact/start", {"threadId": self._thread})
+
+    async def _start_turn(self, method: str, params: dict) -> None:
         self._active, self._closed_turn = True, False
         self._starting, self._cancelled_start = True, False
         self._deferred.clear()
         self._turn = None
         self._done.clear()
         try:
-            result = await self._rpc.call("turn/start", {"threadId": self._thread,
-                "input": [{"type": "text", "text": text}], "model": self._conv.model, "effort": self._conv.effort,
-                # Reapply both settings on resumed threads, including threads originally created read-only.
-                "approvalPolicy": "untrusted", "sandboxPolicy": {"type": "dangerFullAccess"}})
+            result = await self._rpc.call(method, params)
             if self._active:
-                self._turn = result["turn"]["id"]
+                # Manual compaction acknowledges with {}; its turn ID arrives in turn/started.
+                self._turn = result["turn"]["id"] if method == "turn/start" else None
                 self._starting = False
                 deferred, self._deferred = self._deferred, []
                 for message in deferred:
@@ -237,6 +247,10 @@ class CodexLink:
         if p.get("threadId") != self._thread or not self._active:
             return
         event_turn = p.get("turnId") or ((p.get("turn") or {}).get("id") if method.startswith("turn/") else None)
+        if event_turn in self._finished_turns:
+            return
+        if self._manual_compact and self._turn is None and method != "turn/started":
+            return  # wait for the new compaction turn rather than consuming an old turn's tail
         if self._turn and event_turn and event_turn != self._turn:
             return
         if method == "turn/started":
@@ -287,7 +301,7 @@ class CodexLink:
         child = thread in self._children
         valid_turn = (bool(p.get("turnId")) and p["turnId"] == self._child_turns.get(thread)) if child else (
             thread == self._thread and (not self._turn or not p.get("turnId") or p["turnId"] == self._turn))
-        if not self._active or not valid_turn:
+        if not self._active or not valid_turn or (not child and p.get("turnId") in self._finished_turns):
             self._rpc.reply(rpc_id, error="Request is not for this active conversation")
             return
         if method == "item/commandExecution/requestApproval":
@@ -324,6 +338,19 @@ class CodexLink:
         if not item_id or item_id in self._done:
             return
         self._track_child(item)
+        if kind == "contextCompaction":
+            self._flush_text(usage=True)
+            if completed:
+                self._done.add(item_id)
+                self._events.on_entry(self._log.compacted("manual" if self._manual_compact else "auto", self._used))
+                self._used = None
+                if self._manual_compact:
+                    self._closed_turn = True
+                else:
+                    self._events.on_entry({"type": "system", "subtype": "status", "status": None})
+            else:
+                self._events.on_entry({"type": "system", "subtype": "status", "status": "compacting"})
+            return
         if kind == "agentMessage":
             if completed:
                 self._flush_text()
@@ -407,7 +434,10 @@ class CodexLink:
         self._asks.clear()
         self._starting = False
         self._deferred.clear()
+        if self._turn:
+            self._finished_turns.add(self._turn)
         self._active, self._turn = False, None
+        self._manual_compact = False
         if stop == "cancelled":
             self._events.on_entry(self._log.interrupted())
         elif error or (notify and not self._closed_turn):

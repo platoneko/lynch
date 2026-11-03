@@ -31,9 +31,13 @@ export function isBusy(state: ChatState): boolean {
   return state === 'running' || state === 'compacting';
 }
 
-/** Only Claude Code chats edit messages, compact, and count against the Claude subscription. */
+/** Only Claude Code chats edit messages and count against the Claude subscription. */
 export function isClaude(c: Pick<ChatSummary, 'agent'>): boolean {
   return c.agent === 'claude';
+}
+
+export function canCompact(c: Pick<ChatSummary, 'agent'>): boolean {
+  return c.agent === 'claude' || c.agent === 'codex';
 }
 
 /** Which model list the blank 研究 / 讨论 picker shows. Grok never falls through to Claude's models. */
@@ -382,8 +386,9 @@ export function usageText(u: Usage | null): string {
 }
 
 export function compactText(it: Extract<ChatItem, { kind: 'compact' }>): string {
-  const n = (x: number | null) => (x === null ? '?' : formatTokens(x));
-  return `已压缩${it.trigger === 'auto' ? '（自动）' : ''}：${n(it.pre_tokens)} → ${n(it.post_tokens)}`;
+  const label = `已压缩${it.trigger === 'auto' ? '（自动）' : ''}`;
+  if (it.pre_tokens === null || it.post_tokens === null) return label;
+  return `${label}：${formatTokens(it.pre_tokens)} → ${formatTokens(it.post_tokens)}`;
 }
 
 export function stateText(state: ChatState): string {

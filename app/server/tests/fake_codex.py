@@ -140,6 +140,41 @@ for line in sys.stdin:
         elif method == "turn/interrupt":
             reply(request, {})
             finish("interrupted")
+        elif method == "thread/compact/start":
+            assert params == {"threadId": thread}
+            mode = os.environ.get("FAKE_CODEX_COMPACT", "ok")
+            if mode == "reject":
+                emit({"id": request["id"], "error": {"code": -1, "message": "compaction unavailable"}})
+                continue
+            if mode == "hang":
+                continue
+            if mode == "slow-ack":
+                time.sleep(0.4)
+            previous_turn = turn
+            turn = f"compact_{uuid.uuid4().hex}"
+            if mode != "before-ack":
+                reply(request, {})
+            if mode == "stale" and previous_turn:
+                event("turn/started", turn={"id": previous_turn, "status": "inProgress"})
+                emit({"id": "stale-approval", "method": "item/commandExecution/requestApproval", "params": {
+                    "threadId": thread, "turnId": previous_turn, "itemId": "old-command", "command": "echo stale"}})
+                event("turn/completed", turn={"id": previous_turn, "status": "completed", "error": None})
+            event("turn/started", turn={"id": turn, "status": "inProgress"})
+            item = {"id": "compact1", "type": "contextCompaction"}
+            event("item/started", item=item)
+            if mode == "wait":
+                continue
+            if mode == "crash":
+                print("compaction crashed", file=sys.stderr, flush=True)
+                sys.exit(1)
+            if mode == "fail":
+                finish("failed", {"message": "compaction failed"})
+            else:
+                event("item/completed", item=item)
+                event("item/completed", item=item)
+                finish()
+            if mode == "before-ack":
+                reply(request, {})
         else:
             emit({"id": request.get("id"), "error": {"code": -32601, "message": "Unsupported method"}})
     elif request.get("id") == "approval1" and pending:

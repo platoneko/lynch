@@ -30,6 +30,11 @@ class AppLog:
         """The marker Claude Code writes on a stop; the reader shows it as 已停止."""
         return self.user(f"{INTERRUPT_PREFIX}]")
 
+    def compacted(self, trigger: str, pre_tokens: int | None) -> dict:
+        """Keep a display boundary while the native agent owns the actual summary."""
+        return self._append({"type": "system", "subtype": "compact_boundary",
+                             "compactMetadata": {"trigger": trigger, "preTokens": pre_tokens}})
+
     def message(self, msg: dict) -> dict:
         """One assistant line or tool-result user line in Claude's shape; its own uuid is kept."""
         return self._append({"type": msg["type"], "uuid": msg.get("uuid"), "message": msg["message"]})

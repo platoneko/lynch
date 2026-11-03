@@ -617,8 +617,11 @@ class ChatService:
         label = AGENT_LABELS[conv.agent]
         if live.state in BUSY:
             raise Conflict("回答进行中，等这一轮结束或先停止")
-        if text.lstrip().startswith(COMPACT_COMMAND):
+        compact = text.lstrip().startswith(COMPACT_COMMAND)
+        if compact and conv.agent != "codex":
             raise Invalid(f"{label} 对话不支持压缩上下文")
+        if compact and text.strip() != COMPACT_COMMAND:
+            raise Invalid("Codex 压缩上下文不支持附加说明")
         if live.proc is None or not live.proc.alive:
             spawn = {"opencode": self._spawn_opencode, "grok": self._spawn_research_grok,
                      "codex": self._spawn_codex}[conv.agent]
@@ -626,9 +629,12 @@ class ChatService:
         link = live.proc
         self._index.update(conv.id, updated_at=self._wall())
         live.last_used = self._now()
-        self._set_state(conv.id, "running")
+        self._set_state(conv.id, "compacting" if compact else "running")
         try:
-            await link.prompt(text)
+            if compact:
+                await link.compact()
+            else:
+                await link.prompt(text)
         except BaseException as e:
             # A failed/cancelled write may already have delivered the prompt. Close that uncertain turn
             # before another send, and never overwrite a completion callback after a successful write.
@@ -740,7 +746,8 @@ class ChatService:
             live.framework_writes.clear()
             self._set_state(conv_id, "idle")
 
-        return LinkEvents(on_delta=current(on_delta), on_entry=current(lambda live, e: self._show(conv_id, live, e)),
+        return LinkEvents(on_delta=current(on_delta), on_entry=current(lambda live, e:
+                          self._on_system(conv_id, live, e) if e["type"] == "system" else self._show(conv_id, live, e)),
                           on_usage=current(on_usage), on_permission=current(on_permission),
                           on_turn_end=current(on_turn_end),
                           on_exit=lambda expected, err: self._on_exit(conv_id, link(), expected, err))
@@ -874,7 +881,7 @@ class ChatService:
                 self._set_state(conv_id, "running")
         elif msg.get("subtype") == "compact_boundary":
             live.context_tokens = None
-            self._broadcast(conv_id, "item", compact_item(msg["uuid"], msg.get("compact_metadata") or {}))
+            self._broadcast(conv_id, "item", compact_item(msg["uuid"], msg.get("compact_metadata") or msg.get("compactMetadata") or {}))
             self._broadcast(conv_id, "context", self._context(conv_id))
         elif msg.get("subtype") == "api_retry":
             # Nothing else shows while claude waits on the API, for minutes when it stalls.
