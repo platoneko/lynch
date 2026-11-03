@@ -257,6 +257,10 @@ outline doc:
     python3 -m eval.lib.outline {{doc}}
 
 # ── mobile reader (app/) ────────────────────────────────────────────────
+[doc('同步上游最新版 finance-skills，供 Claude / Codex / Grok / opencode 共用')]
+skills-update:
+    python3 scripts/update_finance_skills.py --repo-root {{quote(justfile_directory())}}
+
 # Separate from the neige instance above: its own port, pid and log.
 app_host := "100.93.210.104"
 app_port := "3151"

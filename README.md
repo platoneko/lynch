@@ -17,23 +17,32 @@ Agent 应加载 skill **`sediment-framework`**：**先持续对话**对齐分类
 模板：`frameworks/_TEMPLATE.md`。协作硬约束：`frameworks/AGENTS.md`（框架）· `AGENTS.md`（开发）。  
 标的池 = 扫 `frameworks/*.md`（排除 `_` 前缀与 `AGENTS.md` / `README.md`）；**不**维护 `universe.yaml`。
 
-首次克隆：`gh repo clone platoneko/lynch-frameworks frameworks`（在本仓库根执行）。代码仓库与内容仓库需要分别克隆；内容仓库已包含全部技能文件，不需要额外检出 `agent/finance-skills`，也不依赖原机器的目录布局。克隆后在 `frameworks/` 执行 `just check` 验证。
+首次克隆：`gh repo clone platoneko/lynch-frameworks frameworks`（在本仓库根执行）。代码仓库与内容仓库需要分别克隆；然后执行 `just skills-update` 安装最新版 finance-skills，四种 agent 共用，不需要原机器上的 `agent/finance-skills`。在 `frameworks/` 执行 `just check` 验证框架。
 
 ## 目录
 
 | 路径 | 说明 |
 |------|------|
 | `frameworks/` | 内容仓库 `lynch-frameworks` 的检出（本仓忽略）：单票框架、共享情景轴、每票演算、skill |
-| `.claude/skills` | → `frameworks/.claude/skills`（软链）：sediment-framework + finance-skills |
+| `.agents/skills` | 项目自有技能与最新版 finance-skills 的共享入口；第三方文件安装在忽略的 `output/finance-skills/` |
+| `.claude/skills`、`.grok/skills` | → `.agents/skills`（软链）；sediment-framework 仍来自内容仓库 |
 | `eval/lib/` | 估值 / 解析 / zone 规则库 |
 | `scripts/` | 日报、财报提醒、索引生成、跨票体检 |
 | `app/` | 手机阅读 app（服务端 + 前端 + 安卓壳） |
 | `.mcp.json` | Wisburg MCP（本地，gitignore） |
 | `_local/` | 个人草稿，不入库 |
 
+## 四种研究工具的 finance-skills
+
+Claude Code、Codex、Grok 研究模式和 opencode 每次启动或恢复研究进程前，都会检查并同步上游 `himself65/finance-skills` 的全部技能；更新失败或超时会明确报错，不启动该次研究进程。更新不会主动重启已有对话；Grok「发现新票」继续使用搜索专用规则。
+
+终端里运行 `just skills-update` 可以手动同步。安装使用固定版本的标准 skills 安装器，并把它需要的 Node 22.20 运行时缓存到本地，不改系统 Node。安装先在临时目录完成并检查四种工具的结果，再切换共享版本；只管理本程序生成的技能链接，保留项目自有技能和内容仓库原文件。
+
 ## 手机 app 的 Codex 对话
 
 新建「研究新票」或「讨论已有框架」时，在「对话工具」选择 **Codex**，等模型加载后再选 GPT 模型和推理强度；加载只影响 Codex，不耽误其他工具。服务端自动启动本机 `codex app-server`，沿用已有 Codex 登录 / provider 配置，支持流式回答、工具记录、停止和重启续聊。框架仍需明确说「可以落盘」才写，修改 sediment-framework skill 会在手机显示 diff 等待批准。
+
+Codex 在每次启动或恢复对话进程时，从仓库 `.mcp.json` 接入 `wisburg`（HTTP 类型，与 `.mcp.json.example` 一致）；请求头仅通过该进程的私有环境传递，不写入全局 Codex 配置或 app 对话日志。配置格式错误时明确报错。Longbridge 继续使用本机 CLI 登录，不接入其 MCP。
 
 运行 app 服务的环境需要能找到 `codex`；模型清单不可用时，页面会提示原因。若提示需要登录，在终端执行 `codex login`。安装 Codex 或修改 PATH 后，重新运行 `just app-install` 更新服务环境；代码更新后先运行 `(cd app/server && uv sync --locked)` 安装锁定依赖，再运行 `just app-web`、`just app-start`。Codex 对话可在 ⋯ 菜单手动压缩上下文，压缩后继续原对话；暂不支持编辑旧消息和自动标题。
 
