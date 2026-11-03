@@ -69,7 +69,7 @@ def test_stream_and_usage_are_persisted_once_and_resume_without_replay(tmp_path)
     assert history.context_tokens == 1234
 
 
-def test_every_turn_allows_network_without_bypassing_file_approval(tmp_path):
+def test_new_and_resumed_turns_allow_script_cache_writes_with_untrusted_approval(tmp_path):
     async def main():
         cfg, env = setup(tmp_path)
         thread = None
@@ -86,10 +86,16 @@ def test_every_turn_allows_network_without_bypassing_file_approval(tmp_path):
         return [json.loads(line) for line in (tmp_path / "rpc.jsonl").read_text().splitlines()]
 
     calls = asyncio.run(main())
+    starts = [call for call in calls if call.get("method") in ("thread/start", "thread/resume")]
+    assert len(starts) == 2
+    for call in starts:
+        assert call["params"]["sandbox"] == "danger-full-access"
+        assert call["params"]["approvalPolicy"] == "untrusted"
     turns = [call for call in calls if call.get("method") == "turn/start"]
     assert len(turns) == 3
     for call in turns:
-        assert call["params"].get("sandboxPolicy") == {"type": "readOnly", "networkAccess": True}
+        assert call["params"].get("sandboxPolicy") == {"type": "dangerFullAccess"}
+        assert call["params"]["approvalPolicy"] == "untrusted"
 
 
 def test_interrupt_finishes_turn_and_records_stop(tmp_path):
