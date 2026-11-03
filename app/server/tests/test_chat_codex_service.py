@@ -216,8 +216,9 @@ def test_codex_deltas_context_and_stop_use_existing_events(tmp_path):
         await svc.interrupt(chat.id)
         await idle(svc, chat.id)
         assert texts(svc, chat.id)[-1] == ("notice", "已停止")
-        with pytest.raises(Invalid, match="Codex.*压缩"):
-            await svc.send(chat.id, "/compact")
+        await svc.send(chat.id, "/compact")
+        await idle(svc, chat.id)
+        assert texts(svc, chat.id)[-1] == ("compact", None)
         with pytest.raises(Invalid, match="Codex.*编辑"):
             await svc.edit(chat.id, "x", "y")
         await svc.shutdown()

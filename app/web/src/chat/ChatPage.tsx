@@ -3,11 +3,12 @@ import { renderFragment, type LinkTargets } from '../doc/buildDoc';
 import { Menu } from '../Menu';
 import { answerApproval, createChat, editMessage, fetchCandidates, fetchCodexOptions, interruptChat, openChatEvents, renameChat, sendMessage } from './api';
 import { CandidateCards } from './CandidateCards';
+import { CompactDialog } from './CompactDialog';
 import { ResearchModelPicker } from './ResearchModelPicker';
 import { DISCOVER_OPENER, partialText } from './candidateModel';
 import { CODEX_LOADING, requestCodexOptions, type CodexCatalogState } from './codexOptions';
 import {
-  agentModelText, applyEvent, canStartResearch, chatCostText, compactText, contextText, contextWarn, diffLineClass, editableUuids, formatTokens, fromSnapshot,
+  agentModelText, applyEvent, canCompact, canStartResearch, chatCostText, compactText, contextText, contextWarn, diffLineClass, editableUuids, formatTokens, fromSnapshot,
   grokSelection, newChatBody, researchPickerAgent, researchSettings,
   inputJumps, isBusy, isClaude, stateText, toolDetail, toolSummary, turnDocLinks, usageText, type ChatView, type InputJumps,
   type Queued,
@@ -337,7 +338,7 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options: pr
     setCompactOpen(false);
     if (id === null) return;
     try {
-      await sendMessage(id, `/compact ${compactHint}`.trim());
+      await sendMessage(id, claude ? `/compact ${compactHint}`.trim() : '/compact');
       setCompactHint('');
     } catch (e) {
       fail(e);
@@ -379,7 +380,7 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options: pr
           <Menu onClose={() => setMenu(false)} items={[
             { label: showTools ? '隐藏调用过程' : '显示调用过程', onSelect: () => { setShowTools(!showTools); saveShowTools(!showTools); } },
             { label: '重命名', onSelect: () => setRenaming(conv?.title ?? '') },
-            ...(claude ? [{ label: '压缩上下文', disabled: busy, onSelect: () => setCompactOpen(true) }] : []),
+            ...(conv && canCompact(conv) ? [{ label: '压缩上下文', disabled: busy, onSelect: () => setCompactOpen(true) }] : []),
           ]} />
         )}
       </header>
@@ -527,19 +528,8 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options: pr
         </div>
       )}
 
-      {compactOpen && (
-        <div className="sheet-backdrop" onClick={() => setCompactOpen(false)}>
-          <div className="sheet" onClick={(e) => e.stopPropagation()}>
-            <p>压缩上下文：把之前的对话总结成摘要，腾出上下文。</p>
-            <input className="home-search" placeholder="可选：摘要要保留什么（如：估值假设和数字）"
-              value={compactHint} onChange={(e) => setCompactHint(e.target.value)} />
-            <div className="sheet-actions">
-              <button className="text-btn" onClick={() => setCompactOpen(false)}>取消</button>
-              <button className="text-btn" onClick={compact}>压缩</button>
-            </div>
-          </div>
-        </div>
-      )}
+      {compactOpen && conv && <CompactDialog agent={conv.agent} hint={compactHint} onHint={setCompactHint}
+        onClose={() => setCompactOpen(false)} onCompact={compact} />}
     </div>
   );
 }
