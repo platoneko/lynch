@@ -17,7 +17,7 @@ Agent 应加载 skill **`sediment-framework`**：**先持续对话**对齐分类
 模板：`frameworks/_TEMPLATE.md`。协作硬约束：`frameworks/AGENTS.md`（框架）· `AGENTS.md`（开发）。  
 标的池 = 扫 `frameworks/*.md`（排除 `_` 前缀与 `AGENTS.md` / `README.md`）；**不**维护 `universe.yaml`。
 
-首次克隆：`git clone git@github.com:platoneko/lynch-frameworks.git frameworks`（在本仓库根执行）。
+首次克隆：`gh repo clone platoneko/lynch-frameworks frameworks`（在本仓库根执行）。代码仓库与内容仓库需要分别克隆；内容仓库已包含全部技能文件，不需要额外检出 `agent/finance-skills`，也不依赖原机器的目录布局。克隆后在 `frameworks/` 执行 `just check` 验证。
 
 ## 目录
 
