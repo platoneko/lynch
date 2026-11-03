@@ -48,6 +48,100 @@ def test_native_agent_start_and_completion_keep_thread_context_and_result(tmp_pa
     assert json.loads(blocks[1]["content"]) == states
 
 
+def child_event(link, method, **params):
+    link._on_message({"method": method, "params": {"threadId": "child", "turnId": "child-turn", **params}})
+
+
+def start_child(link, parent="parent", child="child", via_thread_started=False):
+    if via_thread_started:
+        link._on_message({"method": "thread/started", "params": {"thread": {
+            "id": child, "parentThreadId": parent}}})
+    else:
+        link._on_message({"method": "item/started", "params": {"threadId": parent,
+            "turnId": "turn" if parent == "parent" else "child-turn", "item": {
+                "id": "spawn-" + child, "type": "subAgentActivity", "kind": "started", "agentThreadId": child}}})
+    link._on_message({"method": "turn/started", "params": {"threadId": child,
+        "turn": {"id": "child-turn", "status": "inProgress"}}})
+
+
+@pytest.mark.parametrize("command,accepted", [("cat frameworks/TEST.US.md", True),
+                                           ("cd frameworks && just check", True),
+                                           ("git -C frameworks push", False), ("longbridge assets", False)])
+def test_child_commands_use_same_guardrails_as_parent(tmp_path, monkeypatch, command, accepted):
+    rec, link, replies = active_link(tmp_path, monkeypatch)
+    start_child(link)
+    link._on_message({"id": "child-approval", "method": "item/commandExecution/requestApproval", "params": {
+        "threadId": "child", "turnId": "child-turn", "command": command}})
+    assert replies == [(("child-approval", {"decision": "accept" if accepted else "decline"}), {})]
+    assert rec.turn_ends == []
+
+
+@pytest.mark.parametrize("path,accepted", [("frameworks/TEST.US.md", True),
+    ("frameworks/.claude/skills/sediment-framework/SKILL.md", False), ("app/server/outside.py", False)])
+def test_child_patches_check_paths_and_cannot_request_skill_edits(tmp_path, monkeypatch, path, accepted):
+    rec, link, replies = active_link(tmp_path, monkeypatch)
+    start_child(link)
+    child_event(link, "item/started", item={"id": "patch", "type": "fileChange", "changes": [
+        {"path": path, "kind": {"type": "update"}, "diff": "+change"}]})
+    link._on_message({"id": "child-approval", "method": "item/fileChange/requestApproval", "params": {
+        "threadId": "child", "turnId": "child-turn", "itemId": "patch"}})
+    assert replies == [(("child-approval", {"decision": "accept" if accepted else "decline"}), {})]
+    assert rec.permissions == []
+
+
+@pytest.mark.parametrize("state", ["unrelated", "stale", "completed", "parent-ended"])
+def test_child_approvals_reject_unrelated_or_inactive_turns(tmp_path, monkeypatch, state):
+    rec, link, replies = active_link(tmp_path, monkeypatch)
+    start_child(link, parent="other" if state == "unrelated" else "parent")
+    if state == "completed":
+        child_event(link, "turn/completed", turn={"id": "child-turn", "status": "completed"})
+    elif state == "parent-ended":
+        link._end_turn("completed", None)
+    link._on_message({"id": "approval", "method": "item/commandExecution/requestApproval", "params": {
+        "threadId": "child", "turnId": "old" if state == "stale" else "child-turn", "command": "cat README.md"}})
+    assert replies[0][1].get("error")
+    if state != "parent-ended":
+        assert rec.turn_ends == []
+
+
+def test_grandchild_is_recognized_and_child_items_do_not_alias_parent_items(tmp_path, monkeypatch):
+    rec, link, replies = active_link(tmp_path, monkeypatch)
+    start_child(link)
+    start_child(link, parent="child", child="grandchild")
+    item_event(link, {"id": "patch", "type": "fileChange", "changes": [
+        {"path": "frameworks/TEST.US.md", "kind": {"type": "update"}}]})
+    child_event(link, "item/started", item={"id": "patch", "type": "fileChange", "changes": [
+        {"path": "app/server/outside.py", "kind": {"type": "update"}}]})
+    link._on_message({"id": "child-patch", "method": "item/fileChange/requestApproval", "params": {
+        "threadId": "child", "turnId": "child-turn", "itemId": "patch"}})
+    link._on_message({"id": "grandchild-read", "method": "item/commandExecution/requestApproval", "params": {
+        "threadId": "grandchild", "turnId": "child-turn", "command": "cat README.md"}})
+    assert replies == [(("child-patch", {"decision": "decline"}), {}),
+                       (("grandchild-read", {"decision": "accept"}), {})]
+
+
+def test_child_thread_started_metadata_remains_supported(tmp_path, monkeypatch):
+    _, link, replies = active_link(tmp_path, monkeypatch)
+    start_child(link, via_thread_started=True)
+    link._on_message({"id": "read", "method": "item/commandExecution/requestApproval", "params": {
+        "threadId": "child", "turnId": "child-turn", "command": "cat README.md"}})
+    assert replies == [(("read", {"decision": "accept"}), {})]
+
+
+def test_child_creation_and_approval_wait_for_parent_turn_start_ack(tmp_path, monkeypatch):
+    _, link, replies = active_link(tmp_path, monkeypatch)
+    link._starting = True
+    start_child(link)
+    link._on_message({"id": "read", "method": "item/commandExecution/requestApproval", "params": {
+        "threadId": "child", "turnId": "child-turn", "command": "cat README.md"}})
+    assert replies == []
+    link._starting = False
+    deferred, link._deferred = link._deferred, []
+    for message in deferred:
+        link._on_message(message)
+    assert replies == [(("read", {"decision": "accept"}), {})]
+
+
 @pytest.mark.parametrize("move_key", ["move_path", "movePath"])
 @pytest.mark.parametrize("source,destination,approval_path", [
     ("frameworks/from.md", "frameworks/.claude/skills/sediment-framework/to.md",

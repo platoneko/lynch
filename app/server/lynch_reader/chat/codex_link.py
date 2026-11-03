@@ -127,6 +127,9 @@ class CodexLink:
         self._pending = ""
         self._used: int | None = None
         self._asks: dict[str, tuple[int | str, set[str]]] = {}
+        self._children: set[str] = set()
+        self._child_turns: dict[str, str] = {}
+        self._child_items: dict[tuple[str, str], dict] = {}
         self._closed_turn = True
 
     @property
@@ -136,11 +139,10 @@ class CodexLink:
     async def start(self) -> str:
         try:
             await self._rpc.start()
-            # Read-only makes every native patch pass through the app's path checks. The untrusted policy
-            # also asks for non-read-only commands; the app applies the same Bash guardrails as other agents.
-            # These exact values are supported by the tested local 0.166.0 protocol schema.
+            # Like Claude's Bash tools, approved scripts need to write caches and git metadata. On 0.166.0,
+            # untrusted still asks for native patches with full access; the app checks every patch's scope.
             params = {"cwd": str(self._cfg.repo_root), "model": self._conv.model,
-                      "approvalPolicy": "untrusted", "approvalsReviewer": "user", "sandbox": "read-only",
+                      "approvalPolicy": "untrusted", "approvalsReviewer": "user", "sandbox": "danger-full-access",
                       "developerInstructions": system_prompt(self._conv),
                       "config": {"model_reasoning_effort": self._conv.effort}}
             previous = self._conv.codex_thread
@@ -164,8 +166,8 @@ class CodexLink:
         try:
             result = await self._rpc.call("turn/start", {"threadId": self._thread,
                 "input": [{"type": "text", "text": text}], "model": self._conv.model, "effort": self._conv.effort,
-                # Queries need the network on new and resumed threads; native patches still require approval.
-                "sandboxPolicy": {"type": "readOnly", "networkAccess": True}})
+                # Reapply both settings on resumed threads, including threads originally created read-only.
+                "approvalPolicy": "untrusted", "sandboxPolicy": {"type": "dangerFullAccess"}})
             if self._active:
                 self._turn = result["turn"]["id"]
                 self._starting = False
@@ -215,13 +217,22 @@ class CodexLink:
 
     def _on_message(self, message: dict) -> None:
         method, p = message["method"], message.get("params") or {}
-        if self._starting and p.get("threadId") == self._thread:
-            # Bind notifications to the ID returned by turn/start, even if stdout drains notifications
-            # before the coroutine awaiting that response resumes. Old lifecycle events use turn.id.
+        if self._starting:
+            # stdout can drain parent spawn events and child approvals before turn/start resumes.
+            # Replay the whole connection in order after binding the returned parent turn ID.
             self._deferred.append(message)
+            return
+        if method == "thread/started" and "id" not in message:
+            thread = p.get("thread") or {}
+            parent = thread.get("parentThreadId")
+            if parent and (parent == self._thread or parent in self._children):
+                self._children.add(thread["id"])
             return
         if "id" in message:
             self._on_request(message["id"], method, p)
+            return
+        if p.get("threadId") in self._children:
+            self._on_child_event(method, p)
             return
         if p.get("threadId") != self._thread or not self._active:
             return
@@ -250,19 +261,44 @@ class CodexLink:
             self._end_turn("cancelled" if turn.get("status") == "interrupted" else turn.get("status"),
                            str(error.get("message")) if error.get("message") else None)
 
+    def _on_child_event(self, method: str, p: dict) -> None:
+        thread = p["threadId"]
+        turn = (p.get("turn") or {}).get("id") if method.startswith("turn/") else p.get("turnId")
+        if method == "turn/started":
+            self._child_turns[thread] = turn
+            self._child_items = {key: item for key, item in self._child_items.items() if key[0] != thread}
+        if not turn or self._child_turns.get(thread) != turn:
+            return
+        if method == "turn/completed":
+            self._child_turns.pop(thread, None)
+            self._child_items = {key: item for key, item in self._child_items.items() if key[0] != thread}
+        elif method in ("item/started", "item/completed"):
+            item = p.get("item") or {}
+            self._track_child(item)
+            if item.get("type") == "fileChange":
+                key = (thread, item["id"])
+                if method == "item/started":
+                    self._child_items[key] = item
+                else:
+                    self._child_items.pop(key, None)
+
     def _on_request(self, rpc_id: int | str, method: str, p: dict) -> None:
-        if (p.get("threadId") != self._thread or not self._active
-                or (self._turn and p.get("turnId") and p["turnId"] != self._turn)):
+        thread = p.get("threadId")
+        child = thread in self._children
+        valid_turn = (bool(p.get("turnId")) and p["turnId"] == self._child_turns.get(thread)) if child else (
+            thread == self._thread and (not self._turn or not p.get("turnId") or p["turnId"] == self._turn))
+        if not self._active or not valid_turn:
             self._rpc.reply(rpc_id, error="Request is not for this active conversation")
             return
         if method == "item/commandExecution/requestApproval":
             decision = "accept" if command_allowed(p.get("command")) else "decline"
             self._rpc.reply(rpc_id, {"decision": decision})
         elif method == "item/fileChange/requestApproval":
-            item = self._items.get(p.get("itemId"), {})
+            item = (self._child_items.get((thread, p.get("itemId")), {}) if child
+                    else self._items.get(p.get("itemId"), {}))
             changes = item.get("changes") or []
             scope = file_scope(self._cfg.repo_root, changes)
-            if scope != "ask":
+            if scope != "ask" or child:
                 self._rpc.reply(rpc_id, {"decision": "accept" if scope == "allow" else "decline"})
                 return
             skill = (self._cfg.repo_root / APPROVABLE_SKILL).resolve()
@@ -287,6 +323,7 @@ class CodexLink:
         item_id, kind = item.get("id"), item.get("type")
         if not item_id or item_id in self._done:
             return
+        self._track_child(item)
         if kind == "agentMessage":
             if completed:
                 self._flush_text()
@@ -304,6 +341,13 @@ class CodexLink:
             self._finish_tools(item)
             self._items.pop(item_id, None)
             self._done.add(item_id)
+
+    def _track_child(self, item: dict) -> None:
+        # Current Codex reports spawned agents as parent items, without thread/started for the child.
+        if item.get("type") == "subAgentActivity" and item.get("kind") == "started":
+            child = item.get("agentThreadId")
+            if isinstance(child, str) and child:
+                self._children.add(child)
 
     def _tool_calls(self, item: dict) -> list[tuple[str, str, dict]]:
         item_id, kind = item["id"], item["type"]
