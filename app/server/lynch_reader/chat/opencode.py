@@ -26,6 +26,7 @@ from pathlib import Path
 from lynch_reader.chat.config import (GIT_BLOCKED_COMMANDS, GIT_RULE_TAIL, LONGBRIDGE_BLOCKED_COMMANDS, SHARED_RULES,
                                       scope_line)
 from lynch_reader.chat.index import Conversation
+from lynch_reader.chat.mcp import load_mcp_servers
 
 OPENCODE_MODELS: tuple[tuple[str, str], ...] = (("0g/deepseek-v4.1-flash", "DeepSeek V4.1 Flash"),)
 DEFAULT_OPENCODE_MODEL = "0g/deepseek-v4.1-flash"  # the user's choice (2026-10-18)
@@ -135,10 +136,7 @@ def claude_tool(name: str, raw_input: dict) -> tuple[str, dict]:
 def mcp_servers(repo_root: Path) -> list[dict]:
     """The servers of the repo's .mcp.json (the Claude chats' MCP config) in ACP's session/new shape. Read at each
     launch and kept in memory only: the file holds credentials."""
-    path = repo_root / ".mcp.json"
-    if not path.exists():
-        return []
-    servers = json.loads(path.read_text(encoding="utf-8")).get("mcpServers") or {}
+    servers = load_mcp_servers(repo_root)
 
     def pairs(d: dict | None) -> list[dict]:
         return [{"name": k, "value": v} for k, v in (d or {}).items()]

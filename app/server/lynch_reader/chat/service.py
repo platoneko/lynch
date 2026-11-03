@@ -37,6 +37,7 @@ from lynch_reader.chat.opencode import (DEFAULT_OPENCODE_MODEL, OPENCODE_EFFORT,
                                         opencode_env, write_rules)
 from lynch_reader.chat.opencode_link import OpencodeLink, OpencodeSetupError
 from lynch_reader.chat.process import ChatProcess
+from lynch_reader.chat.skills import FinanceSkills, FinanceSkillsError
 
 log = logging.getLogger(__name__)
 
@@ -117,6 +118,7 @@ class ChatService:
                  grok: GrokConfig | None = None, candidates: CandidateStore | None = None,
                  watch: WatchStore | None = None, opencode: OpencodeConfig | None = None,
                  codex: CodexConfig | None = None,
+                 skills: FinanceSkills | None = None,
                  monotonic: Callable[[], float] = time.monotonic, wall: Callable[[], float] = time.time,
                  idle_timeout_s: float = IDLE_TIMEOUT_S, max_processes: int = MAX_PROCESSES) -> None:
         self._index = index
@@ -129,6 +131,7 @@ class ChatService:
         self._opencode = opencode
         self._opencode_env = dict(base_env)  # opencode bills its own providers; the Claude billing guard is moot
         self._codex = codex
+        self._skills = skills
         self._codex_env = codex_env(base_env)
         self._codex_models: list[CodexModel] = []
         self._codex_hint: str | None = "Codex 模型清单尚未读取" if codex else "Codex 未配置"
@@ -531,12 +534,22 @@ class ChatService:
             live.subscribers.discard(q)
 
     async def shutdown(self) -> None:
+        if self._skills is not None:
+            await self._skills.close()
         for conv_id in list(self._live):
             await self._stop(conv_id)
 
     # ---- process lifecycle
 
+    async def _prepare_research_skills(self) -> None:
+        if self._skills is not None:
+            try:
+                await self._skills.refresh()
+            except FinanceSkillsError as error:
+                raise Conflict(str(error)) from error
+
     async def _spawn(self, conv: Conversation, resume_at: str | None = None) -> None:
+        await self._prepare_research_skills()
         await self._make_room()
         live = self._live.setdefault(conv.id, Live())
         resume = self._transcript(conv.id).exists()
@@ -646,6 +659,7 @@ class ChatService:
 
     async def _spawn_opencode(self, conv: Conversation) -> None:
         cfg = self._require_opencode()
+        await self._prepare_research_skills()
         await self._make_room()
         live = self._live.setdefault(conv.id, Live())
         env = opencode_env(self._opencode_env, write_rules(cfg, conv))
@@ -666,6 +680,7 @@ class ChatService:
 
     async def _spawn_research_grok(self, conv: Conversation) -> None:
         cfg = self._require_grok()
+        await self._prepare_research_skills()
         await self._make_room()
         live = self._live.setdefault(conv.id, Live())
         home = write_research_home(cfg, conv, cfg.home / ".grok")
@@ -688,6 +703,7 @@ class ChatService:
 
     async def _spawn_codex(self, conv: Conversation) -> None:
         cfg = self._require_codex()
+        await self._prepare_research_skills()
         await self._make_room()
         live = self._live.setdefault(conv.id, Live())
         link = CodexLink(cfg, conv, self._codex_env, AppLog(self._transcript(conv.id)),

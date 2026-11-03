@@ -12,6 +12,7 @@ from lynch_reader.chat.codex import (SETUP_TIMEOUT_S, CodexConfig, CodexModel, c
                                     file_scope, native_file_changes, parse_models, system_prompt)
 from lynch_reader.chat.index import Conversation
 from lynch_reader.chat.events import LinkEvents
+from lynch_reader.chat.mcp import codex_wisburg_config
 from lynch_reader.chat.process import ChatProcess
 
 log = logging.getLogger(__name__)
@@ -114,7 +115,8 @@ class CodexLink:
     def __init__(self, cfg: CodexConfig, conv: Conversation, env: dict[str, str], log: AppLog,
                  events: LinkEvents, *, setup_timeout_s: float = SETUP_TIMEOUT_S) -> None:
         self._cfg, self._conv, self._log, self._events = cfg, conv, log, events
-        self._rpc = _Rpc(cfg, env, self._on_message, self._on_exit, setup_timeout_s)
+        self._env = dict(env)
+        self._rpc = _Rpc(cfg, self._env, self._on_message, self._on_exit, setup_timeout_s)
         self._thread: str | None = None
         self._turn: str | None = None
         self._active = False
@@ -140,13 +142,14 @@ class CodexLink:
 
     async def start(self) -> str:
         try:
+            mcp_config = codex_wisburg_config(self._cfg.repo_root, self._env)
             await self._rpc.start()
             # Like Claude's Bash tools, approved scripts need to write caches and git metadata. On 0.166.0,
             # untrusted still asks for native patches with full access; the app checks every patch's scope.
             params = {"cwd": str(self._cfg.repo_root), "model": self._conv.model,
                       "approvalPolicy": "untrusted", "approvalsReviewer": "user", "sandbox": "danger-full-access",
                       "developerInstructions": system_prompt(self._conv),
-                      "config": {"model_reasoning_effort": self._conv.effort}}
+                      "config": {"model_reasoning_effort": self._conv.effort, **mcp_config}}
             previous = self._conv.codex_thread
             result = await self._rpc.call("thread/resume" if previous else "thread/start",
                                           {**params, **({"threadId": previous} if previous else {})})

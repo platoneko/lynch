@@ -36,6 +36,69 @@ def test_models_paginate_without_creating_threads(tmp_path):
     assert [c.get("method") for c in calls] == ["initialize", "initialized", "account/read", "model/list", "model/list"]
 
 
+def test_new_and_resumed_threads_load_repo_wisburg_without_logging_credentials(tmp_path):
+    async def main():
+        cfg, env = setup(tmp_path)
+        thread = None
+        for token in ("fake-wisburg-first", "fake-wisburg-refreshed"):
+            (tmp_path / ".mcp.json").write_text(json.dumps({"mcpServers": {
+                "wisburg": {"type": "http", "url": "https://wisburg.example/mcp", "headers": {
+                    "Authorization": f"Bearer {token}", "X-Research": "lynch"}},
+                "longbridge": {"type": "http", "url": "https://longbridge.example/mcp"},
+            }}))
+            link = open_link(cfg, env, LinkRecorder(), thread)
+            try:
+                thread = await link.start()
+                assert link._rpc.proc._env["LYNCH_CODEX_WISBURG_HEADER_0"] == f"Bearer {token}"
+                assert link._rpc.proc._env["LYNCH_CODEX_WISBURG_HEADER_1"] == "lynch"
+            finally:
+                await link.close()
+        assert "LYNCH_CODEX_WISBURG_HEADER_0" not in env
+        return (tmp_path / "rpc.jsonl").read_text()
+
+    rpc_log = asyncio.run(main())
+    calls = [json.loads(line) for line in rpc_log.splitlines()]
+    starts = [call for call in calls if call.get("method") in ("thread/start", "thread/resume")]
+    assert [call["method"] for call in starts] == ["thread/start", "thread/resume"]
+    for call in starts:
+        assert call["params"]["config"] == {
+            "model_reasoning_effort": "low",
+            "mcp_servers.wisburg": {"url": "https://wisburg.example/mcp", "enabled": True,
+                "env_http_headers": {"Authorization": "LYNCH_CODEX_WISBURG_HEADER_0",
+                                     "X-Research": "LYNCH_CODEX_WISBURG_HEADER_1"}},
+        }
+    assert "fake-wisburg-first" not in rpc_log and "fake-wisburg-refreshed" not in rpc_log
+    assert "longbridge.example" not in rpc_log
+
+
+@pytest.mark.parametrize("body", [
+    "not json", '[]', '{"mcpServers": []}',
+    '{"mcpServers": {"wisburg": {"type": "sse", "url": "https://wisburg.example/sse"}}}',
+    '{"mcpServers": {"wisburg": {"type": "http"}}}',
+    '{"mcpServers": {"wisburg": {"type": "http", "url": "https://wisburg.example/mcp", '
+    '"headers": {"Authorization": {"fake-private-value": true}}}}}',
+    *[json.dumps({"mcpServers": {"wisburg": {"type": "http", "url": "https://wisburg.example/mcp",
+                                            "headers": headers}}}) for headers in ([], False, 0, "")],
+])
+def test_invalid_repo_wisburg_config_fails_before_start_without_exposing_values(tmp_path, body):
+    from lynch_reader.chat.codex_link import CodexSetupError
+
+    async def main():
+        cfg, env = setup(tmp_path)
+        (tmp_path / ".mcp.json").write_text(body)
+        link = open_link(cfg, env, LinkRecorder())
+        try:
+            with pytest.raises(CodexSetupError, match="MCP|Wisburg") as error:
+                await link.start()
+            assert "fake-private-value" not in str(error.value)
+            assert not link.alive
+            assert not (tmp_path / "rpc.jsonl").exists()
+        finally:
+            await link.close()
+
+    asyncio.run(main())
+
+
 def test_stream_and_usage_are_persisted_once_and_resume_without_replay(tmp_path):
     async def main():
         cfg, env = setup(tmp_path)

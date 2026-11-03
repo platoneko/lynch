@@ -18,6 +18,28 @@ EXIT_POLL_S = 0.1
 log = logging.getLogger(__name__)
 
 
+async def stop_process_group(pid: int) -> None:
+    """Stop a whole tool process group even when its leader exits before its descendants."""
+    def signal_group(sig: int) -> None:
+        try:
+            os.killpg(pid, sig)
+        except ProcessLookupError:
+            pass
+
+    signal_group(signal.SIGTERM)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + KILL_GRACE_S
+    while True:
+        try:
+            os.killpg(pid, 0)
+        except ProcessLookupError:
+            return
+        if loop.time() >= deadline:
+            signal_group(signal.SIGKILL)
+            return
+        await asyncio.sleep(EXIT_POLL_S)
+
+
 class ChatProcess:
     def __init__(self, argv: list[str], env: dict[str, str], cwd: Path,
                  on_message: Callable[[dict], None],
@@ -100,21 +122,7 @@ class ChatProcess:
         self._on_exit(self, self._closing, "\n".join(self._stderr))
 
     async def _sweep_group(self) -> None:
-        self._signal(signal.SIGTERM)
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + KILL_GRACE_S
-        while self._group_alive():
-            if loop.time() >= deadline:
-                self._signal(signal.SIGKILL)
-                return
-            await asyncio.sleep(EXIT_POLL_S)
-
-    def _group_alive(self) -> bool:
-        try:
-            os.killpg(self._proc.pid, 0)
-        except ProcessLookupError:
-            return False
-        return True
+        await stop_process_group(self._proc.pid)
 
     async def _read_stdout(self) -> None:
         async for raw in self._proc.stdout:
