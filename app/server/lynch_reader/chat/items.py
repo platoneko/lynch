@@ -43,7 +43,12 @@ def message_items(entry: dict) -> list[dict]:
     if entry["type"] == "assistant":
         return [item for i, block in enumerate(content) for item in _assistant_block(entry["uuid"], i, block)]
     if isinstance(content, str):
-        return _user_text(entry["uuid"], content)
+        items = _user_text(entry["uuid"], content)
+        if entry.get("client_id"):
+            for item in items:
+                if item["kind"] == "user":
+                    item["client_id"] = entry["client_id"]
+        return items
     patches = [_tool_result(b) for b in content if b.get("type") == "tool_result"]
     texts = [b["text"] for b in content if b.get("type") == "text"]
     return patches + (_user_text(entry["uuid"], "\n".join(texts)) if texts else [])

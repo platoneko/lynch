@@ -19,20 +19,25 @@ export async function fetchCodexOptions(): Promise<ChatOptions['codex']> {
 export async function createChat(body: {
   kind: ChatKind; ticker: string | null; text: string; model: string; effort: string; context_window?: number;
   lookback_days?: number; agent?: ChatAgent;
+  client_id?: string;
 }): Promise<{ id: string }> {
   return (await post('/api/chats', body)).json();
 }
 
-export async function sendMessage(id: string, text: string): Promise<void> {
-  await post(`${base(id)}/messages`, { text });
+export async function sendMessage(id: string, text: string, clientId?: string): Promise<void> {
+  await post(`${base(id)}/messages`, { text, ...(clientId ? { client_id: clientId } : {}) });
+}
+
+export async function dismissQueued(id: string, messageId: string): Promise<void> {
+  await post(`${base(id)}/queue/${encodeURIComponent(messageId)}/dismiss`);
 }
 
 export async function interruptChat(id: string): Promise<void> {
   await post(`${base(id)}/interrupt`);
 }
 
-export async function editMessage(id: string, messageUuid: string, text: string): Promise<void> {
-  await post(`${base(id)}/edit`, { message_uuid: messageUuid, text });
+export async function editMessage(id: string, messageUuid: string, text: string, clientId?: string): Promise<void> {
+  await post(`${base(id)}/edit`, { message_uuid: messageUuid, text, ...(clientId ? { client_id: clientId } : {}) });
 }
 
 export async function archiveChat(id: string): Promise<void> {
@@ -68,7 +73,7 @@ export async function restoreCandidate(ticker: string): Promise<void> {
   await post(`/api/candidates/${encodeURIComponent(ticker)}/restore`);
 }
 
-const EVENTS = ['delta', 'item', 'tool_result', 'state', 'retry', 'usage', 'context', 'conv', 'approval', 'approval_done'];
+const EVENTS = ['delta', 'item', 'tool_result', 'state', 'retry', 'usage', 'context', 'conv', 'approval', 'approval_done', 'queued', 'limits'];
 
 /** Silence after which a stream counts as dead: three missed heartbeats (server chat/routes.py HEARTBEAT_S). */
 export const STALE_MS = 45_000;

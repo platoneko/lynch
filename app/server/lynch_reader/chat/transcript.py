@@ -68,6 +68,7 @@ def history(branch: list[dict], entries: list[dict] | None = None) -> History:
     because parallel tool results other than the last hang off the branch."""
     results = _tool_results(branch if entries is None else entries)
     items: list[dict] = []
+    tools: dict[str, int] = {}
     tokens: int | None = None
     last: dict | None = None  # the branch's final item or tool-result patch
     for entry in branch:
@@ -87,6 +88,11 @@ def history(branch: list[dict], entries: list[dict] | None = None) -> History:
             if item["kind"] == "tool" and item["id"] in results:
                 result = results[item["id"]]
                 item.update(output=result["output"], is_error=result["is_error"], denied=result["denied"])
+            if item["kind"] == "tool":
+                if item["id"] in tools:
+                    items[tools[item["id"]]] = item
+                    continue
+                tools[item["id"]] = len(items)
             items.append(item)
     # Open turn: the model owes a reply to a user message, a pending tool call, or a tool result.
     # An interrupt notice, a reply text or a compaction closes it.

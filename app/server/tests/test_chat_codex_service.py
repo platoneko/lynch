@@ -168,6 +168,7 @@ def test_codex_route_defaults_catalog_and_history_survives_server_restart(tmp_pa
         svc = codex_service(tmp_path)
         chat = await start(svc, "first")
         await idle(svc, chat.id)
+        await until(lambda: svc.list()["chats"][0]["title"] == "原生短标题")
         row = svc.list()["chats"][0]
         await svc.shutdown()
         again = codex_service(tmp_path)
@@ -182,7 +183,7 @@ def test_codex_route_defaults_catalog_and_history_survives_server_restart(tmp_pa
 
     row = asyncio.run(main())
     assert (row["agent_label"], row["model"], row["effort"], row["model_label"], row["title"]) == (
-        "Codex", "gpt-test", "low", "GPT Test", "first")
+        "Codex", "gpt-test", "low", "GPT Test", "原生短标题")
     assert row["codex_thread"]
 
 
@@ -211,15 +212,17 @@ def test_codex_deltas_context_and_stop_use_existing_events(tmp_path):
         assert snap["usage"] is None
         assert snap["context"]["tokens"] > 0 and snap["context"]["window"] > 0
         await svc.send(chat.id, "wait")
-        with pytest.raises(Conflict, match="回答进行中"):
-            await svc.send(chat.id, "another")
+        await svc.send(chat.id, "another")
+        assert any(row["text"] == "another" for row in svc.snapshot(chat.id)["queued"])
         await svc.interrupt(chat.id)
         await idle(svc, chat.id)
         assert texts(svc, chat.id)[-1] == ("notice", "已停止")
+        for row in svc.snapshot(chat.id)["queued"]:
+            svc.dismiss_queued(chat.id, row["id"])
         await svc.send(chat.id, "/compact")
         await idle(svc, chat.id)
         assert texts(svc, chat.id)[-1] == ("compact", None)
-        with pytest.raises(Invalid, match="Codex.*编辑"):
+        with pytest.raises(Invalid):
             await svc.edit(chat.id, "x", "y")
         await svc.shutdown()
     asyncio.run(main())

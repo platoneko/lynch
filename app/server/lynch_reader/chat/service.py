@@ -36,7 +36,9 @@ from lynch_reader.chat.kol import (DEFAULT_LOOKBACK_DAYS, LOOKBACK_DAYS, KolSour
 from lynch_reader.chat.opencode import (DEFAULT_OPENCODE_MODEL, OPENCODE_EFFORT, OPENCODE_MODELS, OpencodeConfig,
                                         opencode_env, write_rules)
 from lynch_reader.chat.opencode_link import OpencodeLink, OpencodeSetupError
+from lynch_reader.chat.opencode_http import OpencodeHttpError
 from lynch_reader.chat.process import ChatProcess
+from lynch_reader.chat.queue import MessageQueue
 from lynch_reader.chat.skills import FinanceSkills, FinanceSkillsError
 
 log = logging.getLogger(__name__)
@@ -85,6 +87,10 @@ class Invalid(Exception):
 @dataclass
 class Live:
     """Runtime state of one conversation. No entry means dormant with nobody watching."""
+    generation: int = 0
+    archiving: bool = False
+    operations: set[asyncio.Task] = field(default_factory=set)
+    starting: list = field(default_factory=list)
     state: str = "dormant"  # running | compacting | idle | dormant
     proc: ChatProcess | OpencodeLink | GrokLink | CodexLink | None = None
     last_used: float = 0.0
@@ -96,6 +102,9 @@ class Live:
     # then the id of that request, whose answer replaces the title unless the user renamed meanwhile.
     title_from: str | None = None
     title_request: str | None = None
+    native_title: str | None = None
+    first_completed: bool = False
+    limits: dict | None = None
     # (resume uuid, transcript entry count) of an edit whose new process has not written yet;
     # until it does, the file's newest message is still the edited-away branch.
     pending_cut: tuple[str, int] | None = None
@@ -122,12 +131,14 @@ class ChatService:
                  monotonic: Callable[[], float] = time.monotonic, wall: Callable[[], float] = time.time,
                  idle_timeout_s: float = IDLE_TIMEOUT_S, max_processes: int = MAX_PROCESSES) -> None:
         self._index = index
+        self._queue = MessageQueue(index.path.with_name("queue.json"))
+        self._closing = False
         self._launch = launch
         self._projects = projects_dir
         self._env = launch_env(base_env)
         self._grok = grok
         self._grok_env = grok_env(base_env)
-        self._grok_logs: dict[str, AppLog] = {}
+        self._app_logs: dict[str, AppLog] = {}
         self._opencode = opencode
         self._opencode_env = dict(base_env)  # opencode bills its own providers; the Claude billing guard is moot
         self._codex = codex
@@ -226,13 +237,17 @@ class ChatService:
         return {"conv": self._summary(conv), "items": items, "partial": live.partial, "retry": live.retry,
                 "usage": self.usage if conv.agent == "claude" else None,  # Claude's subscription, nobody else's
                 "context": {"tokens": tokens, "window": conv.context_window},
-                "approvals": [a.public() for a in live.approvals.values()]}
+                "approvals": [a.public() for a in live.approvals.values()],
+                "queued": self._queue.pending(conv_id) if conv.agent != "claude" else None,
+                "limits": live.limits}
 
     # ---- commands
 
     async def create(self, kind: str, ticker: str | None, text: str, model: str | None, effort: str | None,
                      context_window: object = None, lookback_days: object = None,
-                     agent: str | None = None) -> Conversation:
+                     agent: str | None = None, client_id: str | None = None) -> Conversation:
+        self._check_open()
+        self._validate_client_id(client_id)
         # The values come from a JSON body; a list or dict would break the membership tests below.
         if (not all(isinstance(v, str) for v in (kind, text))
                 or not all(isinstance(v, str | None) for v in (model, effort))
@@ -259,11 +274,13 @@ class ChatService:
             conv = self._new_opencode(kind, ticker, text, model, effort)
         else:
             conv = self._new_claude(kind, ticker, text, model, effort)
+        self._check_open()
+        self._check_open()
         self._index.put(conv)
         # Visible in the list before its transcript exists. Claude titles a chat after its first reply; the others
         # keep the first message.
-        self._live[conv.id] = Live(title_from=text if agent == "claude" else None)
-        await self.send(conv.id, text)
+        self._live[conv.id] = Live(title_from=text)
+        await self.send(conv.id, text, client_id)
         return conv
 
     def _new_claude(self, kind: str, ticker: str | None, text: str, model: str, effort: str) -> Conversation:
@@ -359,31 +376,214 @@ class ChatService:
                             title=make_title(text), model=model, effort=effort, created_at=now, updated_at=now,
                             agent="codex")
 
-    async def send(self, conv_id: str, text: str) -> None:
-        conv = self._conv(conv_id)
+    @staticmethod
+    def _validate_client_id(client_id: str | None) -> None:
+        if client_id is not None and (not isinstance(client_id, str) or not client_id.strip()):
+            raise Invalid("invalid message id")
+
+    def _checkpoint(self, conv_id: str, live: Live, generation: int) -> None:
+        conv = self._index.get(conv_id)
+        if live.archiving or self._live.get(conv_id) is not live or conv is None or conv.archived:
+            raise NotFound(conv_id)
+        if self._closing or live.generation != generation:
+            raise Conflict("本次操作已停止，输入已保留")
+
+    def _locked_conv(self, conv_id: str, live: Live, generation: int) -> Conversation:
+        """Resolve native context only after the command owns the chat lock."""
+        self._checkpoint(conv_id, live, generation)
+        self._check_not_archived(conv_id, live)
+        return self._conv(conv_id)
+
+    async def _start_owned(self, conv_id: str, live: Live, generation: int, resource, start):
+        self._checkpoint(conv_id, live, generation)
+        live.starting.append(resource)
+        try:
+            result = await start()
+            self._checkpoint(conv_id, live, generation)
+            return result
+        except BaseException:
+            await resource.close()
+            raise
+        finally:
+            live.starting.remove(resource)
+
+    async def _check_send_current(self, conv_id: str, live: Live, generation: int) -> None:
+        try:
+            self._checkpoint(conv_id, live, generation)
+        except (Conflict, NotFound):
+            if self._live.get(conv_id) is live:
+                await self._stop(conv_id)
+            raise
+
+    async def _cancel_operations(self, live: Live) -> None:
+        live.generation += 1
+        current = asyncio.current_task()
+        tasks = [task for task in live.operations if task is not current]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.gather(*(resource.close() for resource in list(live.starting)), return_exceptions=False)
+
+    async def send(self, conv_id: str, text: str, client_id: str | None = None) -> None:
+        self._validate_client_id(client_id)
+        self._conv(conv_id)
+        live = self._live.setdefault(conv_id, Live())
+        generation = live.generation
+        task = asyncio.create_task(self._send(conv_id, text, client_id))
+        live.operations.add(task)
+        try:
+            await task
+            self._checkpoint(conv_id, live, generation)
+        except asyncio.CancelledError:
+            conv = self._index.get(conv_id)
+            if live.archiving or self._live.get(conv_id) is not live or conv is None or conv.archived:
+                raise NotFound(conv_id) from None
+            if self._closing:
+                raise Conflict("对话服务已关闭，本次输入已保留") from None
+            if live.generation != generation:
+                raise Conflict("本次发送已停止，输入已保留") from None
+            raise
+        finally:
+            live.operations.discard(task)
+
+    async def _send(self, conv_id: str, text: str, client_id: str | None = None) -> None:
+        self._check_open()
+        self._conv(conv_id)
         if not text.strip():
             raise Invalid("empty message")
+        self._validate_client_id(client_id)
         live = self._live.setdefault(conv_id, Live())
+        generation = live.generation
         async with live.lock:
-            self._check_not_archived(conv_id, live)
-            if conv.agent == "grok":
-                if conv.kind == "discover":
-                    await self._start_grok_turn(conv, live, text)
-                else:
-                    await self._send_link(conv, live, text)
+            conv = self._locked_conv(conv_id, live, generation)
+            if conv.agent == "claude":
+                # Claude already owns its native interjection queue; preserve that behavior.
+                if text.lstrip().startswith(COMPACT_COMMAND) and live.state in BUSY:
+                    raise Conflict("等这一轮结束再压缩")
+                generation = live.generation
+                if live.proc is None or not live.proc.alive:
+                    await self._spawn(conv)
+                await self._check_send_current(conv_id, live, generation)
+                await self._write_user(conv_id, text)
                 return
-            if conv.agent in ("opencode", "codex"):
-                await self._send_link(conv, live, text)
+            if text.lstrip().split(maxsplit=1)[0] == COMPACT_COMMAND:
+                if live.state in BUSY or self._queue.pending(conv_id):
+                    raise Conflict("先结束当前回答并处理待发送消息，再压缩")
+                await self._send_now(conv, live, text)
                 return
-            if text.lstrip().startswith(COMPACT_COMMAND) and live.state in BUSY:
-                raise Conflict("等这一轮结束再压缩")
-            if live.proc is None or not live.proc.alive:
-                await self._spawn(conv)
-            await self._write_user(conv_id, text)
+            try:
+                row = self._queue.add(conv_id, text, client_id)
+            except ValueError as error:
+                raise Invalid(str(error)) from error
+            self._queue_changed(conv_id)
+            if row["state"] != "queued" or live.state in BUSY:
+                return
+            await self._send_pending(conv, live)
+
+    async def _send_now(self, conv: Conversation, live: Live, text: str) -> None:
+        if conv.agent == "grok" and conv.kind == "discover":
+            await self._start_grok_turn(conv, live, text)
+        else:
+            await self._send_link(conv, live, text)
+
+    async def _send_pending(self, conv: Conversation, live: Live) -> None:
+        row = self._queue.next(conv.id)
+        if row is None or live.state in BUSY or self._closing:
+            return
+        self._queue.begin(conv.id, row["id"])
+        self._queue_changed(conv.id)
+        log = self._app_log(conv.id)
+        log.client_id = row["id"]
+        try:
+            if asyncio.current_task() in live.operations:
+                await self._send_now(conv, live, row["text"])
+            else:
+                # Background dequeue has the same cancellation boundary as an HTTP send.
+                operation = asyncio.create_task(self._send_now(conv, live, row["text"]))
+                live.operations.add(operation)
+                try:
+                    await operation
+                finally:
+                    live.operations.discard(operation)
+        except BaseException:
+            self._pause_inputs(conv.id)
+            raise
+        finally:
+            log.client_id = None
+
+    async def _drain_queue(self, conv_id: str) -> None:
+        if self._closing:
+            return
+        live = self._live.get(conv_id)
+        if live is None:
+            return
+        async with live.lock:
+            conv = self._index.get(conv_id)
+            if conv is None or conv.archived or self._live.get(conv_id) is not live:
+                return
+            try:
+                await self._send_pending(self._conv(conv_id), live)
+            except (Conflict, Invalid, OSError) as error:
+                self._notice(conv_id, f"待发送消息未能开始：{error}")
+
+    def _queue_changed(self, conv_id: str) -> None:
+        self._broadcast(conv_id, "queued", {"queued": self._queue.pending(conv_id)})
+
+    def _confirm_input(self, conv_id: str) -> None:
+        row = self._queue.active(conv_id)
+        if row is not None:
+            try:
+                self._queue.complete(conv_id, row["id"])
+            except OSError as error:
+                self._pause_inputs(conv_id, error=error)
+                return
+            self._queue_changed(conv_id)
+
+    def _reconcile_inputs(self, conv_id: str) -> None:
+        try:
+            self._reconcile_inputs_unchecked(conv_id)
+        except OSError as error:
+            self._pause_inputs(conv_id, error=error)
+
+    def _reconcile_inputs_unchecked(self, conv_id: str) -> None:
+        uncertain = {row["id"] for row in self._queue.pending(conv_id) if row["status"] == "uncertain"}
+        if not uncertain:
+            return
+        log = self._app_log(conv_id)
+        accepted = {entry.get("client_id") for entry in log.entries()
+                    if entry.get("client_id") in uncertain and log.native_id(entry["uuid"]) is not None}
+        for message_id in accepted:
+            self._queue.complete(conv_id, message_id)
+        if accepted:
+            self._queue_changed(conv_id)
+
+    def _pause_inputs(self, conv_id: str, *, error: OSError | None = None) -> None:
+        try:
+            self._queue.pause(conv_id)
+            if error is None:
+                self._reconcile_inputs_unchecked(conv_id)
+        except OSError as failure:
+            error = error or failure
+        if error is not None:
+            log.warning("chat %s: input bookkeeping could not be persisted: %s", conv_id, error)
+            self._notice(conv_id, "消息暂停状态未能保存，排队内容已停止；请检查磁盘后再试")
+        self._queue_changed(conv_id)
+
+    def _next_input(self, conv_id: str) -> None:
+        if not self._closing and self._queue.next(conv_id) is not None:
+            self._spawn_task(self._drain_queue(conv_id))
+
+    def dismiss_queued(self, conv_id: str, message_id: str) -> None:
+        self._conv(conv_id)
+        self._queue.dismiss(conv_id, message_id)
+        self._queue_changed(conv_id)
 
     async def interrupt(self, conv_id: str) -> None:
-        conv = self._conv(conv_id)
+        conv = self._conv(conv_id, repair=False)
         live = self._live.get(conv_id)
+        if live is not None:
+            await self._cancel_operations(live)
+        self._pause_inputs(conv_id)
         if not (live and live.proc and live.proc.alive and live.state in BUSY):
             return
         if conv.agent == "grok" and conv.kind == "discover":
@@ -394,27 +594,67 @@ class ChatService:
         except (BrokenPipeError, ConnectionResetError) as e:  # it exited after the alive check
             raise Conflict(f"{_process_name(conv.agent)} 进程已退出，原因见对话里的提示") from e
 
-    async def edit(self, conv_id: str, message_uuid: str, text: str) -> None:
+    async def edit(self, conv_id: str, message_uuid: str, text: str, client_id: str | None = None) -> None:
         """Truncate the conversation before `message_uuid` and send `text` in its place. Files are not touched."""
-        conv = self._conv(conv_id)
-        if conv.agent != "claude":  # only Claude Code can resume a session at an earlier message
-            raise Invalid("发现新票对话不支持编辑消息" if conv.agent == "grok" else
-                          f"{AGENT_LABELS[conv.agent]} 对话不支持编辑消息")
+        self._validate_client_id(client_id)
+        self._conv(conv_id)
         live = self._live.setdefault(conv_id, Live())
+        generation = live.generation
         async with live.lock:
-            self._check_not_archived(conv_id, live)
+            conv = self._locked_conv(conv_id, live, generation)
             if live.state in BUSY:
                 raise Conflict("回答进行中，先停止再编辑")
             if not text.strip():
                 raise Invalid("empty message")
+            if self._queue.pending(conv_id):
+                raise Conflict("先处理待发送消息，再编辑历史")
             path = self._transcript(conv_id)
             entries = transcript.read_entries(path) if path.exists() else []
             try:
                 cut = transcript.edit_cut(transcript.current_branch(entries), message_uuid)
             except transcript.EditRejected as e:
                 raise Invalid(str(e)) from e
+            if conv.agent != "claude":
+                # Persist the replacement before touching native history. A partial edit remains a draft,
+                # and cannot be automatically sent into whichever branch survived a failed commit.
+                self._queue.add(conv_id, text, client_id)
+                self._queue_changed(conv_id)
+                try:
+                    if conv.kind == "discover":
+                        await self._spawn_discover_control(conv, live)
+                    elif live.proc is None or not live.proc.alive:
+                        spawn = {"codex": self._spawn_codex, "grok": self._spawn_research_grok,
+                                 "opencode": self._spawn_opencode}[conv.agent]
+                        await spawn(conv)
+                    self._checkpoint(conv_id, live, generation)
+                    session = await live.proc.rewind(message_uuid)
+                    self._checkpoint(conv_id, live, generation)
+                    self._app_log(conv_id).branch_at(cut, agent=conv.agent, native_session=session)
+                    field = {"codex": "codex_thread", "grok": "grok_session", "opencode": "opencode_session"}[conv.agent]
+                    conv = self._index.update(conv_id, **{field: session})
+                except asyncio.CancelledError:
+                    self._pause_inputs(conv_id)
+                    await self._stop(conv_id)
+                    self._app_logs.pop(conv_id, None)
+                    raise
+                except Exception as error:
+                    self._pause_inputs(conv_id)
+                    await self._stop(conv_id)
+                    self._app_logs.pop(conv_id, None)
+                    if isinstance(error, (Conflict, CodexSetupError, GrokSetupError, OpencodeSetupError,
+                                          OpencodeHttpError, OSError, ValueError)):
+                        raise Conflict(f"无法编辑对话，替换文字已保留为未回答草稿：{error}") from error
+                    raise
+                live.context_tokens = None
+                self._broadcast(conv_id, "reset", {})
+                if conv.kind == "discover":
+                    await self._stop(conv_id)
+                await self._send_pending(conv, live)
+                return
             await self._stop(conv_id)
+            self._checkpoint(conv_id, live, generation)
             await self._spawn(conv, resume_at=cut)
+            await self._check_send_current(conv_id, live, generation)
             live.pending_cut = (cut, len(entries))
             live.context_tokens = None  # the pre-edit count belongs to the dropped turns
             self._broadcast(conv_id, "reset", {})  # the branch changed: watchers refetch a snapshot
@@ -422,9 +662,12 @@ class ChatService:
 
     async def archive(self, conv_id: str) -> None:
         """Hide the conversation; its process dies at once, whatever it was doing."""
-        self._conv(conv_id)
+        self._conv(conv_id, repair=False)
         live = self._live.setdefault(conv_id, Live())
+        live.archiving = True
+        await self._cancel_operations(live)
         async with live.lock:
+            self._pause_inputs(conv_id)
             await self._stop(conv_id)
             self._index.update(conv_id, archived=True)
             self._broadcast(conv_id, "archived", {})
@@ -534,9 +777,17 @@ class ChatService:
             live.subscribers.discard(q)
 
     async def shutdown(self) -> None:
+        self._closing = True
+        for live in list(self._live.values()):
+            await self._cancel_operations(live)
+        tasks = list(self._tasks)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         if self._skills is not None:
             await self._skills.close()
         for conv_id in list(self._live):
+            self._pause_inputs(conv_id)
             await self._stop(conv_id)
 
     # ---- process lifecycle
@@ -549,16 +800,20 @@ class ChatService:
                 raise Conflict(str(error)) from error
 
     async def _spawn(self, conv: Conversation, resume_at: str | None = None) -> None:
-        await self._prepare_research_skills()
-        await self._make_room()
         live = self._live.setdefault(conv.id, Live())
+        generation = live.generation
+        self._checkpoint(conv.id, live, generation)
+        await self._prepare_research_skills()
+        self._checkpoint(conv.id, live, generation)
+        await self._make_room()
+        self._checkpoint(conv.id, live, generation)
         resume = self._transcript(conv.id).exists()
         argv = launch_argv(self._launch, conv, resume=resume, resume_at=resume_at)
         proc = ChatProcess(argv, self._env, self._launch.repo_root,
                            on_message=lambda msg: self._on_message(conv.id, proc, msg),
                            on_exit=lambda p, expected, err: self._on_exit(conv.id, p, expected, err))
         try:
-            await proc.start()
+            await self._start_owned(conv.id, live, generation, proc, proc.start)
         except OSError as e:
             raise Conflict(f"无法启动 Claude：{e}") from e
         # A dead predecessor's exit may not be reported yet, and once replaced it is ignored as stale:
@@ -588,27 +843,44 @@ class ChatService:
     async def _start_grok_turn(self, conv: Conversation, live: Live, text: str) -> None:
         """grok takes one message per process (`-p`): each turn is a new process resuming the conversation's
         grok session, and it exits after its `result`. Called under the chat's lock."""
+        generation = live.generation
+        self._checkpoint(conv.id, live, generation)
         if live.state in BUSY:
             raise Conflict("回答进行中，等这一轮结束或先停止")
-        if text.lstrip().startswith(COMPACT_COMMAND):
-            raise Invalid("Grok 对话不支持压缩上下文")
+        if text.lstrip().split(maxsplit=1)[0] == COMPACT_COMMAND:
+            await self._spawn_discover_control(conv, live)
+            await self._check_send_current(conv.id, live, generation)
+            self._set_state(conv.id, "compacting")
+            try:
+                await live.proc.compact(text.strip()[len(COMPACT_COMMAND):].strip())
+            except asyncio.CancelledError:
+                await self._stop(conv.id)
+                raise
+            except (GrokSetupError, OSError) as error:
+                await self._stop(conv.id)
+                raise Conflict(f"Grok 无法压缩对话：{error}") from error
+            return
+        if live.proc is not None:
+            await self._stop(conv.id)
         grok = self._require_grok()
         skill = self._discover_skill()  # both read every turn: an edit applies at once
         kol = await self._kol_sources()
+        self._checkpoint(conv.id, live, generation)
         days = conv.lookback_days or DEFAULT_LOOKBACK_DAYS  # chats made before the choice existed
         prompt = discover_prompt(skill, kol_brief(kol, days, datetime.fromtimestamp(self._wall(), UTC)), text)
         await self._make_room()
+        self._checkpoint(conv.id, live, generation)
         try:
             prepare_workdir(grok.workdir)
         except GrokSetupError as e:
             raise Conflict(f"无法启动 Grok：{e}") from e
         # grok never echoes the prompt: the app records and shows it itself.
-        self._broadcast_entry(conv.id, self._grok_log(conv.id).user(text))
+        self._broadcast_entry(conv.id, self._app_log(conv.id).user(text))
         proc = ChatProcess(grok_argv(grok, conv, prompt), self._grok_env, grok.workdir,
                            on_message=lambda msg: self._on_message(conv.id, proc, msg),
                            on_exit=lambda p, expected, err: self._on_exit(conv.id, p, expected, err))
         try:
-            await proc.start()
+            await self._start_owned(conv.id, live, generation, proc, proc.start)
         except OSError as e:
             raise Conflict(f"无法启动 Grok：{e}") from e
         live.proc, live.partial, live.result_seen, live.last_used = proc, "", False, self._now()
@@ -623,29 +895,28 @@ class ChatService:
             answered = live.result_seen  # grok lingering after its reply: end it, but no 已停止 after a full answer
             await self._stop(conv_id)
             if not answered:
-                self._broadcast_entry(conv_id, self._grok_log(conv_id).interrupted())
+                self._broadcast_entry(conv_id, self._app_log(conv_id).interrupted())
 
     async def _send_link(self, conv: Conversation, live: Live, text: str) -> None:
         """Start one turn under the chat lock; completion callbacks own its ending state."""
         label = AGENT_LABELS[conv.agent]
+        generation = live.generation
+        self._checkpoint(conv.id, live, generation)
         if live.state in BUSY:
             raise Conflict("回答进行中，等这一轮结束或先停止")
-        compact = text.lstrip().startswith(COMPACT_COMMAND)
-        if compact and conv.agent != "codex":
-            raise Invalid(f"{label} 对话不支持压缩上下文")
-        if compact and text.strip() != COMPACT_COMMAND:
-            raise Invalid("Codex 压缩上下文不支持附加说明")
+        compact = text.lstrip().split(maxsplit=1)[0] == COMPACT_COMMAND
         if live.proc is None or not live.proc.alive:
             spawn = {"opencode": self._spawn_opencode, "grok": self._spawn_research_grok,
                      "codex": self._spawn_codex}[conv.agent]
             await spawn(conv)
+        await self._check_send_current(conv.id, live, generation)
         link = live.proc
         self._index.update(conv.id, updated_at=self._wall())
         live.last_used = self._now()
         self._set_state(conv.id, "compacting" if compact else "running")
         try:
             if compact:
-                await link.compact()
+                await link.compact(text.strip()[len(COMPACT_COMMAND):].strip())
             else:
                 await link.prompt(text)
         except BaseException as e:
@@ -653,25 +924,27 @@ class ChatService:
             # before another send, and never overwrite a completion callback after a successful write.
             if live.proc is link:
                 await self._stop(conv.id)
-            if isinstance(e, (CodexSetupError, OSError)):
+            if isinstance(e, (CodexSetupError, GrokSetupError, OpencodeSetupError, OpencodeHttpError, OSError)):
                 raise Conflict(f"{label} 无法发送消息：{e}") from e
             raise
 
     async def _spawn_opencode(self, conv: Conversation) -> None:
+        live = self._live.setdefault(conv.id, Live())
+        generation = live.generation
+        self._checkpoint(conv.id, live, generation)
         cfg = self._require_opencode()
         await self._prepare_research_skills()
+        self._checkpoint(conv.id, live, generation)
         await self._make_room()
-        live = self._live.setdefault(conv.id, Live())
+        self._checkpoint(conv.id, live, generation)
         env = opencode_env(self._opencode_env, write_rules(cfg, conv))
-        link = OpencodeLink(cfg, conv, env, AppLog(self._transcript(conv.id)), self._link_events(conv.id, lambda: link))
+        link = OpencodeLink(cfg, conv, env, self._app_log(conv.id), self._link_events(conv.id, lambda: link))
         try:
-            session = await link.start()
+            session = await self._start_owned(conv.id, live, generation, link, link.start)
         except OpencodeSetupError as e:
             raise Conflict(f"无法启动 opencode：{e}") from e
         if conv.opencode_session != session:
             self._index.update(conv.id, opencode_session=session)
-        if link.session_lost:
-            self._notice(conv.id, "opencode 找不到这个对话原来的会话，已新开一个：它不记得之前的内容")
         self._clear_approvals(conv.id, live)  # as in _spawn: a dead predecessor's cards go now
         live.proc = link
         live.partial = ""
@@ -679,22 +952,24 @@ class ChatService:
         self._set_state(conv.id, "idle")
 
     async def _spawn_research_grok(self, conv: Conversation) -> None:
+        live = self._live.setdefault(conv.id, Live())
+        generation = live.generation
+        self._checkpoint(conv.id, live, generation)
         cfg = self._require_grok()
         await self._prepare_research_skills()
+        self._checkpoint(conv.id, live, generation)
         await self._make_room()
-        live = self._live.setdefault(conv.id, Live())
+        self._checkpoint(conv.id, live, generation)
         home = write_research_home(cfg, conv, cfg.home / ".grok")
         env = research_env(self._env, home)
-        link = GrokLink(cfg, conv, env, AppLog(self._transcript(conv.id)),
+        link = GrokLink(cfg, conv, env, self._app_log(conv.id),
                         self._link_events(conv.id, lambda: link), self._launch.repo_root)
         try:
-            session = await link.start()
+            session = await self._start_owned(conv.id, live, generation, link, link.start)
         except GrokSetupError as e:
             raise Conflict(f"无法启动 Grok：{e}") from e
         if conv.grok_session != session:
             conv = self._index.update(conv.id, grok_session=session)
-        if link.session_lost:
-            self._notice(conv.id, "Grok 找不到这个对话原来的会话，已新开一个：它不记得之前的内容")
         self._clear_approvals(conv.id, live)
         live.proc = link
         live.partial = ""
@@ -702,14 +977,18 @@ class ChatService:
         self._set_state(conv.id, "idle")
 
     async def _spawn_codex(self, conv: Conversation) -> None:
+        live = self._live.setdefault(conv.id, Live())
+        generation = live.generation
+        self._checkpoint(conv.id, live, generation)
         cfg = self._require_codex()
         await self._prepare_research_skills()
+        self._checkpoint(conv.id, live, generation)
         await self._make_room()
-        live = self._live.setdefault(conv.id, Live())
-        link = CodexLink(cfg, conv, self._codex_env, AppLog(self._transcript(conv.id)),
+        self._checkpoint(conv.id, live, generation)
+        link = CodexLink(cfg, conv, self._codex_env, self._app_log(conv.id),
                          self._link_events(conv.id, lambda: link))
         try:
-            thread = await link.start()
+            thread = await self._start_owned(conv.id, live, generation, link, link.start)
         except (CodexSetupError, OSError) as e:
             await link.close()
             raise Conflict(f"无法启动 Codex：{e}") from e
@@ -731,6 +1010,8 @@ class ChatService:
             return run
 
         def on_delta(live: Live, text: str) -> None:
+            self._confirm_input(conv_id)
+            self._set_retry(conv_id, None)
             live.partial += text
             self._broadcast(conv_id, "delta", {"text": text})
 
@@ -754,6 +1035,13 @@ class ChatService:
             self._broadcast(conv_id, "approval", approval.public())
 
         def on_turn_end(live: Live, stop: str | None, error: str | None) -> None:
+            self._set_retry(conv_id, None)
+            failed = error is not None or stop in ("failed", "cancelled", "interrupted")
+            if failed:
+                self._pause_inputs(conv_id)
+            else:
+                self._confirm_input(conv_id)
+                live.first_completed = True
             # An error reached the page already, as the turn's closing text in the record.
             self._index.update(conv_id, updated_at=self._wall())
             live.partial = ""
@@ -761,12 +1049,41 @@ class ChatService:
             self._clear_approvals(conv_id, live)
             live.framework_writes.clear()
             self._set_state(conv_id, "idle")
+            if self._index.get(conv_id).kind == "discover":
+                self._spawn_task(self._finish_discover_control(conv_id, link()))
+            elif not failed:
+                self._next_input(conv_id)
+                if self._queue.next(conv_id) is None:
+                    self._spawn_task(self._request_title(conv_id, live))
+
+        def on_limits(live: Live, limits: dict) -> None:
+            live.limits = {**(live.limits or {}), **limits}
+            self._broadcast(conv_id, "limits", live.limits)
+
+        def on_title(live: Live, title: str) -> None:
+            live.native_title = title
+            if live.first_completed and live.title_request is not None:
+                self._apply_title(conv_id, live, title)
+
+        def on_state(live: Live, state: str) -> None:
+            if live.state not in BUSY:
+                return
+            if state in BUSY:
+                self._set_state(conv_id, state)
+            elif state == "idle" and live.state == "compacting":
+                self._set_state(conv_id, "running")
+            # Native status can arrive before the terminal RPC response. Only on_turn_end
+            # releases the turn; otherwise a second prompt could overwrite a live request.
 
         return LinkEvents(on_delta=current(on_delta), on_entry=current(lambda live, e:
                           self._on_system(conv_id, live, e) if e["type"] == "system" else self._show(conv_id, live, e)),
                           on_usage=current(on_usage), on_permission=current(on_permission),
                           on_turn_end=current(on_turn_end),
-                          on_exit=lambda expected, err: self._on_exit(conv_id, link(), expected, err))
+                          on_exit=lambda expected, err: self._on_exit(conv_id, link(), expected, err),
+                          on_retry=current(lambda _live, text: self._set_retry(conv_id, text)),
+                          on_limits=current(on_limits), on_title=current(on_title),
+                          on_notice=current(lambda _live, text: self._notice(conv_id, text)),
+                          on_state=current(on_state))
 
     async def _answer_link(self, conv_id: str, link: OpencodeLink | GrokLink | CodexLink, request_id: str) -> None:
         try:
@@ -816,14 +1133,23 @@ class ChatService:
         was_busy = live.state in BUSY
         conv = self._index.get(conv_id)
         agent = conv.agent if conv is not None else "claude"
-        expected = expected or (agent == "grok" and conv is not None and conv.kind == "discover"
-                                and live.result_seen)  # discover grok exits by itself once its turn is done
+        completed_discover_turn = (agent == "grok" and conv is not None and conv.kind == "discover"
+                                   and live.result_seen)
+        expected = expected or completed_discover_turn
         live.proc = None
         self._clear_approvals(conv_id, live)
         live.framework_writes.clear()
         live.partial = ""
         live.pending_cut = None  # an edit whose process died unwritten is lost: the next resume sees the old tip
         self._set_state(conv_id, "dormant")
+        if completed_discover_turn:
+            self._next_input(conv_id)
+            if live.title_from is not None:
+                self._spawn_task(self._request_title(conv_id, live))
+        else:
+            # An expected transport close is not proof that the current round succeeded.
+            # Intentional stops and idle reaping detach first and never reach this branch.
+            self._pause_inputs(conv_id)
         if not expected:
             text = f"{_process_name(agent)} 进程意外退出" + ("，本轮中断" if was_busy else "")
             self._notice(conv_id, f"{text}：{stderr_tail}" if stderr_tail else text)
@@ -858,12 +1184,14 @@ class ChatService:
         self._set_retry(conv_id, None)  # the model is answering
         delta = event.get("delta") or {}
         if delta.get("type") == "text_delta":
+            if delta.get("text"):
+                self._confirm_input(conv_id)
             live.partial += delta["text"]
             self._broadcast(conv_id, "delta", {"text": delta["text"]})
 
     def _on_chat_message(self, conv_id: str, live: Live, msg: dict) -> None:
         if self._agent(conv_id) == "grok":
-            msg = self._grok_log(conv_id).message(msg)  # grok keeps no transcript the app can read
+            msg = self._app_log(conv_id).message(msg)  # grok keeps no transcript the app can read
         if msg["type"] == "assistant":
             self._mark_busy(conv_id)
             # A subagent's messages come through the stream too, tagged with the Agent call that spawned them;
@@ -887,7 +1215,22 @@ class ChatService:
                 live.interrupted = True
             self._broadcast(conv_id, "item", item)
             if item["kind"] == "tool":
+                if not msg.get("parent_tool_use_id"):
+                    self._confirm_input(conv_id)
                 self._on_tool(conv_id, item)
+
+    def _apply_native_marker(self, conv_id: str, native_session: str) -> Conversation:
+        """A durable AppLog marker owns the active native session even if its index cannot save."""
+        conv = self._index.get(conv_id)
+        field = {"codex": "codex_thread", "grok": "grok_session", "opencode": "opencode_session"}[conv.agent]
+        if getattr(conv, field) == native_session:
+            return conv
+        changes = {field: native_session}
+        try:
+            return self._index.update(conv_id, **changes)
+        except OSError as error:
+            self._pause_inputs(conv_id, error=error)
+            return replace(conv, **changes)
 
     def _on_system(self, conv_id: str, live: Live, msg: dict) -> None:
         if msg.get("subtype") == "status":
@@ -896,6 +1239,8 @@ class ChatService:
             elif live.state == "compacting":  # a stray status outside a turn must not wedge "running"
                 self._set_state(conv_id, "running")
         elif msg.get("subtype") == "compact_boundary":
+            if msg.get("native_session"):
+                self._apply_native_marker(conv_id, msg["native_session"])
             live.context_tokens = None
             self._broadcast(conv_id, "item", compact_item(msg["uuid"], msg.get("compact_metadata") or msg.get("compactMetadata") or {}))
             self._broadcast(conv_id, "context", self._context(conv_id))
@@ -906,6 +1251,12 @@ class ChatService:
     def _on_result(self, conv_id: str, live: Live, msg: dict) -> None:
         conv = self._index.get(conv_id)
         failure = _result_failure(msg, conv.agent)
+        if not failure and not live.interrupted:
+            self._confirm_input(conv_id)
+        if failure or live.interrupted:
+            self._pause_inputs(conv_id)
+        elif conv.kind != "discover":
+            self._next_input(conv_id)
         if failure is not None and not live.interrupted:
             self._notice(conv_id, failure)
         if conv.agent == "grok":
@@ -927,7 +1278,9 @@ class ChatService:
         self._broadcast(conv_id, "context", self._context(conv_id))
         if "cost_usd" in changes:
             self._broadcast(conv_id, "conv", self._summary(conv))
-        if live.title_from is not None:
+        if failure is None and not live.interrupted:
+            live.first_completed = True
+        if conv.kind != "discover" and live.title_from is not None:
             self._spawn_task(self._request_title(conv_id, live))
 
     @staticmethod
@@ -939,14 +1292,80 @@ class ChatService:
         return {"context_window": window} if window else {}
 
     async def _request_title(self, conv_id: str, live: Live) -> None:
-        text, live.title_from = live.title_from, None
-        if live.proc is None:
+        if self._closing:
             return
-        live.title_request = f"title-{uuid.uuid4().hex[:8]}"  # set before writing: the answer may be quick
+        text = live.title_from
+        if (text is None or not live.first_completed or live.state in BUSY
+                or self._queue.next(conv_id) is not None or self._closing):
+            return
+        live.title_from = None
+        live.title_request = f"title-{uuid.uuid4().hex[:8]}"
+        request_id = live.title_request
+        conv = self._conv(conv_id)
+        temporary = None
         try:
-            await live.proc.generate_title(live.title_request, text)
-        except OSError as e:  # the process died: the first-message title stays
-            log.info("chat %s: title request not sent: %s", conv_id, e)
+            if conv.agent == "claude":
+                if live.proc is not None:
+                    await live.proc.generate_title(request_id, text)
+                return
+            if live.native_title:
+                self._apply_title(conv_id, live, live.native_title)
+                return
+            if conv.kind == "discover":
+                temporary = self._discover_control(conv)
+                await temporary.start()
+                title = await temporary.generate_title(text)
+            elif live.proc is not None:
+                title = await live.proc.generate_title(text)
+            else:
+                return
+            if live.title_request == request_id and title:
+                self._apply_title(conv_id, live, title)
+        except (OSError, CodexSetupError, GrokSetupError, OpencodeSetupError) as error:
+            log.info("chat %s: title generation failed: %s", conv_id, error)
+        finally:
+            if temporary is not None:
+                await temporary.close()
+
+    def _apply_title(self, conv_id: str, live: Live, title: str) -> None:
+        if not title.strip() or (live.title_from is None and live.title_request is None):
+            return
+        live.title_from = live.title_request = None
+        conv = self._index.update(conv_id, title=make_title(title))
+        self._broadcast(conv_id, "conv", self._summary(conv))
+
+    def _discover_control(self, conv: Conversation) -> GrokLink:
+        cfg = self._require_grok()
+        link = GrokLink(cfg, conv, self._grok_env, self._app_log(conv.id),
+                        self._link_events(conv.id, lambda: link), cfg.workdir)
+        return link
+
+    async def _finish_discover_control(self, conv_id: str, link: GrokLink) -> None:
+        live = self._live.get(conv_id)
+        if live is None:
+            return
+        async with live.lock:
+            if live.proc is link and live.state == "idle":
+                await self._stop(conv_id)
+        self._next_input(conv_id)
+        if self._queue.next(conv_id) is None and not self._closing:
+            self._spawn_task(self._request_title(conv_id, live))
+
+    async def _spawn_discover_control(self, conv: Conversation, live: Live) -> None:
+        generation = live.generation
+        self._checkpoint(conv.id, live, generation)
+        if live.proc is not None and live.proc.alive:
+            await self._stop(conv.id)
+        self._checkpoint(conv.id, live, generation)
+        link = self._discover_control(conv)
+        try:
+            await self._start_owned(conv.id, live, generation, link, link.start)
+        except (GrokSetupError, OSError) as error:
+            await link.close()
+            raise Conflict(f"无法恢复 Grok 对话：{error}") from error
+        live.proc = link
+        live.result_seen = False
+        self._set_state(conv.id, "idle")
 
     def _on_control_response(self, conv_id: str, live: Live, response: dict) -> None:
         if live.title_request is None or response.get("request_id") != live.title_request:
@@ -1115,10 +1534,10 @@ class ChatService:
             raise Invalid("Codex 未配置")
         return self._codex
 
-    def _grok_log(self, conv_id: str) -> AppLog:
-        if conv_id not in self._grok_logs:
-            self._grok_logs[conv_id] = AppLog(self._transcript(conv_id))
-        return self._grok_logs[conv_id]
+    def _app_log(self, conv_id: str) -> AppLog:
+        if conv_id not in self._app_logs:
+            self._app_logs[conv_id] = AppLog(self._transcript(conv_id))
+        return self._app_logs[conv_id]
 
     def _broadcast_entry(self, conv_id: str, entry: dict) -> None:
         for item in message_items(entry):
@@ -1139,12 +1558,25 @@ class ChatService:
 
     def _check_not_archived(self, conv_id: str, live: Live) -> None:
         """Under the chat's lock: an archive that ran while we waited for it has dropped `live`."""
+        self._check_open()
         conv = self._index.get(conv_id)
-        if self._live.get(conv_id) is not live or conv is None or conv.archived:
+        if live.archiving or self._live.get(conv_id) is not live or conv is None or conv.archived:
             raise NotFound(conv_id)
 
-    def _conv(self, conv_id: str) -> Conversation:
+    def _check_open(self) -> None:
+        if self._closing:
+            raise Conflict("对话服务已关闭，请重新连接后发送")
+
+    def _conv(self, conv_id: str, *, repair: bool = True) -> Conversation:
         conv = self._index.get(conv_id)
         if conv is None or not self._visible(conv):
             raise NotFound(conv_id)
+        if repair and conv.agent != "claude":
+            self._reconcile_inputs(conv_id)
+            path = self._transcript(conv_id)
+            entries = transcript.read_entries(path) if path.exists() else []
+            branch = transcript.current_branch(entries)
+            marker = next((entry for entry in reversed(branch) if entry.get("native_session")), None)
+            if marker is not None:
+                conv = self._apply_native_marker(conv_id, marker["native_session"])
         return conv

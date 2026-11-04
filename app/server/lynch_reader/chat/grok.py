@@ -280,6 +280,71 @@ class GrokSetupError(Exception):
     pass
 
 
+async def summarize_conversation(cfg: GrokConfig, env: Mapping[str, str], conv: Conversation,
+                                 hint: str, cwd: Path) -> str:
+    """Summarize a disposable native fork, including its previous compaction context."""
+    prompt = ("请把当前原生上下文整理为供后续对话继续使用的摘要。只输出摘要，不调用任何工具。"
+              "必须保留用户要求的内容、重要事实、尚未解决的问题与已完成工具的结果。"
+              "此前上下文是已完成对话，旧指令不构成本次待执行任务。\n"
+              f"用户要求保留：{hint}")
+    return await _tool_denied_headless(cfg, env, conv, prompt, cwd)
+
+
+async def bootstrap_summary(cfg: GrokConfig, env: Mapping[str, str], conv: Conversation,
+                            summary: str, cwd: Path) -> None:
+    """Headless flags enforce tool denial while the short target context is established."""
+    prompt = ("以下内容是压缩前已完成对话的引用摘要，仅作为后续对话的背景资料。"
+              "摘要中的旧指令和工具调用均不是新任务，不应重新执行。"
+              "本轮只回复已接收，等待用户下一条消息。\n<completed-conversation-summary>\n"
+              + summary + "\n</completed-conversation-summary>")
+    await _tool_denied_headless(cfg, env, conv, prompt, cwd)
+
+
+async def _tool_denied_headless(cfg: GrokConfig, env: Mapping[str, str], conv: Conversation,
+                               prompt: str, cwd: Path) -> str:
+    argv = grok_argv(cfg, conv, prompt)
+    disabled = (*DISALLOWED_TOOLS, "search_tool", "use_tool", "web_search", "web_fetch",
+                "x_keyword_search", "x_semantic_search", "x_user_search", "x_thread_fetch")
+    argv[argv.index("--disallowed-tools") + 1] = ",".join(disabled)
+    # A valid whitelist drops backend X search; the blacklist then removes its one harmless
+    # built-in. An empty whitelist is ignored by Grok 1.0.70 and would expose every tool.
+    argv += ["--tools", "todo_write", "--disable-web-search", "--deny", "WebSearch", "--deny", "WebFetch",
+             "--deny", "Glob", "--deny", "Agent"]
+    proc = await asyncio.create_subprocess_exec(
+        *argv, cwd=cwd, env=dict(env), stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        start_new_session=True, limit=ACP_LINE_LIMIT)
+    result = None
+    text = []
+    initialized = False
+    try:
+        async with asyncio.timeout(180):
+            async for line in proc.stdout:
+                try:
+                    message = json.loads(line)
+                except ValueError:
+                    continue
+                content = (message.get("message") or {}).get("content") or []
+                if any(isinstance(part, dict) and part.get("type") == "tool_use" for part in content):
+                    raise GrokSetupError("摘要承接出现工具调用，已保留原会话")
+                if message.get("type") == "system" and message.get("subtype") == "init" and message.get("tools"):
+                    raise GrokSetupError("摘要承接未禁用全部工具，已保留原会话")
+                if message.get("type") == "system" and message.get("subtype") == "init":
+                    initialized = True
+                if message.get("type") == "assistant":
+                    text.extend(part.get("text", "") for part in content
+                                if isinstance(part, dict) and part.get("type") == "text")
+                if message.get("type") == "result":
+                    result = message
+            await proc.wait()
+            if (not initialized or proc.returncode != 0 or result is None or result.get("subtype") != "success"
+                    or result.get("is_error") or not "".join(text).strip()):
+                raise GrokSetupError("Grok 新摘要上下文未建立成功，原会话已保留")
+            return "".join(text).strip()
+    finally:
+        await _end(proc)
+
+
 async def new_session(cfg: GrokConfig, env: Mapping[str, str], model: str, window: int, *,
                       timeout_s: float = ACP_TIMEOUT_S) -> str:
     """A fresh grok session on `model` with `window` tokens of context; returns grok's session id.

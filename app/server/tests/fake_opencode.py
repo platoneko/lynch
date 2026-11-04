@@ -23,6 +23,10 @@ Sessions live in $FAKE_OPENCODE_SESSIONS/<id>.json ({model, mode}); every launch
 to $FAKE_OPENCODE_LOG.
 """
 import json
+import base64
+import http.server
+import time
+import urllib.parse
 import os
 import queue
 import sys
@@ -100,6 +104,11 @@ def tool_end(sid, call_id, status, **raw_output):
 
 
 def say(sid, *chunks):
+    native_message(sid, "assistant", "".join(chunks))
+    with state_lock:
+        data = native_load(sid)
+        data["title"] = "原生自动标题"
+        native_save(sid, data)
     mid = f"msg_{uuid.uuid4().hex[:6]}"
     update(sid, sessionUpdate="agent_thought_chunk", messageId=mid, content={"type": "text", "text": "hmm"})
     for c in chunks:
@@ -159,7 +168,185 @@ def turn(rid, sid, text, cwd):
     reply(rid, {"stopReason": stop, "usage": {"totalTokens": used}})
 
 
+state_lock = threading.RLock()
+native_events = []
+
+
+def native_load(sid):
+    with open(session_path(sid)) as file:
+        return json.load(file)
+
+
+def native_save(sid, data):
+    with open(session_path(sid), "w") as file:
+        json.dump(data, file)
+
+
+def native_message(sid, role, text, **fields):
+    with state_lock:
+        data = native_load(sid)
+        mid = "msg_" + uuid.uuid4().hex
+        message = {
+            "info": {"id": mid, "sessionID": sid, "role": role, **fields},
+            "parts": [{"type": "text", "text": text}],
+        }
+        data.setdefault("messages", []).append(message)
+        native_save(sid, data)
+        return mid
+
+
+class NativeHttp(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *args):
+        pass
+
+    def do_GET(self):
+        self.handle_native("GET")
+
+    def do_POST(self):
+        self.handle_native("POST")
+
+    def handle_native(self, method):
+        wanted = (
+            "Basic "
+            + base64.b64encode(
+                ("opencode:" + os.environ["OPENCODE_SERVER_PASSWORD"]).encode()
+            ).decode()
+        )
+        if self.headers.get("Authorization") != wanted:
+            self.send_response(401)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        path = urllib.parse.urlparse(self.path).path
+        if path == "/event":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            index = len(native_events)
+            try:
+                self.wfile.write(
+                    b'data: {"type":"server.connected","properties":{}}\n\n'
+                )
+                self.wfile.flush()
+                while True:
+                    for event in native_events[index:]:
+                        self.wfile.write(
+                            ("data: " + json.dumps(event) + "\n\n").encode()
+                        )
+                        index += 1
+                    self.wfile.write(b": heartbeat\n\n")
+                    self.wfile.flush()
+                    time.sleep(0.1)
+            except (BrokenPipeError, ConnectionResetError):
+                return
+        parts = path.strip("/").split("/")
+        if len(parts) < 2 or parts[0] != "session":
+            self.send_json(404, {})
+            return
+        sid = parts[1]
+        with state_lock:
+            try:
+                data = native_load(sid)
+            except OSError:
+                self.send_json(404, {})
+                return
+            if method == "GET":
+                self.send_json(
+                    200,
+                    data.get("messages", [])
+                    if parts[-1] == "message"
+                    else {"id": sid, "title": data.get("title", "New session")},
+                )
+                return
+            body = json.loads(
+                self.rfile.read(int(self.headers.get("Content-Length", 0))) or "{}"
+            )
+            if parts[-1] == "fork":
+                if os.environ.get("FAKE_OPENCODE_FORK_FAIL"):
+                    self.send_json(500, {})
+                    return
+                messages = data.get("messages", [])
+                boundary = next(
+                    (
+                        i
+                        for i, m in enumerate(messages)
+                        if m["info"]["id"] == body.get("messageID")
+                    ),
+                    len(messages),
+                )
+                new = "ses_" + uuid.uuid4().hex[:12]
+                copied = json.loads(json.dumps(data))
+                copied["messages"] = messages[:boundary]
+                for msg in copied["messages"]:
+                    msg["info"] = {
+                        **msg["info"],
+                        "id": "msg_" + uuid.uuid4().hex,
+                        "sessionID": new,
+                    }
+                native_save(new, copied)
+                self.send_json(200, {"id": new})
+                return
+            if parts[-1] == "summarize":
+                record({"http": path})
+                if os.environ.get("FAKE_OPENCODE_COMPACT_SLOW"):
+                    cancelled.wait(2)
+                    if cancelled.is_set():
+                        self.send_json(200, False)
+                        return
+                config = json.loads(os.environ.get("OPENCODE_CONFIG_CONTENT") or "{}")
+                data["compaction_prompt"] = (
+                    config.get("agent", {}).get("compaction", {}).get("prompt", "")
+                )
+                native_save(sid, data)
+                parent = native_message(sid, "user", "")
+                data = native_load(sid)
+                data["messages"][-1]["parts"] = [
+                    {
+                        "type": "compaction",
+                        "auto": False,
+                        "messageID": parent,
+                        "sessionID": sid,
+                    }
+                ]
+                native_save(sid, data)
+                native_events.append(
+                    {
+                        "type": "message.part.updated",
+                        "properties": {"part": data["messages"][-1]["parts"][0]},
+                    }
+                )
+                native_message(
+                    sid,
+                    "assistant",
+                    "Native summary",
+                    summary=True,
+                    parentID=parent,
+                    agent="compaction",
+                    time={"completed": 1},
+                )
+                native_events.append(
+                    {"type": "session.compacted", "properties": {"sessionID": sid}}
+                )
+                self.send_json(200, True)
+                return
+            self.send_json(404, {})
+
+    def send_json(self, status, payload):
+        raw = json.dumps(payload).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+
 def main():
+    if "--port" in sys.argv:
+        port=int(sys.argv[sys.argv.index("--port")+1])
+        server=http.server.ThreadingHTTPServer(("127.0.0.1",port),NativeHttp)
+        threading.Thread(target=server.serve_forever,daemon=True).start()
     record({"argv": sys.argv[1:], "env": sorted(os.environ), "cwd": os.getcwd(),
             "config": json.loads(os.environ.get("OPENCODE_CONFIG_CONTENT") or "null")})
     for line in sys.stdin:
@@ -206,6 +393,7 @@ def main():
             cancelled.set()
         elif method == "session/prompt":
             text = params["prompt"][0]["text"]
+            native_message(params["sessionId"], "user", text)
             threading.Thread(target=turn, args=(rid, params["sessionId"], text, os.getcwd()), daemon=True).start()
         elif rid is not None:
             reply(rid, error={"code": -32601, "message": f"unknown method {method}"})
