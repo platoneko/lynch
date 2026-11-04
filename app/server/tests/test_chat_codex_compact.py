@@ -33,6 +33,10 @@ def test_native_compaction_persists_once_and_resumes_the_original_thread(tmp_pat
                                         "trigger": "manual", "pre_tokens": 1234, "post_tokens": None}
             assert history.context_tokens is None
             assert not history.unfinished
+            if mode == "stale":
+                # The denial is sent asynchronously; observe it before tearing down its peer.
+                await until(lambda: any(json.loads(line).get("id") == "stale-approval"
+                                        for line in (tmp_path / "rpc.jsonl").read_text().splitlines()))
         finally:
             await link.close()
         again = open_link(cfg, env, LinkRecorder(), thread)
@@ -106,13 +110,15 @@ def test_compacting_rejects_new_sends_and_can_be_stopped(tmp_path):
             await svc.send(chat.id, "/compact")
             await until(lambda: svc._live[chat.id].proc._turn is not None)
             assert state_of(svc, chat.id) == "compacting"
-            for message in ("next", "/compact"):
-                with pytest.raises(Conflict):
-                    await svc.send(chat.id, message)
+            await svc.send(chat.id, "next")
+            with pytest.raises(Conflict):
+                await svc.send(chat.id, "/compact")
             await svc.interrupt(chat.id)
             await idle(svc, chat.id)
             assert texts(svc, chat.id)[-1] == ("notice", "已停止")
             assert not any(kind == "compact" for kind, _ in texts(svc, chat.id))
+            for row in svc.snapshot(chat.id)["queued"]:
+                svc.dismiss_queued(chat.id, row["id"])
             await svc.send(chat.id, "next")
             await idle(svc, chat.id)
             assert texts(svc, chat.id)[-1] == ("text", "echo: next")
@@ -141,6 +147,8 @@ def test_compaction_failure_is_visible_without_recording_success_or_blocking_nex
                 assert "compaction crashed" in notice["text"]
             else:
                 assert "compaction" in str(texts(svc, chat.id)[-1])
+            for row in svc.snapshot(chat.id)["queued"]:
+                svc.dismiss_queued(chat.id, row["id"])
             await svc.send(chat.id, "next")
             await idle(svc, chat.id)
             assert texts(svc, chat.id)[-1] == ("text", "echo: next")
@@ -192,9 +200,9 @@ def test_codex_does_not_silently_drop_custom_compaction_instructions(tmp_path):
         chat = await start(svc)
         try:
             await idle(svc, chat.id)
-            with pytest.raises(Invalid, match="附加说明"):
-                await svc.send(chat.id, "/compact 保留估值")
-            assert state_of(svc, chat.id) == "idle"
+            await svc.send(chat.id, "/compact 保留估值")
+            await idle(svc, chat.id)
+            assert texts(svc, chat.id)[-1] == ("compact", None)
         finally:
             await svc.shutdown()
     asyncio.run(main())

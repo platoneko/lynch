@@ -41,7 +41,8 @@ def test_opencode_create_streams_a_reply_and_lists_labels(tmp_path):
     assert row["cost_usd"] == 0.01
     assert conv.title == "hello"  # no auto title: the first message stays
     launch = opencode_log(tmp_path)[0]
-    assert launch["argv"] == ["acp"] and launch["cwd"] == str(tmp_path)
+    assert launch["argv"][:3] == ["acp", "--hostname", "127.0.0.1"] and "--port" in launch["argv"]
+    assert launch["cwd"] == str(tmp_path)
     assert launch["config"]["agent"]["orchestrator"]["permission"]["edit"]
 
 
@@ -102,24 +103,23 @@ def test_opencode_stop_clears_pending_approval(tmp_path):
     assert tool["name"] == "Edit" and tool["is_error"] is True
 
 
-def test_opencode_lost_session_starts_over_with_a_notice(tmp_path):
+def test_opencode_lost_session_preserves_old_identity_and_reports_failure(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)
         conv = await start(svc, "one")
         await idle(svc, conv.id)
         sid = svc.list()["chats"][0]["opencode_session"]
         await svc.shutdown()
-        (tmp_path / "oc-sessions" / f"{sid}.json").unlink()  # opencode's storage lost it
-        svc2, _ = make_service(tmp_path)
-        q = svc2.subscribe(conv.id)
-        await svc2.send(conv.id, "two")
-        notice = await next_event(q, "item", lambda d: d["kind"] == "notice")
-        await idle(svc2, conv.id)
-        new_sid = svc2.list()["chats"][0]["opencode_session"]
-        await svc2.shutdown()
-        return sid, new_sid, notice
-    sid, new_sid, notice = asyncio.run(main())
-    assert new_sid != sid and "之前的内容" in notice["text"]
+        (tmp_path / "oc-sessions" / f"{sid}.json").unlink()
+        again, _ = make_service(tmp_path)
+        try:
+            with pytest.raises(Conflict, match="session not found"):
+                await again.send(conv.id, "two")
+            assert again.snapshot(conv.id)["conv"]["opencode_session"] == sid
+            assert again.snapshot(conv.id)["conv"]["state"] == "dormant"
+        finally:
+            await again.shutdown()
+    asyncio.run(main())
 
 
 def test_opencode_setup_crash_is_a_conflict_with_the_reason(tmp_path):
@@ -211,18 +211,21 @@ def test_opencode_skill_edit_allow_and_deny(tmp_path, allow, reply):
     assert snap["items"][-1]["text"] == reply  # opencode ends the turn on a refusal
 
 
-def test_opencode_rejects_edit_compact_and_a_second_message_mid_turn(tmp_path):
+def test_opencode_queues_second_message_and_allows_native_compaction(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)
         conv = await start(svc, "slow")
         await until(lambda: state_of(svc, conv.id) == "running")
-        with pytest.raises(Conflict, match="回答进行中"):
-            await svc.send(conv.id, "more")
+        await svc.send(conv.id, "more")
+        assert any(row["text"] == "more" for row in svc.snapshot(conv.id)["queued"])
         await svc.interrupt(conv.id)
         await idle(svc, conv.id)
-        with pytest.raises(Invalid, match="opencode 对话不支持压缩上下文"):
-            await svc.send(conv.id, "/compact")
-        with pytest.raises(Invalid, match="opencode 对话不支持编辑消息"):
+        for row in svc.snapshot(conv.id)["queued"]:
+            svc.dismiss_queued(conv.id, row["id"])
+        await svc.send(conv.id, "/compact 保留研究结论")
+        await idle(svc, conv.id)
+        assert svc.snapshot(conv.id)["items"][-1]["kind"] == "compact"
+        with pytest.raises(Invalid):
             await svc.edit(conv.id, "x", "y")
         await svc.shutdown()
     asyncio.run(main())

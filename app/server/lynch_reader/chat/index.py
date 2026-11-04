@@ -87,6 +87,10 @@ class ChatIndex:
     def get(self, conv_id: str) -> Conversation | None:
         return self._rows.get(conv_id)
 
+    @property
+    def path(self) -> Path:
+        return self._path
+
     def all(self) -> list[Conversation]:
         return list(self._rows.values())
 

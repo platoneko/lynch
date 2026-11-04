@@ -15,6 +15,7 @@ log.parent.mkdir(parents=True, exist_ok=True)
 thread = None
 turn = None
 previous_turn = None
+turn_ids = {}
 pending = None
 initialized = False
 
@@ -59,6 +60,14 @@ for line in sys.stdin:
             missing = os.environ.get("FAKE_CODEX_ACCOUNT") in ("missing", "external")
             reply(request, {"account": None if missing else {"type": "chatgpt"},
                             "requiresOpenaiAuth": os.environ.get("FAKE_CODEX_ACCOUNT") != "external"})
+        elif method == 'account/rateLimits/read':
+            mode = os.environ.get('FAKE_CODEX_LIMITS', 'unsupported')
+            if mode == 'hang':
+                continue
+            if mode == 'unsupported':
+                emit({'id': request['id'], 'error': {'code': -32601, 'message': 'Quota not supported by provider'}})
+            else:
+                reply(request, json.loads(mode))
         elif method == "model/list":
             other = params.get("cursor") == "page2"
             reply(request, {"data": [{"id": "gpt-other" if other else "gpt-test",
@@ -75,6 +84,26 @@ for line in sys.stdin:
                 if not path.exists():
                     path.write_text("[]")
                 reply(request, {"thread": {"id": thread}})
+        elif method == 'thread/unsubscribe':
+            reply(request, {'status': 'unsubscribed'})
+        elif method == "thread/read":
+            texts = json.loads((sessions / f"{params['threadId']}.json").read_text())
+            reply(request, {"thread": {"id": params['threadId'], "historyMode": "legacy", "turns": [
+                {"id": tid, "items": [{"type": "userMessage", "content": [{"type": "text", "text": text}]}]}
+                for tid, text in zip(turn_ids.get(params['threadId'], []), texts)]}})
+        elif method == "thread/fork":
+            if os.environ.get('FAKE_CODEX_FORK_FAIL'):
+                emit({'id': request['id'], 'error': {'code': -1, 'message': 'fork failed'}})
+                continue
+            source = params['threadId']
+            at = turn_ids[source].index(params['beforeTurnId'])
+            thread = f'thr_{uuid.uuid4().hex}'
+            texts = json.loads((sessions / f'{source}.json').read_text())[:at]
+            (sessions / f'{thread}.json').write_text(json.dumps(texts))
+            turn_ids[thread] = turn_ids[source][:at]
+            reply(request, {'thread': {'id': thread}})
+        elif method == 'thread/sample':
+            reply(request, {'text': '原生短标题', 'sourceTurnId': params['expectedTurnId'], 'responseId': 'sample'})
         elif method == "turn/start":
             previous_turn = turn
             turn = f"turn_{uuid.uuid4().hex}"
@@ -82,6 +111,7 @@ for line in sys.stdin:
             path = sessions / f"{thread}.json"
             history = json.loads(path.read_text())
             history.append(text)
+            turn_ids.setdefault(thread, []).append(turn)
             path.write_text(json.dumps(history))
             if text == "hang-turn":
                 continue

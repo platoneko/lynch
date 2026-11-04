@@ -126,7 +126,7 @@ def test_start_failure_leaves_a_notice_and_dormant(tmp_path):
         svc, _ = make_service(tmp_path)
         conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium", agent="claude")
         await until(lambda: state_of(svc, conv.id) == "idle")
-        await svc.shutdown()
+        await svc._stop(conv.id)  # an idle process is reaped; the service remains available
         q = svc.subscribe(conv.id)
         svc._env["FAKE_CLAUDE_FAIL_START"] = "1"
         refused = None
@@ -141,7 +141,9 @@ def test_start_failure_leaves_a_notice_and_dormant(tmp_path):
             event, data = q.get_nowait()
             if event == "item" and data["kind"] == "notice":
                 notices.append(data["text"])
-        return refused, notices, state_of(svc, conv.id)
+        state = state_of(svc, conv.id)
+        await svc.shutdown()
+        return refused, notices, state
     refused, notices, state = asyncio.run(main())
     assert state == "dormant"
     assert any("cannot resume session" in n for n in notices)
@@ -153,7 +155,7 @@ def test_concurrent_sends_to_a_dormant_chat_share_one_process(tmp_path):
         svc, log = make_service(tmp_path)
         conv = await svc.create("ticker", "AAA.US", "one", "claude-opus-5-5", "medium", agent="claude")
         await until(lambda: state_of(svc, conv.id) == "idle")
-        await svc.shutdown()
+        await svc._stop(conv.id)  # wake the same chat after process eviction
         await asyncio.gather(svc.send(conv.id, "two"), svc.send(conv.id, "three"))
         await until(lambda: ("text", "echo: three") in texts(svc.snapshot(conv.id)))
         await svc.shutdown()

@@ -64,6 +64,19 @@ export interface ContextUsage {
   window: number | null;
 }
 
+export interface ServerQueued {
+  id: string;
+  text: string;
+  status: 'behind' | 'waiting' | 'unanswered' | 'uncertain';
+}
+
+export interface ProviderLimits {
+  rateLimits?: {
+    primary?: { usedPercent: number; windowDurationMins?: number | null } | null;
+    secondary?: { usedPercent: number; windowDurationMins?: number | null } | null;
+  } | null;
+}
+
 export interface ToolItem {
   kind: 'tool';
   key: string;
@@ -76,7 +89,7 @@ export interface ToolItem {
 }
 
 export type ChatItem =
-  | { kind: 'user'; key: string; uuid: string; text: string }
+  | { kind: 'user'; key: string; uuid: string; text: string; client_id?: string }
   | { kind: 'text'; key: string; text: string; candidates?: Candidate[]; candidates_dropped?: number; watch?: WatchCard }
   | ToolItem
   | { kind: 'compact'; key: string; trigger: string | null; pre_tokens: number | null; post_tokens: number | null }
@@ -107,6 +120,8 @@ export interface Snapshot {
   usage: Usage | null;
   context: ContextUsage;
   approvals: Approval[];
+  queued?: ServerQueued[] | null;
+  limits?: ProviderLimits | null;
 }
 
 export type ChatEvent =
@@ -119,7 +134,9 @@ export type ChatEvent =
   | { type: 'context'; context: ContextUsage }
   | { type: 'conv'; conv: ChatSummary }
   | { type: 'approval'; approval: Approval }
-  | { type: 'approval_done'; request_id: string };
+  | { type: 'approval_done'; request_id: string }
+  | { type: 'queued'; queued: ServerQueued[] }
+  | { type: 'limits'; limits: ProviderLimits };
 
 /** A Grok model that can search X (server chat/grok.py `GrokModel.public`). */
 export interface DiscoverModel {

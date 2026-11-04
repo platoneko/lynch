@@ -113,7 +113,7 @@ def chat_routes(service: ChatService, frameworks_dir: Path) -> list[Route]:
             window = window or DEFAULT_WINDOW
         conv = await service.create(kind, ticker, str(body.get("text", "")), body.get("model") or model,
                                     body.get("effort") or effort, window, body.get("lookback_days"),
-                                    agent)
+                                    agent, client_id=body.get("client_id"))
         return JSONResponse({"id": conv.id})
 
     async def archive_ticker(request: Request) -> Response:
@@ -130,7 +130,12 @@ def chat_routes(service: ChatService, frameworks_dir: Path) -> list[Route]:
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     async def message(request: Request) -> Response:
-        await service.send(request.path_params["id"], str((await _body(request)).get("text", "")))
+        body = await _body(request)
+        await service.send(request.path_params["id"], str(body.get("text", "")), body.get("client_id"))
+        return Response(status_code=204)
+
+    async def dismiss_queued(request: Request) -> Response:
+        service.dismiss_queued(request.path_params["id"], request.path_params["message_id"])
         return Response(status_code=204)
 
     async def interrupt(request: Request) -> Response:
@@ -139,7 +144,8 @@ def chat_routes(service: ChatService, frameworks_dir: Path) -> list[Route]:
 
     async def edit(request: Request) -> Response:
         body = await _body(request)
-        await service.edit(request.path_params["id"], str(body.get("message_uuid", "")), str(body.get("text", "")))
+        await service.edit(request.path_params["id"], str(body.get("message_uuid", "")), str(body.get("text", "")),
+                           client_id=body.get("client_id"))
         return Response(status_code=204)
 
     async def archive(request: Request) -> Response:
@@ -193,6 +199,7 @@ def chat_routes(service: ChatService, frameworks_dir: Path) -> list[Route]:
         Route("/api/chats/archive", _guarded(archive_ticker), methods=["POST"]),
         Route("/api/chats/{id}/events", _guarded(events), methods=["GET"]),
         Route("/api/chats/{id}/messages", _guarded(message), methods=["POST"]),
+        Route("/api/chats/{id}/queue/{message_id}/dismiss", _guarded(dismiss_queued), methods=["POST"]),
         Route("/api/chats/{id}/interrupt", _guarded(interrupt), methods=["POST"]),
         Route("/api/chats/{id}/edit", _guarded(edit), methods=["POST"]),
         Route("/api/chats/{id}/archive", _guarded(archive), methods=["POST"]),

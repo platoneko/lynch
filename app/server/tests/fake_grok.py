@@ -22,6 +22,7 @@ Sessions live in $FAKE_GROK_SESSIONS/<id>.json ({model, window}); a turn on an u
 Every launch is appended to $FAKE_GROK_LOG: argv, env names, and the GROK_* values.
 """
 import json
+import copy
 import os
 import queue
 import sys
@@ -124,6 +125,14 @@ def acp_say(sid, *chunks):
 
 def acp_turn(rid, sid, text, cwd):
     cancelled.clear()
+    with open(session_path(sid)) as f:
+        session = json.load(f)
+    session.setdefault("prompts", []).append(text)
+    index = len(session["prompts"]) - 1
+    with open(session_path(sid), "w") as f:
+        json.dump(session, f)
+    acp_update(sid, sessionUpdate="user_message_chunk", content={"type": "text", "text": text},
+               _meta={"promptIndex": index})
     call_id = f"call_{uuid.uuid4().hex[:8]}"
     stop = "end_turn"
     if text == "crash":
@@ -194,7 +203,7 @@ def acp():
             acp_emit({"jsonrpc": "2.0", "id": rid, "error": {"code": -32602, "message": "Invalid params"}})
             continue
         params = msg.get("params") or {}
-        acp_record({"method": method, "params": {k: v for k, v in params.items() if k != "prompt"}})
+        acp_record({"method": method, "params": params})
         if method == "initialize":
             acp_reply(rid, {"protocolVersion": 1, "agentCapabilities": {
                 "loadSession": True, "sessionCapabilities": {"resume": {}, "close": {}}}})
@@ -206,7 +215,7 @@ def acp():
             acp_reply(rid, {"sessionId": sid, "configOptions": [
                 {"id": "model", "currentValue": "grok-4.5"},
                 {"id": "reasoning_effort", "currentValue": "high"}]})
-        elif method == "session/resume":
+        elif method in ("session/resume", "session/load"):
             sid = params.get("sessionId")
             try:
                 with open(session_path(sid)) as f:
@@ -215,6 +224,11 @@ def acp():
                 acp_reply(rid, error={"code": -32603, "message": "Path not found.",
                                       "data": {"code": "FS_NOT_FOUND"}})
                 continue
+            if method == "session/load":
+                for index, text in enumerate(session.get("prompts", [])):
+                    acp_emit({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid,
+                        "_meta": {"isReplay": True}, "update": {"sessionUpdate": "user_message_chunk",
+                        "content": {"type": "text", "text": text}, "_meta": {"promptIndex": index}}}})
             acp_reply(rid, {"configOptions": [
                 {"id": "model", "currentValue": session.get("model") or "grok-4.6"},
                 {"id": "reasoning_effort", "currentValue": "high"}]})
@@ -235,6 +249,37 @@ def acp():
             acp_reply(rid, {"_meta": {"model": {"Ok": params["modelId"]}}})
         elif method == "session/close":
             acp_reply(rid, {})
+        elif method == "_x.ai/rewind/points":
+            with open(session_path(params["sessionId"])) as f:
+                session = json.load(f)
+            acp_reply(rid, {"rewind_points": [{"prompt_index": i, "prompt_preview": t[:60]}
+                        for i, t in enumerate(session.get("prompts", []))]})
+        elif method == "_x.ai/session/fork":
+            if os.environ.get("FAKE_GROK_SOURCE_FORK_FAIL"):
+                acp_reply(rid, error={"code": -32603, "message": "fork failed"})
+                continue
+            with open(session_path(params["sourceSessionId"])) as f:
+                session = copy.deepcopy(json.load(f))
+            sid = str(uuid.uuid4())
+            with open(session_path(sid), "w") as f:
+                json.dump(session, f)
+            acp_reply(rid, {"newSessionId": sid})
+        elif method == "_x.ai/rewind/execute":
+            assert params["mode"] == "conversation_only" and params["force"] is True
+            path = session_path(params["sessionId"])
+            with open(path) as f:
+                session = json.load(f)
+            session["prompts"] = session.get("prompts", [])[:params["targetPromptIndex"]]
+            with open(path, "w") as f:
+                json.dump(session, f)
+            acp_reply(rid, {"success": True})
+        elif method == "_x.ai/compact_conversation":
+            acp_emit({"jsonrpc": "2.0", "method": "_x.ai/session_notification", "params": {
+                "sessionId": params["sessionId"], "update": {"sessionUpdate": "auto_compact_completed",
+                "tokens_before": 100, "tokens_after": 50}}})
+            acp_reply(rid, {})
+        elif method == "session/list":
+            acp_reply(rid, {"sessions": []})
         elif method == "session/cancel":
             cancelled.set()
         elif method == "session/prompt":
@@ -255,8 +300,11 @@ def turn():
     if not sid or not os.path.exists(session_path(sid)):
         sys.stderr.write(f"session not found: {sid}\n")
         sys.exit(1)
+    bootstrap = prompt.startswith("以下内容是压缩前")
+    summarize = prompt.startswith("请把当前原生上下文")
     emit({"type": "system", "subtype": "init", "session_id": sid,
-          "tools": ["search_tool", "use_tool", "web_search", "web_fetch"]})
+          "tools": [] if (bootstrap or summarize) and not (bootstrap and os.environ.get("FAKE_GROK_BOOTSTRAP_TOOLS")) and arg("--tools") == "todo_write" and
+          "todo_write" in (arg("--disallowed-tools") or "").split(",") else ["search_tool", "use_tool", "web_search", "web_fetch"]})
 
     def assistant(content, tokens=1000):
         usage = {"input_tokens": min(tokens, 1), "cache_read_input_tokens": max(tokens - 1, 0),
@@ -278,6 +326,23 @@ def turn():
     def result(subtype="success", **extra):
         emit({"type": "result", "subtype": subtype, "is_error": subtype != "success", "total_cost_usd": 0.01,
               "session_id": sid, "modelUsage": {"grok-4.6-build": {"costUSD": 0.01}}, **extra})
+
+    if bootstrap or summarize:
+        if bootstrap and os.environ.get("FAKE_GROK_BOOTSTRAP_TOOL_USE"):
+            assistant([{"type": "tool_use", "id": "unexpected", "name": "Read", "input": {"file_path": "bad"}}])
+            return
+        if ((bootstrap and os.environ.get("FAKE_GROK_BOOTSTRAP_FAIL"))
+                or (summarize and os.environ.get("FAKE_GROK_SUMMARY_FAIL"))):
+            result("error_during_execution", errors=["bootstrap failed"])
+            return
+        with open(session_path(sid)) as f:
+            session = json.load(f)
+        session.setdefault("prompts", []).append(prompt)
+        with open(session_path(sid), "w") as f:
+            json.dump(session, f)
+        reply("SUMMARY: 必须保留现金流假设" if summarize else "已接收")
+        result()
+        return
 
     if text == "crash":
         sys.stderr.write("boom\n")

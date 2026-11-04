@@ -54,3 +54,27 @@ def test_a_turn_with_no_reply_is_unfinished(tmp_path):
     path = tmp_path / "c1.jsonl"
     AppLog(path).user("one")
     assert replay(path).unfinished is True
+
+
+def test_refresh_reloads_committed_cursor_without_dropping_client_id(tmp_path):
+    path = tmp_path / "c1.jsonl"
+    log = AppLog(path)
+    log.client_id = "pending-input"
+    log.user("one")
+    committed = AppLog(path).compacted("manual", 100, agent="grok", native_session="new")
+    log.refresh()
+    following = log.user("two")
+    assert following["parentUuid"] == committed["uuid"]
+    assert following["client_id"] == "pending-input"
+
+
+def test_refresh_detects_torn_append_before_next_message(tmp_path):
+    path = tmp_path / "c1.jsonl"
+    log = AppLog(path)
+    first = log.user("one")
+    with path.open("a") as stream:
+        stream.write('{"type":"system","uuid":"partial"')
+    log.refresh()
+    following = log.user("two")
+    assert following["parentUuid"] == first["uuid"]
+    assert [entry["message"]["content"] for entry in transcript.current_branch(log.entries())] == ["one", "two"]

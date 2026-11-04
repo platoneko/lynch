@@ -153,15 +153,14 @@ def test_resume_reuses_the_session_without_replay(tmp_path):
     assert [r["params"]["sessionId"] for r in opencode_log(tmp_path) if r.get("method") == "session/resume"] == [sid]
 
 
-def test_a_lost_session_is_replaced_by_a_new_one(tmp_path):
-    # opencode's storage lost the session: the chat must stay usable, without its earlier context.
+def test_a_lost_session_preserves_original_identity_and_reports_failure(tmp_path):
     async def main():
         link, _ = make_link(tmp_path, c=oc_conv(opencode_session="ses_gone"))
-        sid = await link.start()
-        await link.close()
-        return sid, link.session_lost
-    sid, lost = asyncio.run(main())
-    assert sid.startswith("ses_") and sid != "ses_gone" and lost is True
+        with pytest.raises(OpencodeSetupError, match="session not found"):
+            await link.start()
+        assert not link.alive
+        assert not any(row.get("method") == "session/new" for row in opencode_log(tmp_path))
+    asyncio.run(main())
 
 
 def test_a_malformed_mcp_config_is_a_setup_error_and_leaves_no_process(tmp_path):

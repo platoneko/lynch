@@ -255,3 +255,31 @@ def test_watch_save_list_and_remove(repo, tmp_path, quotes):
         assert c.post("/api/watch/AAA.US/remove", json={}).status_code == 204
         assert c.post("/api/watch/AAA.US/remove", json={}).status_code == 400
         assert c.get("/api/watch").json()["items"] == []
+
+
+def test_create_and_edit_keep_browser_client_identity(repo,tmp_path,quotes):
+    c,service=client(repo,tmp_path,quotes)
+    with c:
+        conv_id=c.post("/api/chats",json={"kind":"research","text":"first","client_id":"browser-first"}).json()["id"]
+        async def settled():
+            await until(lambda:state_of(service,conv_id)=="idle")
+        c.portal.call(settled)
+        first=next(entry for entry in service._app_log(conv_id).entries() if entry.get("type")=="user")
+        assert first["client_id"]=="browser-first"
+        c.post(f"/api/chats/{conv_id}/messages",json={"text":"second","client_id":"browser-second"}).raise_for_status()
+        c.portal.call(settled)
+        user=next(item for item in service.snapshot(conv_id)["items"] if item.get("text")=="second")
+        response=c.post(f"/api/chats/{conv_id}/edit",json={"message_uuid":user["uuid"],"text":"edited","client_id":"browser-edit"})
+        assert response.status_code==204,response.text
+        c.portal.call(settled)
+        edited=next(entry for entry in reversed(service._app_log(conv_id).entries()) if entry.get("client_id")=="browser-edit")
+        assert edited["message"]["content"]=="edited"
+
+
+def test_invalid_create_client_identity_is_rejected_before_persistence(repo,tmp_path,quotes):
+    c,service=client(repo,tmp_path,quotes)
+    with c:
+        for value in ("",12,[],{}):
+            response=c.post("/api/chats",json={"kind":"research","text":"first","client_id":value})
+            assert response.status_code==400
+        assert service._index.all()==[]

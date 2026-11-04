@@ -36,7 +36,7 @@ def test_research_process_updates_before_new_and_resume_but_not_reused_turn(tmp_
             await svc.send(c.id, "two")
             await until(lambda: state_of(svc, c.id) == "idle")
             assert calls == ["updated"]
-            await svc.shutdown()
+            await svc._stop(c.id)
             await svc.send(c.id, "three")
             await until(lambda: state_of(svc, c.id) == "idle")
             assert calls == ["updated", "updated"]

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { backoffMs, openChatEvents, STALE_MS } from './api';
+import { backoffMs, createChat, editMessage, openChatEvents, STALE_MS } from './api';
 import { getConnection, resetConnection } from '../offline/connection';
 import type { ChatList } from './types';
 
@@ -9,6 +9,21 @@ const listed: ChatList = {
     agent: 'claude', agent_label: 'Claude Code', model_label: 'Opus 5.5' }],
   running_count: 0, usage: null,
 };
+
+describe('input identifiers on every entry point', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('sends the same local identifier on creation and editing', async () => {
+    const fetch = vi.fn().mockResolvedValueOnce(Response.json({ id: 'created' }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetch);
+    await createChat({ kind: 'research', ticker: null, text: 'first', model: 'm', effort: 'medium',
+      agent: 'codex', client_id: 'first-client-id' });
+    await editMessage('created', 'user-old', 'edited', 'edit-client-id');
+    expect(JSON.parse(fetch.mock.calls[0][1].body).client_id).toBe('first-client-id');
+    expect(JSON.parse(fetch.mock.calls[1][1].body).client_id).toBe('edit-client-id');
+  });
+});
 
 describe('backoffMs', () => {
   it('doubles from one second and caps at thirty', () => {

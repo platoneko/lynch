@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable
+from copy import deepcopy
 
 from lynch_reader.chat.app_log import AppLog
 from lynch_reader.chat.approvals import APPROVABLE_SKILL, AUTO_DENY_MESSAGE
@@ -14,12 +15,24 @@ from lynch_reader.chat.index import Conversation
 from lynch_reader.chat.events import LinkEvents
 from lynch_reader.chat.mcp import codex_wisburg_config
 from lynch_reader.chat.process import ChatProcess
+from lynch_reader.chat.transcript import current_branch
 
 log = logging.getLogger(__name__)
 
 
 class CodexSetupError(Exception):
     pass
+
+
+def _merge_sparse(previous: dict, update: dict) -> dict:
+    """Native null fields mean unavailable, rather than clearing a known quota window."""
+    merged = deepcopy(previous)
+    for key, value in update.items():
+        if value is None:
+            continue
+        merged[key] = (_merge_sparse(merged.get(key) if isinstance(merged.get(key), dict) else {}, value)
+                       if isinstance(value, dict) else deepcopy(value))
+    return merged
 
 
 class _Rpc:
@@ -33,7 +46,8 @@ class _Rpc:
 
     async def start(self) -> None:
         await self.proc.start()
-        await self.call("initialize", {"clientInfo": {"name": "lynch_reader", "version": "0.1.0"}})
+        await self.call("initialize", {"clientInfo": {"name": "lynch_reader", "version": "0.1.0"},
+                                       "capabilities": {"experimentalApi": True}})
         await self.proc.send_json({"method": "initialized", "params": {}})
         account = await self.call("account/read", {"refreshToken": False})
         if account.get("requiresOpenaiAuth") and not account.get("account"):
@@ -133,8 +147,17 @@ class CodexLink:
         self._children: set[str] = set()
         self._child_turns: dict[str, str] = {}
         self._child_items: dict[tuple[str, str], dict] = {}
+        self._child_parents: dict[str, str] = {}
+        self._child_done: set[tuple[str, str]] = set()
+        self._finished_child_turns: set[tuple[str, str]] = set()
+        self._last_turn: str | None = None
+        self._retrying = False
         self._closed_turn = True
         self._manual_compact = False
+        self._compact_override = False
+        self._thread_params: dict = {}
+        self._limits: dict = {"rateLimits": None}
+        self._limits_ready = False
 
     @property
     def alive(self) -> bool:
@@ -150,10 +173,19 @@ class CodexLink:
                       "approvalPolicy": "untrusted", "approvalsReviewer": "user", "sandbox": "danger-full-access",
                       "developerInstructions": system_prompt(self._conv),
                       "config": {"model_reasoning_effort": self._conv.effort, **mcp_config}}
+            self._thread_params = params
             previous = self._conv.codex_thread
             result = await self._rpc.call("thread/resume" if previous else "thread/start",
                                           {**params, **({"threadId": previous} if previous else {})})
             self._thread = result["thread"]["id"]
+            # Cache before returning: service callbacks cannot publish until it attaches this link.
+            # A provider may omit the account API; quota failure must not prevent research.
+            try:
+                limits = await asyncio.wait_for(self._rpc.call("account/rateLimits/read", {}),
+                                                min(self._rpc._timeout, 2.0))
+                self._merge_limits(limits)
+            except (CodexSetupError, OSError, TimeoutError):
+                pass
             return self._thread
         except BaseException as e:
             await self._rpc.close()
@@ -162,17 +194,120 @@ class CodexLink:
             raise CodexSetupError(f"无法启动 Codex：{e}") from e
 
     async def prompt(self, text: str) -> None:
-        self._events.on_entry(self._log.user(text))
+        self._publish_initial_limits()
+        await self._restore_compact_prompt()
+        user = self._log.user(text)
+        self._events.on_entry(user)
         await self._start_turn("turn/start", {"threadId": self._thread,
             "input": [{"type": "text", "text": text}], "model": self._conv.model, "effort": self._conv.effort,
             # Reapply both settings on resumed threads, including threads originally created read-only.
-            "approvalPolicy": "untrusted", "sandboxPolicy": {"type": "dangerFullAccess"}})
+            "approvalPolicy": "untrusted", "sandboxPolicy": {"type": "dangerFullAccess"}}, user_uuid=user["uuid"])
 
-    async def compact(self) -> None:
+    async def rewind(self, message_uuid: str) -> str:
+        """Prepare a native prefix fork; the service commits the app branch afterwards."""
+        if self._active:
+            raise CodexSetupError("请等本轮结束后再编辑消息")
+        await self._restore_compact_prompt()
+        branch = current_branch(self._log.entries())
+        users = [entry for entry in branch if entry.get("type") == "user"
+                 and isinstance((entry.get("message") or {}).get("content"), str)
+                 and not entry["message"]["content"].startswith("[Request interrupted")]
+        target = next((entry for entry in users if entry.get("uuid") == message_uuid), None)
+        if target is None:
+            raise CodexSetupError("这条消息不在当前对话分支中")
+        native_id = self._log.native_id(message_uuid)
+        if not native_id:
+            turns = await self._history()
+            native = [(turn["id"], "".join(block.get("text", "") for item in turn.get("items", [])
+                       if item.get("type") == "userMessage" for block in item.get("content", [])
+                       if block.get("type") == "text")) for turn in turns
+                      if any(item.get("type") == "userMessage" for item in turn.get("items", []))]
+            texts = [entry["message"]["content"] for entry in users]
+            matches = [start for start in range(len(native) - len(texts) + 1)
+                       if [text for _, text in native[start:start + len(texts)]] == texts]
+            if len(matches) != 1:
+                raise CodexSetupError("无法唯一匹配旧聊天的原生轮次，请保留原分支后重试")
+            native_id = native[matches[0] + users.index(target)][0]
+        result = await self._rpc.call("thread/fork", {"threadId": self._thread, "beforeTurnId": native_id,
+            "cwd": str(self._cfg.repo_root), "model": self._conv.model, "approvalPolicy": "untrusted",
+            "approvalsReviewer": "user", "sandbox": "danger-full-access", "developerInstructions": system_prompt(self._conv)})
+        thread = result["thread"]["id"]
+        self._thread, self._last_turn = thread, None
+        self._children.clear()
+        self._child_turns.clear()
+        self._child_items.clear()
+        self._child_parents.clear()
+        return thread
+
+    async def _history(self) -> list[dict]:
+        result = await self._rpc.call("thread/read", {"threadId": self._thread, "includeTurns": True})
+        thread = result["thread"]
+        if thread.get("historyMode") != "paginated":
+            return thread.get("turns") or []
+        turns, seen, cursor = [], set(), None
+        while True:
+            page = await self._rpc.call("thread/turns/list", {"threadId": self._thread, "limit": 100,
+                "itemsView": "full", "sortDirection": "asc", "cursor": cursor})
+            turns.extend(page.get("data") or [])
+            cursor = page.get("nextCursor")
+            if not cursor:
+                return turns
+            if cursor in seen:
+                raise CodexSetupError("Codex 历史分页重复，无法安全编辑")
+            seen.add(cursor)
+
+    async def generate_title(self, description: str) -> str | None:
+        if self._active:
+            return None
+        turn = self._last_turn
+        if not turn:
+            turns = await self._history()
+            turn = turns[-1]["id"] if turns else None
+        if not turn:
+            return None
+        result = await self._rpc.call("thread/sample", {"threadId": self._thread, "expectedTurnId": turn,
+            "prompt": "为下面的研究对话起一个简短中文标题，只输出标题，不用工具：\n" + description,
+            "effort": "low", "disableMcp": True})
+        title = result.get("text")
+        return title.strip().strip('"')[:40] if isinstance(title, str) and title.strip() else None
+
+    async def compact(self, hint: str = "") -> None:
+        self._publish_initial_limits()
+        await self._restore_compact_prompt()
+        if hint.strip():
+            # Resuming an already loaded thread ignores config overrides. Unsubscribe first;
+            # this unloads native state without changing the durable conversation or files.
+            self._active, self._starting, self._cancelled_start = True, True, False
+            self._turn = None
+            self._compact_override = True
+            try:
+                await self._reload_thread({**self._thread_params["config"], "compact_prompt":
+                    "Summarize this conversation for another model to continue the same task. Preserve the user's "
+                    "goals, decisions, facts, relevant tool results, pending work and constraints. Do not do new research. "
+                    "Apply these additional retention instructions to the summary:\n" + hint.strip()})
+            except BaseException:
+                if self._cancelled_start:
+                    return
+                self._active, self._starting = False, False
+                raise
+            if self._cancelled_start:
+                return
         self._manual_compact = True
         await self._start_turn("thread/compact/start", {"threadId": self._thread})
 
-    async def _start_turn(self, method: str, params: dict) -> None:
+    async def _reload_thread(self, config: dict) -> None:
+        await self._rpc.call("thread/unsubscribe", {"threadId": self._thread})
+        result = await self._rpc.call("thread/resume", {**self._thread_params, "threadId": self._thread,
+                                                     "config": config})
+        if result["thread"]["id"] != self._thread:
+            raise CodexSetupError("Codex 恢复了不同的线程，已停止继续发送")
+
+    async def _restore_compact_prompt(self) -> None:
+        if self._compact_override:
+            await self._reload_thread(self._thread_params["config"])
+            self._compact_override = False
+
+    async def _start_turn(self, method: str, params: dict, *, user_uuid: str | None = None) -> None:
         self._active, self._closed_turn = True, False
         self._starting, self._cancelled_start = True, False
         self._deferred.clear()
@@ -183,6 +318,8 @@ class CodexLink:
             if self._active:
                 # Manual compaction acknowledges with {}; its turn ID arrives in turn/started.
                 self._turn = result["turn"]["id"] if method == "turn/start" else None
+                if user_uuid and self._turn:
+                    self._log.bind_native(user_uuid, self._turn)
                 self._starting = False
                 deferred, self._deferred = self._deferred, []
                 for message in deferred:
@@ -228,6 +365,28 @@ class CodexLink:
     async def close(self) -> None:
         await self._rpc.close()
 
+    def _publish_initial_limits(self) -> None:
+        if not self._limits_ready:
+            self._limits_ready = True
+            self._events.on_limits(deepcopy(self._limits))
+
+    def _merge_limits(self, payload: dict) -> None:
+        update = {key: value for key, value in payload.items() if key in (
+            "accountId", "ordinaryUsageAllowed", "rateLimitResetCredits", "rateLimitUpsell",
+            "rateLimits", "rateLimitsByLimitId")}
+        snapshot = update.get("rateLimits")
+        if isinstance(snapshot, dict) and snapshot.get("limitId"):
+            bucket = snapshot["limitId"]
+            buckets = update.get("rateLimitsByLimitId")
+            update["rateLimitsByLimitId"] = _merge_sparse(buckets if isinstance(buckets, dict) else {},
+                                                         {bucket: snapshot})
+            current_bucket = (self._limits.get("rateLimits") or {}).get("limitId")
+            if current_bucket and current_bucket != bucket:
+                update.pop("rateLimits")  # A different metered bucket cannot overwrite the default window.
+        self._limits = _merge_sparse(self._limits, update)
+        if self._limits_ready or self._active:
+            self._events.on_limits(deepcopy(self._limits))
+
     def _on_message(self, message: dict) -> None:
         method, p = message["method"], message.get("params") or {}
         if self._starting:
@@ -240,6 +399,10 @@ class CodexLink:
             parent = thread.get("parentThreadId")
             if parent and (parent == self._thread or parent in self._children):
                 self._children.add(thread["id"])
+                self._child_parents.setdefault(thread["id"], "codex-agent:" + thread["id"])
+            return
+        if method == "account/rateLimits/updated" and "id" not in message:
+            self._merge_limits(p)
             return
         if "id" in message:
             self._on_request(message["id"], method, p)
@@ -256,6 +419,22 @@ class CodexLink:
             return  # wait for the new compaction turn rather than consuming an old turn's tail
         if self._turn and event_turn and event_turn != self._turn:
             return
+        if method == "thread/status/changed":
+            state = (p.get("status") or {}).get("type")
+            if state in ("active", "idle"):
+                self._events.on_state(("compacting" if self._manual_compact else "running")
+                                      if state == "active" else "idle")
+            return
+        if method == "error":
+            error = (p.get("error") or {}).get("message") or "Codex 请求失败"
+            if p.get("willRetry"):
+                self._retrying = True
+                self._events.on_retry(str(error))
+            else:
+                self._clear_retry()
+            return
+        if method in ("item/started", "item/completed", "item/agentMessage/delta", "turn/completed"):
+            self._clear_retry()
         if method == "turn/started":
             self._turn = (p.get("turn") or {}).get("id")
         elif method == "item/agentMessage/delta":
@@ -279,25 +458,46 @@ class CodexLink:
                            str(error.get("message")) if error.get("message") else None)
 
     def _on_child_event(self, method: str, p: dict) -> None:
+        if not self._active:
+            return
         thread = p["threadId"]
         turn = (p.get("turn") or {}).get("id") if method.startswith("turn/") else p.get("turnId")
+        if (thread, turn) in self._finished_child_turns:
+            return
         if method == "turn/started":
             self._child_turns[thread] = turn
             self._child_items = {key: item for key, item in self._child_items.items() if key[0] != thread}
+            self._child_done = {key for key in self._child_done if key[0] != thread}
         if not turn or self._child_turns.get(thread) != turn:
             return
         if method == "turn/completed":
+            self._finished_child_turns.add((thread, turn))
+            for (item_thread, _), item in self._child_items.items():
+                if item_thread == thread:
+                    self._finish_tools({**item, "id": "codex:" + thread + ":" + item["id"]},
+                        interrupted=True, parent=self._child_parents.get(thread, "codex-agent:" + thread))
             self._child_turns.pop(thread, None)
             self._child_items = {key: item for key, item in self._child_items.items() if key[0] != thread}
         elif method in ("item/started", "item/completed"):
             item = p.get("item") or {}
-            self._track_child(item)
-            if item.get("type") == "fileChange":
-                key = (thread, item["id"])
-                if method == "item/started":
-                    self._child_items[key] = item
-                else:
+            item_id = item.get("id")
+            key = (thread, item_id)
+            if not item_id or key in self._child_done:
+                return
+            parent = self._child_parents.get(thread, "codex-agent:" + thread)
+            display_item = {**item, "id": "codex:" + thread + ":" + item_id}
+            self._track_child(display_item)
+            if item.get("type") == "agentMessage" and method == "item/completed":
+                self._write("assistant", [{"type": "text", "text": item.get("text") or ""}], parent=parent)
+                self._child_done.add(key)
+            elif item.get("type") in ("commandExecution", "fileChange", "webSearch", "mcpToolCall", "collabAgentToolCall"):
+                if key not in self._child_items:
+                    self._write_tools(display_item, parent=parent)
+                self._child_items[key] = item
+                if method == "item/completed":
+                    self._finish_tools(display_item, parent=parent)
                     self._child_items.pop(key, None)
+                    self._child_done.add(key)
 
     def _on_request(self, rpc_id: int | str, method: str, p: dict) -> None:
         thread = p.get("threadId")
@@ -378,6 +578,11 @@ class CodexLink:
             child = item.get("agentThreadId")
             if isinstance(child, str) and child:
                 self._children.add(child)
+                self._child_parents[child] = item["id"]
+        elif item.get("type") == "collabAgentToolCall":
+            for child in item.get("receiverThreadIds") or []:
+                self._children.add(child)
+                self._child_parents[child] = item["id"]
 
     def _tool_calls(self, item: dict) -> list[tuple[str, str, dict]]:
         item_id, kind = item["id"], item["type"]
@@ -399,12 +604,13 @@ class CodexLink:
                                         "receiverThreadIds": item.get("receiverThreadIds") or []})]
         return [(item_id, f"mcp__{item.get('server')}__{item.get('tool')}", item.get("arguments") or {})]
 
-    def _write_tools(self, item: dict) -> None:
+    def _write_tools(self, item: dict, *, parent: str | None = None) -> None:
         for call_id, name, inputs in self._tool_calls(item):
-            self._write("assistant", [{"type": "tool_use", "id": call_id, "name": name, "input": inputs}])
-        self._closed_turn = False
+            self._write("assistant", [{"type": "tool_use", "id": call_id, "name": name, "input": inputs}], parent=parent)
+        if parent is None:
+            self._closed_turn = False
 
-    def _finish_tools(self, item: dict, interrupted: bool = False) -> None:
+    def _finish_tools(self, item: dict, interrupted: bool = False, *, parent: str | None = None) -> None:
         status = item.get("status")
         failed = interrupted or status in ("failed", "declined") or item.get("exitCode") not in (None, 0)
         output = ("已中断" if interrupted else AUTO_DENY_MESSAGE if status == "declined"
@@ -412,13 +618,19 @@ class CodexLink:
         if item.get("type") == "collabAgentToolCall" and not interrupted and not output:
             output = json.dumps(item.get("agentsStates") or {}, ensure_ascii=False)
         for call_id, _, _ in self._tool_calls(item):
-            self._write("user", [{"type": "tool_result", "tool_use_id": call_id, "content": str(output), "is_error": failed}])
+            self._write("user", [{"type": "tool_result", "tool_use_id": call_id, "content": str(output), "is_error": failed}], parent=parent)
 
-    def _write(self, role: str, content: list, usage: bool = False) -> None:
+    def _write(self, role: str, content: list, usage: bool = False, *, parent: str | None = None) -> None:
         message = {"role": role, "content": content}
         if usage and self._used is not None:
             message["usage"] = {"input_tokens": self._used}
-        self._events.on_entry(self._log.message({"type": role, "message": message}))
+        self._events.on_entry(self._log.message({"type": role, "message": message,
+            **({"parent_tool_use_id": parent} if parent else {})}))
+
+    def _clear_retry(self) -> None:
+        if self._retrying:
+            self._retrying = False
+            self._events.on_retry(None)
 
     def _flush_text(self, usage: bool = False) -> None:
         if self._pending:
@@ -427,6 +639,7 @@ class CodexLink:
             self._closed_turn = True
 
     def _end_turn(self, stop: str | None, error: str | None, notify: bool = True) -> None:
+        self._clear_retry()
         for text in self._texts.values():
             self._pending += text
         self._texts.clear()
@@ -434,11 +647,18 @@ class CodexLink:
         for item in self._items.values():
             self._finish_tools(item, interrupted=True)
         self._items.clear()
+        for (thread, _), item in self._child_items.items():
+            self._finish_tools({**item, "id": "codex:" + thread + ":" + item["id"]}, interrupted=True,
+                               parent=self._child_parents.get(thread, "codex-agent:" + thread))
+        self._child_items.clear()
+        self._finished_child_turns.update(self._child_turns.items())
+        self._child_turns.clear()
         self._asks.clear()
         self._starting = False
         self._deferred.clear()
         if self._turn:
             self._finished_turns.add(self._turn)
+            self._last_turn = self._turn
         self._active, self._turn = False, None
         self._manual_compact = False
         if stop == "cancelled":

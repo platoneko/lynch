@@ -1,7 +1,7 @@
 import { costText, discoverModelText } from './candidateModel';
 import type {
   Approval, ChatAgent, ChatEvent, ChatItem, ChatKind, ChatOptions, ChatState, ChatSummary, ContextUsage,
-  GrokResearchOptions, Snapshot, ToolItem, ToolResult, Usage,
+  GrokResearchOptions, ProviderLimits, ServerQueued, Snapshot, ToolItem, ToolResult, Usage,
 } from './types';
 
 /**
@@ -13,7 +13,8 @@ export interface Queued {
   text: string;
   // behind: sent during another turn; waiting: its turn is the current or next one;
   // unanswered: its turn ended without replaying it, so it was probably never answered
-  status: 'behind' | 'waiting' | 'unanswered';
+  status: 'behind' | 'waiting' | 'unanswered' | 'uncertain';
+  server?: boolean;
 }
 
 export interface ChatView {
@@ -25,19 +26,34 @@ export interface ChatView {
   context: ContextUsage;
   queued: Queued[];
   approvals: Approval[]; // skill edits waiting for 允许 / 拒绝
+  limits?: ProviderLimits | null;
 }
 
 export function isBusy(state: ChatState): boolean {
   return state === 'running' || state === 'compacting';
 }
 
-/** Only Claude Code chats edit messages and count against the Claude subscription. */
+/** Claude subscription data belongs only to Claude chats. */
 export function isClaude(c: Pick<ChatSummary, 'agent'>): boolean {
   return c.agent === 'claude';
 }
 
 export function canCompact(c: Pick<ChatSummary, 'agent'>): boolean {
-  return c.agent === 'claude' || c.agent === 'codex';
+  return ['claude', 'codex', 'grok', 'opencode'].includes(c.agent);
+}
+
+export function limitsText(limits: ProviderLimits | null): string {
+  const windows = [limits?.rateLimits?.primary, limits?.rateLimits?.secondary];
+  const parts = windows.flatMap((window, index) => {
+    if (!window || !Number.isFinite(window.usedPercent)) return [];
+    const minutes = window.windowDurationMins;
+    const label = minutes && minutes > 0
+      ? minutes % 1440 === 0 ? `${minutes / 1440}天`
+        : minutes % 60 === 0 ? `${minutes / 60}小时` : `${minutes}分钟`
+      : index === 0 ? '本期' : '另一窗口';
+    return [`${label} ${Math.round(window.usedPercent)}%`];
+  });
+  return parts.join(' · ') || '额度未提供';
 }
 
 /** Which model list the blank 研究 / 讨论 picker shows. Grok never falls through to Claude's models. */
@@ -143,18 +159,28 @@ export function fromSnapshot(s: Snapshot, prev: ChatView | null = null, sent: Qu
   const known = new Set(prev?.items.map((i) => i.key));
   let queued = prev?.queued ?? sent;
   for (const it of s.items) {
-    if (it.kind === 'user' && !known.has(it.key)) queued = dropEcho(queued, it.text);
+    if (it.kind === 'user' && !known.has(it.key)) queued = dropEcho(queued, it.text, it.client_id);
   }
   queued = settleQueued(queued, prev?.conv.state ?? null, s.conv.state);
+  if (s.queued) queued = mergeServerQueued(s.queued, queued, s.items);
   return {
     conv: s.conv, items: s.items, partial: s.partial, retry: s.retry, usage: s.usage, context: s.context, queued,
-    approvals: s.approvals,
+    approvals: s.approvals, limits: s.limits ?? prev?.limits ?? null,
   };
 }
 
+function mergeServerQueued(rows: ServerQueued[], queued: Queued[], items: ChatItem[]): Queued[] {
+  const ids = new Set(rows.map((row) => row.id));
+  const echoed = new Set(items.flatMap((item) => item.kind === 'user' && item.client_id ? [item.client_id] : []));
+  const local = queued.filter((row) => !row.server && !ids.has(row.localId) && !echoed.has(row.localId));
+  const persisted: Queued[] = rows.filter((row) => row.status !== 'waiting' || !echoed.has(row.id))
+    .map((row) => ({ localId: row.id, text: row.text, status: row.status, server: true }));
+  return [...persisted, ...local];
+}
+
 /** Removes the first queued message with this text: one arrival settles one echo. */
-function dropEcho(queued: Queued[], text: string): Queued[] {
-  const at = queued.findIndex((q) => q.text === text);
+function dropEcho(queued: Queued[], text: string, clientId?: string): Queued[] {
+  const at = queued.findIndex((q) => clientId ? q.localId === clientId : q.text === text);
   return at >= 0 ? queued.filter((_, n) => n !== at) : queued;
 }
 
@@ -168,6 +194,7 @@ function settleQueued(queued: Queued[], previous: ChatState | null, state: ChatS
   // Repeated idle snapshots and dormant → idle during wake-up do not end another turn.
   if (state !== 'dormant' && previous !== null && !isBusy(previous)) return queued;
   return queued.flatMap((q): Queued[] => {
+    if (q.server) return [q];
     if (q.status === 'behind') return [{ ...q, status: state === 'dormant' ? 'unanswered' : 'waiting' }];
     if (q.status === 'waiting') return q.text.startsWith('/') ? [] : [{ ...q, status: 'unanswered' }];
     return [q];
@@ -188,6 +215,8 @@ export function toChatEvent(type: string, data: unknown): ChatEvent | null {
     case 'conv': return { type, conv: data as ChatSummary };
     case 'approval': return { type, approval: data as Approval };
     case 'approval_done': return { type, request_id: String(d.request_id) };
+    case 'queued': return { type, queued: d.queued as ServerQueued[] };
+    case 'limits': return { type, limits: data as ProviderLimits };
     default: return null;
   }
 }
@@ -202,7 +231,7 @@ export function applyEvent(v: ChatView, e: ChatEvent): ChatView {
       const items = at >= 0 ? v.items.map((i, n) => (n === at ? e.item : i)) : [...v.items, e.item];
       const partial = e.item.kind === 'text' ? '' : v.partial;
       // Only a first arrival settles an echo; a folded duplicate was already counted.
-      const queued = e.item.kind === 'user' && at < 0 ? dropEcho(v.queued, e.item.text) : v.queued;
+      const queued = e.item.kind === 'user' && at < 0 ? dropEcho(v.queued, e.item.text, e.item.client_id) : v.queued;
       return { ...v, items, partial, queued };
     }
     case 'tool_result': {
@@ -219,6 +248,10 @@ export function applyEvent(v: ChatView, e: ChatEvent): ChatView {
       return { ...v, retry: e.text };
     case 'usage':
       return { ...v, usage: e.usage };
+    case 'queued':
+      return { ...v, queued: mergeServerQueued(e.queued, v.queued, v.items) };
+    case 'limits':
+      return { ...v, limits: e.limits };
     case 'context':
       return { ...v, context: e.context };
     case 'conv':

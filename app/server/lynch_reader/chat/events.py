@@ -11,3 +11,8 @@ class LinkEvents:
     on_permission: Callable[[str, str, str, dict], None]  # request id, tool id, normalized name, input
     on_turn_end: Callable[[str | None, str | None], None]  # stop reason, error text
     on_exit: Callable[[bool, str], None]  # expected, stderr tail
+    on_retry: Callable[[str | None], None] = lambda _text: None
+    on_limits: Callable[[dict], None] = lambda _limits: None
+    on_state: Callable[[str], None] = lambda _state: None
+    on_title: Callable[[str], None] = lambda _title: None
+    on_notice: Callable[[str], None] = lambda _text: None

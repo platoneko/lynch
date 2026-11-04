@@ -5,20 +5,20 @@ import { CompactDialog } from './CompactDialog';
 import { canCompact, compactText } from './chatModel';
 
 describe('manual context compaction', () => {
-  it('enables compaction for Codex and Claude while keeping other agents unavailable', () => {
+  it('enables compaction for every research agent', () => {
     expect(canCompact({ agent: 'codex' })).toBe(true);
     expect(canCompact({ agent: 'claude' })).toBe(true);
-    expect(canCompact({ agent: 'grok' })).toBe(false);
-    expect(canCompact({ agent: 'opencode' })).toBe(false);
+    expect(canCompact({ agent: 'grok' })).toBe(true);
+    expect(canCompact({ agent: 'opencode' })).toBe(true);
   });
 
-  it('offers Codex confirmation without an unsupported summary instruction input', () => {
+  it('offers Codex preservation instructions', () => {
     const html = renderToStaticMarkup(createElement(CompactDialog, {
       agent: 'codex', hint: '', onHint: () => {}, onClose: () => {}, onCompact: () => {},
     }));
     expect(html).toContain('压缩上下文');
     expect(html).toContain('>压缩</button>');
-    expect(html).not.toContain('<input');
+    expect(html).toContain('<input');
   });
 
   it('preserves Claude summary instructions', () => {

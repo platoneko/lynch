@@ -17,7 +17,7 @@ def texts(snapshot):
 
 
 def turns(tmp_path):
-    return [l for l in grok_launches(tmp_path) if l["argv"][:2] != ["agent", "stdio"]]
+    return [l for l in grok_launches(tmp_path) if "--resume" in l["argv"] and any(a.startswith("--single=") for a in l["argv"])]
 
 
 async def settled(svc, conv_id):
@@ -138,13 +138,13 @@ def test_restart_resumes_the_same_grok_session(tmp_path):
     assert texts(snap) == [("user", "one"), ("text", "echo: one"), ("user", "two"), ("text", "echo: two")]
 
 
-def test_busy_send_is_refused_and_stop_marks_the_turn(tmp_path):
+def test_busy_send_is_queued_and_stop_marks_the_turn(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)
         conv = await svc.create("discover", None, "slow", "grok-4.6", "high", 256000)
         await until(lambda: any(i["kind"] == "tool" for i in svc.snapshot(conv.id)["items"]))
-        with pytest.raises(Conflict):
-            await svc.send(conv.id, "more")
+        await svc.send(conv.id, "more")
+        assert any(row["text"] == "more" for row in svc.snapshot(conv.id)["queued"])
         q = svc.subscribe(conv.id)
         await svc.interrupt(conv.id)
         await next_event(q, "item", lambda d: d.get("text") == "已停止")
@@ -212,8 +212,8 @@ def test_a_turn_ends_when_grok_exits_not_at_its_result(tmp_path):
         await until(lambda: svc.snapshot(conv.id)["conv"]["cost_usd"] is not None)  # its result arrived
         await svc.reap_idle()
         during = state_of(svc, conv.id)
-        with pytest.raises(Conflict):
-            await svc.send(conv.id, "more")
+        await svc.send(conv.id, "more")
+        assert any(row["text"] == "more" for row in svc.snapshot(conv.id)["queued"])
         # Stop still ends a grok that lingers after answering (it might never exit), without a 已停止.
         await svc.interrupt(conv.id)
         stopped = state_of(svc, conv.id)
@@ -240,16 +240,17 @@ def test_x_search_shows_as_a_finished_tool(tmp_path):
     assert tool["name"] == "X search:" and tool["output"] and tool["is_error"] is False and tool["denied"] is False
 
 
-def test_edit_and_compact_are_refused(tmp_path):
+def test_first_message_edit_is_refused_and_native_compact_is_available(tmp_path):
     async def main():
         svc, _ = make_service(tmp_path)
         conv = await svc.create("discover", None, "one", "grok-4.6", "high", 256000)
         await settled(svc, conv.id)
         user_uuid = svc.snapshot(conv.id)["items"][0]["uuid"]
-        with pytest.raises(Invalid, match="^发现新票对话不支持编辑消息$"):
+        with pytest.raises(Invalid, match="no earlier reply"):
             await svc.edit(conv.id, user_uuid, "x")
-        with pytest.raises(Invalid):
-            await svc.send(conv.id, "/compact")
+        await svc.send(conv.id, "/compact 保留候选来源")
+        await settled(svc, conv.id)
+        assert svc.snapshot(conv.id)["items"][-1]["kind"] == "compact"
         await svc.shutdown()
     asyncio.run(main())
 

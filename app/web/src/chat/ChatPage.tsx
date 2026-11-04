@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { renderFragment, type LinkTargets } from '../doc/buildDoc';
 import { Menu } from '../Menu';
-import { answerApproval, createChat, editMessage, fetchCandidates, fetchCodexOptions, interruptChat, openChatEvents, renameChat, sendMessage } from './api';
+import { answerApproval, createChat, dismissQueued, editMessage, fetchCandidates, fetchCodexOptions, interruptChat, openChatEvents, renameChat, sendMessage } from './api';
 import { CandidateCards } from './CandidateCards';
 import { CompactDialog } from './CompactDialog';
 import { ResearchModelPicker } from './ResearchModelPicker';
@@ -10,7 +10,7 @@ import { CODEX_LOADING, requestCodexOptions, type CodexCatalogState } from './co
 import {
   agentModelText, applyEvent, canCompact, canStartResearch, chatCostText, compactText, contextText, contextWarn, diffLineClass, editableUuids, formatTokens, fromSnapshot,
   grokSelection, newChatBody, researchPickerAgent, researchSettings,
-  inputJumps, isBusy, isClaude, stateText, toolDetail, toolSummary, turnDocLinks, usageText, type ChatView, type InputJumps,
+  inputJumps, isBusy, isClaude, limitsText, stateText, toolDetail, toolSummary, turnDocLinks, usageText, type ChatView, type InputJumps,
   type Queued,
 } from './chatModel';
 import { cancelEdit, composer, draftText, putBack, sent, startEdit, typed, type Composer } from './composer';
@@ -22,7 +22,7 @@ import { WatchCardView } from '../watch/WatchCardView';
 
 const INPUT_MAX_PX = 160;
 const PARK_PX = 8; // gap left between the header and a bubble an input jump lands on
-const QUEUED_LABEL: Record<Queued['status'], string> = { behind: '排队中', waiting: '等待回应', unanswered: '未处理' };
+const QUEUED_LABEL: Record<Queued['status'], string> = { behind: '排队中', waiting: '等待回应', unanswered: '未处理', uncertain: '发送结果待核实' };
 
 /** The user bubbles, the top of the band the sticky header and composer leave visible, and where the jumps lead. */
 function inputLayout(header: HTMLElement | null, body: HTMLElement | null, footer: HTMLElement | null) {
@@ -37,18 +37,18 @@ type RenderedText = Map<string, { text: string; html: string }>; // item key →
 
 /**
  * One conversation; with `id === null`, the blank page before its first message (a Grok discover chat when `newDiscover`).
- * `firstMessage`: the text the blank page just created this conversation with, pending until claude replays it.
+ * `firstMessage`: the initial text and its request identifier, handed over from the blank page.
  */
 export function ChatPage({ id, newTicker, newDiscover, firstMessage, options: providedOptions, targets, onBack, onOpenDoc, onCreated }: {
   id: string | null;
   newTicker: string | null;
   newDiscover: boolean; // the blank page of a 发现新票 chat
-  firstMessage: string | null;
+  firstMessage: { text: string; clientId: string } | null;
   options: ChatOptions | null;
   targets: LinkTargets;
   onBack: () => void;
   onOpenDoc: (ticker: string) => void;
-  onCreated: (id: string, text: string) => void;
+  onCreated: (id: string, text: string, clientId: string) => void;
 }) {
   const [codexCatalog, setCodexCatalog] = useState<CodexCatalogState>(CODEX_LOADING);
   const cancelCodexRequest = useRef<() => void>(() => {});
@@ -202,7 +202,7 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options: pr
     return openChatEvents(id, {
       snapshot: (s) => {
         setLost(false);
-        const first: Queued[] = firstMessage === null ? [] : [{ localId: 'first', text: firstMessage, status: 'waiting' }];
+        const first: Queued[] = firstMessage === null ? [] : [{ localId: firstMessage.clientId, text: firstMessage.text, status: 'waiting' }];
         setView((v) => fromSnapshot(s, v, first));
       },
       event: (e) => setView((v) => (v ? applyEvent(v, e) : v)),
@@ -289,26 +289,26 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options: pr
     setSending(true);
     setError(null);
     try {
+      const localId = `${Date.now()}-${Math.random()}`;
       if (id === null) {
         setCreating(body);
-        const created = await createChat(newChatBody({
+        const created = await createChat({ ...newChatBody({
           discover, kind: discover ? 'discover' : newTicker ? 'ticker' : 'research',
           ticker: discover ? null : newTicker, text: body,
           model: grokPick?.model ?? model, effort: grokPick?.effort ?? effort, agent,
           ctxWindow: grokPick?.ctxWindow ?? ctxWindow, lookbackDays,
-        }));
+        }), client_id: localId });
         clearDraft(draftKey);
-        onCreated(created.id, body);
+        onCreated(created.id, body, localId);
         return;
       }
       // An edit's new text, like a message, is replayed only once the model starts answering it.
-      const localId = `${Date.now()}-${Math.random()}`;
       const status = busy ? 'behind' : 'waiting';
       setView((v) => v && { ...v, queued: [...v.queued, { localId, text: body, status }] });
       try {
-        await (editing !== null ? editMessage(id, editing, body) : sendMessage(id, body));
+        await (editing !== null ? editMessage(id, editing, body, localId) : sendMessage(id, body, localId));
       } catch (e) {
-        setView((v) => v && { ...v, queued: v.queued.filter((q) => q.localId !== localId) });
+        setView((v) => v && { ...v, queued: v.queued.filter((q) => q.localId !== localId || q.server) });
         throw e;
       }
       setInput((c) => sent(c, body));
@@ -325,10 +325,15 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options: pr
     const target = which === 'last' ? bubbles.at(-1) : j.prev === null ? undefined : bubbles[j.prev];
     if (target) window.scrollTo(0, window.scrollY + target.getBoundingClientRect().top - bandTop - PARK_PX);
   };
-  const putBackUnanswered = (q: Queued) => {
-    setView((v) => v && { ...v, queued: v.queued.filter((x) => x.localId !== q.localId) });
-    setInput((c) => putBack(c, q.text));
-    inputEl.current?.focus();
+  const putBackUnanswered = async (q: Queued) => {
+    try {
+      if (q.server && id !== null) await dismissQueued(id, q.localId);
+      setView((v) => v && { ...v, queued: v.queued.filter((x) => x.localId !== q.localId) });
+      setInput((c) => putBack(c, q.text));
+      inputEl.current?.focus();
+    } catch (e) {
+      fail(e);
+    }
   };
   const edit = (it: Extract<ChatItem, { kind: 'user' }>) => {
     setInput((c) => startEdit(c, it.uuid, it.text));
@@ -338,7 +343,7 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options: pr
     setCompactOpen(false);
     if (id === null) return;
     try {
-      await sendMessage(id, claude ? `/compact ${compactHint}`.trim() : '/compact');
+      await sendMessage(id, `/compact ${compactHint}`.trim());
       setCompactHint('');
     } catch (e) {
       fail(e);
@@ -372,6 +377,7 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options: pr
               {conv && <span>{agentModelText(conv)}</span>}
               {view && <span className={contextWarn(view.context) ? 'ctx-warn' : ''}>ctx {contextText(view.context)}</span>}
               {claude ? view?.usage && <span>{usageText(view.usage)}</span> : cost && <span>{cost}</span>}
+              {conv?.agent === 'codex' && view && <span>{limitsText(view.limits ?? null)}</span>}
             </div>
           </div>
           {id !== null && <button className="icon-btn" disabled={gone} onClick={() => setMenu(!menu)} aria-label="更多">⋯</button>}
@@ -380,7 +386,7 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options: pr
           <Menu onClose={() => setMenu(false)} items={[
             { label: showTools ? '隐藏调用过程' : '显示调用过程', onSelect: () => { setShowTools(!showTools); saveShowTools(!showTools); } },
             { label: '重命名', onSelect: () => setRenaming(conv?.title ?? '') },
-            ...(conv && canCompact(conv) ? [{ label: '压缩上下文', disabled: busy, onSelect: () => setCompactOpen(true) }] : []),
+            ...(conv && canCompact(conv) ? [{ label: '压缩上下文', disabled: busy || pending.length > 0, onSelect: () => setCompactOpen(true) }] : []),
           ]} />
         )}
       </header>
@@ -393,8 +399,8 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options: pr
             {it.kind === 'user' && (
               <div className="msg msg-user">
                 <div className="msg-text">{it.text}</div>
-                {editable.has(it.uuid) && claude && (
-                  <button className="edit-btn" disabled={busy || gone || sending} onClick={() => edit(it)} aria-label="编辑">✎</button>
+                {editable.has(it.uuid) && (
+                  <button className="edit-btn" disabled={busy || gone || sending || pending.length > 0} onClick={() => edit(it)} aria-label="编辑">✎</button>
                 )}
               </div>
             )}
@@ -449,7 +455,7 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options: pr
           <div key={q.localId} className="msg msg-user msg-queued">
             <div className="msg-text">{q.text}</div>
             <span>{QUEUED_LABEL[q.status]}</span>
-            {q.status === 'unanswered' && (
+            {(q.status === 'unanswered' || q.status === 'uncertain') && (
               <button className="text-btn" disabled={editing !== null} onClick={() => putBackUnanswered(q)}>放回输入框</button>
             )}
           </div>
@@ -507,9 +513,9 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options: pr
           <textarea ref={inputEl} rows={1} value={text} disabled={gone} onChange={(e) => setInput((c) => typed(c, e.target.value))}
             placeholder={id === null ? (discover ? '想看 KOL 最近推了什么？（直接发送即可）' : newTicker ? `围绕 ${newTicker} 说点什么` : '想调研哪只票？') : '输入消息'} />
           <button className="send-btn" onClick={submit}
-            disabled={!ready || sending || gone || (editing !== null && busy) || (!claude && busy)
+            disabled={!ready || sending || gone || (editing !== null && busy)
               || (discover && id === null ? !discoverModel : !text.trim())}>
-            {sending ? '发送中' : !claude && busy ? '等这一轮结束' : '发送'}
+            {sending ? '发送中' : '发送'}
           </button>
         </div>
       </footer>
