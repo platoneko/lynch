@@ -573,8 +573,8 @@ class CodexLink:
             self._done.add(item_id)
 
     def _track_child(self, item: dict) -> None:
-        # Current Codex reports spawned agents as parent items, without thread/started for the child.
-        if item.get("type") == "subAgentActivity" and item.get("kind") == "started":
+        # Reused agents emit interacted (including after resume), without another thread/started.
+        if item.get("type") == "subAgentActivity" and item.get("kind") in ("started", "interacted"):
             child = item.get("agentThreadId")
             if isinstance(child, str) and child:
                 self._children.add(child)

@@ -6,8 +6,10 @@ Uses the user's configured Codex service and a disposable repository under pytes
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shutil
+import uuid
 from dataclasses import asdict
 from types import SimpleNamespace
 
@@ -130,5 +132,85 @@ def test_local_codex_stream_patch_approval_and_resume(tmp_path, monkeypatch):
         finally:
             await resumed.close()
         print(f"Codex {chosen.id}: stream, shell, live filings before/after resume, file approval and rejected skill patch verified")
+
+    asyncio.run(main())
+
+
+def test_local_codex_reused_child_reads_across_turns_and_resume(tmp_path, monkeypatch):
+    async def main():
+        cfg = CodexConfig((shutil.which("codex") or "codex",), tmp_path, tmp_path / "app-logs")
+        env = codex_env(os.environ)
+        models = await discover_models(cfg, env)
+        chosen = next((m for m in models if m.is_default), models[0])
+        c = SimpleNamespace(**{**asdict(conv(agent="codex", kind="research", ticker=None,
+                                             model=chosen.id, effort=chosen.default_effort)), "codex_thread": None})
+        (tmp_path / "frameworks").mkdir()
+        tokens = [uuid.uuid4().hex for _ in range(3)]
+        for n, token in enumerate(tokens):
+            (tmp_path / f"frameworks/review-{n}.txt").write_text(token)
+        trace_path = tmp_path / "child-events.jsonl"
+        reader_thread = None
+
+        def open_recorded_link():
+            rec = LinkRecorder()
+            link = CodexLink(cfg, c, env, AppLog(cfg.logs / "reuse.jsonl"), rec.events())
+            requests, replies = {}, {}
+            on_message, reply = link._on_message, link._rpc.reply
+
+            def record_message(message):
+                params = message.get("params") or {}
+                if message.get("method", "").startswith(("thread/", "turn/", "item/")):
+                    with trace_path.open("a") as stream:
+                        stream.write(json.dumps(message, ensure_ascii=False) + "\n")
+                if "id" in message and message.get("method") == "item/commandExecution/requestApproval":
+                    requests[message["id"]] = params.get("threadId")
+                on_message(message)
+
+            def record_reply(rpc_id, result=None, **kwargs):
+                replies[rpc_id] = (result, kwargs)
+                reply(rpc_id, result, **kwargs)
+
+            monkeypatch.setattr(link._rpc, "_message", record_message)
+            monkeypatch.setattr(link._rpc, "reply", record_reply)
+            return link, rec, requests, replies
+
+        async def check_read(link, rec, requests, replies, n):
+            nonlocal reader_thread
+            ends, entries = len(rec.turn_ends), len(rec.entries)
+            requests.clear()
+            replies.clear()
+            action = ("派一个名为 review_reader 的子 agent，沿用当前模型" if n == 0 else
+                      "用 followup_task 再次唤起已有的 review_reader 子 agent，不要新建子 agent")
+            await link.prompt(f"这是临时目录权限回归测试。{action}，让它只执行一条命令："
+                              f"python3 -c \"from pathlib import Path; print(Path('frameworks/review-{n}.txt').read_text())\"。"
+                              "你自己不要读取文件。等它完成，回复文件中的口令。若读取被拒绝，报告拒绝并结束，不绕过。")
+            async with asyncio.timeout(180):
+                while len(rec.turn_ends) == ends:
+                    await asyncio.sleep(0.05)
+            assert rec.turn_ends[-1][1] is None, rec.turn_ends[-1]
+            approved = {thread for rpc_id, thread in requests.items()
+                        if thread != link._thread and replies.get(rpc_id) == ({"decision": "accept"}, {})}
+            if n == 0:
+                assert len(approved) == 1, (n, requests, replies)
+                reader_thread = approved.pop()
+            else:
+                assert approved == {reader_thread}, (n, reader_thread, requests, replies)
+            assert any(tokens[n] in str(block.get("content", "")) and not block.get("is_error")
+                       for entry in rec.entries[entries:] if entry.get("parent_tool_use_id")
+                       for block in entry["message"]["content"] if block.get("type") == "tool_result")
+
+        link, rec, requests, replies = open_recorded_link()
+        try:
+            c.codex_thread = await link.start()
+            await check_read(link, rec, requests, replies, 0)
+            await check_read(link, rec, requests, replies, 1)
+        finally:
+            await link.close()
+        resumed, rec, requests, replies = open_recorded_link()
+        try:
+            assert await resumed.start() == c.codex_thread
+            await check_read(resumed, rec, requests, replies, 2)
+        finally:
+            await resumed.close()
 
     asyncio.run(main())
