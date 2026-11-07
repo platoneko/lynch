@@ -397,7 +397,7 @@ class CodexLink:
         if method == "thread/started" and "id" not in message:
             thread = p.get("thread") or {}
             parent = thread.get("parentThreadId")
-            if parent and (parent == self._thread or parent in self._children):
+            if thread.get("id") != self._thread and parent and (parent == self._thread or parent in self._children):
                 self._children.add(thread["id"])
                 self._child_parents.setdefault(thread["id"], "codex-agent:" + thread["id"])
             return
@@ -575,12 +575,14 @@ class CodexLink:
     def _track_child(self, item: dict) -> None:
         # Current Codex reports spawned agents as parent items, without thread/started for the child.
         if item.get("type") == "subAgentActivity" and item.get("kind") == "started":
-            child = item.get("agentThreadId")
-            if isinstance(child, str) and child:
-                self._children.add(child)
-                self._child_parents[child] = item["id"]
+            children = [item.get("agentThreadId")]
         elif item.get("type") == "collabAgentToolCall":
-            for child in item.get("receiverThreadIds") or []:
+            children = item.get("receiverThreadIds") or []
+        else:
+            return
+        for child in children:
+            # A child reporting back to this conversation names the parent as its receiver.
+            if isinstance(child, str) and child and child != self._thread:
                 self._children.add(child)
                 self._child_parents[child] = item["id"]
 
