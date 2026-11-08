@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
+from pathlib import Path
 
 from starlette.testclient import TestClient
 
 from lynch_reader.archive import FrameworkArchive
+from lynch_reader.chat.codex import CodexConfig
 from lynch_reader.chat.routes import chat_lifespan, event_stream
 from lynch_reader.web import create_app
 from tests.chat_helpers import make_service, state_of, until
@@ -13,7 +16,11 @@ from tests.conftest import paired_devices
 
 
 def client(repo, tmp_path, quotes):
-    svc, _ = make_service(tmp_path)
+    codex = CodexConfig((sys.executable, str(Path(__file__).with_name("fake_codex.py"))),
+                        tmp_path, tmp_path / "codex-logs")
+    svc, _ = make_service(tmp_path, codex=codex, env={
+        "FAKE_CODEX_SESSIONS": str(tmp_path / "codex-sessions"),
+        "FAKE_CODEX_LOG": str(tmp_path / "codex-rpc.jsonl")})
     devices, cookies = paired_devices(tmp_path)
     archive = FrameworkArchive(tmp_path / "archive.json")
     return TestClient(create_app(repo, tmp_path / "no-dist", quotes, devices, archive, chat=svc), cookies=cookies), svc
@@ -45,9 +52,8 @@ def test_default_model_and_effort(repo, tmp_path, quotes):
     with c:
         conv_id = c.post("/api/chats", json={"kind": "research", "text": "hi"}).json()["id"]
         row = c.get("/api/chats").json()["chats"][0]
-        assert (row["id"], row["model"], row["effort"], row["context_window"]) == (
-            conv_id, "grok-4.6", "high", 500000)
-        assert row["agent"] == "grok"
+        assert (row["id"], row["model"], row["effort"]) == (conv_id, "gpt-test", "low")
+        assert row["agent"] == "codex"
 
 
 

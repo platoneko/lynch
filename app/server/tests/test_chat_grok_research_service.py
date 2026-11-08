@@ -16,7 +16,7 @@ def acp_log(tmp_path: Path) -> list[dict]:
 
 
 async def start(svc, text, kind="research", ticker=None, **kw):
-    return await svc.create(kind, ticker, text, "grok-4.6", "high", 500000, **kw)
+    return await svc.create(kind, ticker, text, "grok-4.6", "high", 500000, agent="grok", **kw)
 
 
 async def idle(svc, conv_id):
@@ -39,7 +39,7 @@ def test_unnamed_research_chat_defaults_to_grok(tmp_path):
 def test_research_grok_rejects_discover_only_fields(tmp_path):
     svc, _ = make_service(tmp_path)
     with pytest.raises(Invalid):
-        asyncio.run(svc.create("research", None, "x", "grok-4.6", "high", 1))
+        asyncio.run(svc.create("research", None, "x", "grok-4.6", "high", 1, agent="grok"))
 
 
 def test_discover_still_rejects_claude(tmp_path):

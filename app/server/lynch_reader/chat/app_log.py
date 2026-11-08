@@ -45,15 +45,20 @@ class AppLog:
         self._append({"type": "lynch_native", "user_uuid": user_uuid, "native_id": native_id})
 
     def native_id(self, user_uuid: str) -> str | None:
-        return next((entry["native_id"] for entry in reversed(self.entries())
-                     if entry.get("type") == "lynch_native" and entry.get("user_uuid") == user_uuid), None)
+        for entry in reversed(self.entries()):
+            if entry.get("type") == "lynch_native" and entry.get("user_uuid") == user_uuid:
+                return entry["native_id"]
+            if entry.get("subtype") == "lynch_branch" and user_uuid in entry.get("native_ids", {}):
+                return entry["native_ids"][user_uuid]
+        return None
 
-    def branch_at(self, parent_uuid: str, *, agent: str, native_session: str) -> dict:
+    def branch_at(self, parent_uuid: str, *, agent: str, native_session: str,
+                  native_ids: dict[str, str] | None = None) -> dict:
         if not any(entry.get("uuid") == parent_uuid for entry in self.entries()):
             raise ValueError("branch parent is not in the transcript")
         self._last = parent_uuid
         return self._append({"type": "system", "subtype": "lynch_branch", "agent": agent,
-                             "native_session": native_session})
+                             "native_session": native_session, **({"native_ids": native_ids} if native_ids else {})})
 
     def interrupted(self) -> dict:
         """The marker Claude Code writes on a stop; the reader shows it as 已停止."""

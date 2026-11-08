@@ -48,6 +48,7 @@ COMPACT_COMMAND = "/compact"
 KINDS = ("research", "ticker", "discover")
 AGENT_LABELS = {"claude": "Claude Code", "opencode": "opencode", "grok": "Grok", "codex": "Codex"}
 CODEX_MODELS_TTL_S = 300.0
+DEFAULT_AGENT = "codex"
 
 
 def _process_name(agent: str) -> str:
@@ -166,7 +167,7 @@ class ChatService:
         return {"models": [{"id": m, "label": label} for m, label in CHAT_MODELS], "efforts": list(CHAT_EFFORTS),
                 "default_model": DEFAULT_MODEL, "default_effort": DEFAULT_EFFORT, "discover": discover,
                 "agents": [{"id": a, "label": AGENT_LABELS[a]} for a in ("grok", "claude", "opencode", "codex")],
-                "default_agent": "grok", "grok": grok,
+                "default_agent": DEFAULT_AGENT, "grok": grok,
                 "opencode": {"models": [{"id": m, "label": label} for m, label in OPENCODE_MODELS],
                              "default_model": DEFAULT_OPENCODE_MODEL},
                 "codex": {"models": [m.public() for m in self._codex_models],
@@ -262,8 +263,8 @@ class ChatService:
             raise Invalid(f"unknown kind {kind!r}")
         if not text.strip():
             raise Invalid("empty message")
-        # 发现新票 runs only on Grok; 研究 / 讨论 default Grok, Claude Code and opencode still selectable.
-        agent = agent or "grok"
+        # 发现新票 runs only on Grok; 研究 / 讨论 use the app's default agent.
+        agent = agent or ("grok" if kind == "discover" else DEFAULT_AGENT)
         allowed = ("grok",) if kind == "discover" else ("grok", "claude", "opencode", "codex")
         if agent not in allowed:
             raise Invalid(f"agent {agent!r} cannot run a {kind} chat")
@@ -634,7 +635,8 @@ class ChatService:
                     self._checkpoint(conv_id, live, generation)
                     session = await live.proc.rewind(message_uuid)
                     self._checkpoint(conv_id, live, generation)
-                    self._app_log(conv_id).branch_at(cut, agent=conv.agent, native_session=session)
+                    self._app_log(conv_id).branch_at(cut, agent=conv.agent, native_session=session,
+                                                     native_ids=getattr(live.proc, "fork_native_ids", None))
                     field = {"codex": "codex_thread", "grok": "grok_session", "opencode": "opencode_session"}[conv.agent]
                     conv = self._index.update(conv_id, **{field: session})
                 except asyncio.CancelledError:

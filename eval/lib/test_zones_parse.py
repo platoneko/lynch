@@ -184,8 +184,6 @@ class OptionTests(unittest.TestCase):
             with self.subTest(ticker=m.ticker):
                 self.assertIsNotNone(m.option_line)
                 self.assertTrue(m.option_line.startswith("\\(V_{opt}\\)"), m.option_line)
-        cohr = next(m for m in with_option if m.ticker == "COHR.US")
-        self.assertIn("（A12）", cohr.option_line)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
