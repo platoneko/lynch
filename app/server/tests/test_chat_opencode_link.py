@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from lynch_reader.chat.app_log import AppLog
 from lynch_reader.chat.items import message_items
 from lynch_reader.chat.opencode import OpencodeConfig
 from lynch_reader.chat.opencode_link import OpencodeLink, OpencodeSetupError
+from lynch_reader.chat.opencode_http import OpencodeHttpError
 from tests.chat_helpers import FAKE_OPENCODE_CMD, LinkRecorder, conv, fake_opencode_env, opencode_log, until
 
 
@@ -45,12 +47,11 @@ def run_turn(tmp_path, text, **kwargs):
 
 
 def test_start_creates_a_session_in_orchestrator_mode(tmp_path):
-    sid, _ = run_turn(tmp_path, "hi", env={"FAKE_OPENCODE_MODE": "build"})
+    sid, _ = run_turn(tmp_path, "hi")
     assert sid.startswith("ses_")
-    sets = [r["params"] for r in opencode_log(tmp_path) if r.get("method") == "session/set_config_option"]
-    assert sets == [{"sessionId": sid, "configId": "mode", "value": "orchestrator"}]  # the model already matched
-    new = next(r for r in opencode_log(tmp_path) if r.get("method") == "session/new")
-    assert new["params"]["cwd"] == str(tmp_path) and new["params"]["mcpServers"] == []
+    created = next(r for r in opencode_log(tmp_path) if r.get("http") == "/api/session" and r["method"] == "POST")
+    assert created["body"]["agent"] == "orchestrator"
+    assert created["body"]["model"] == {"providerID": "0g", "id": "deepseek-v4.1-flash"}
 
 
 def test_echo_streams_deltas_then_logs_one_text_entry(tmp_path):
@@ -58,7 +59,7 @@ def test_echo_streams_deltas_then_logs_one_text_entry(tmp_path):
     assert rec.deltas == ["echo: ", "hi"]
     assert [(i["kind"], i.get("text")) for i in history(tmp_path).items] == [("user", "hi"), ("text", "echo: hi")]
     assert [e["type"] for e in rec.entries] == ["user", "assistant"]
-    assert rec.usage == [(1234, 1000000, 0.01)]
+    assert rec.usage[-1] == (1234, 1000000, 0.01)
     assert rec.turn_ends == [("end_turn", None)]
     assert history(tmp_path).context_tokens == 1234  # kept in the log for a reload after a restart
 
@@ -150,7 +151,7 @@ def test_resume_reuses_the_session_without_replay(tmp_path):
         return got, rec
     got, rec = asyncio.run(again())
     assert got == sid and rec.entries == [] and rec.deltas == []
-    assert [r["params"]["sessionId"] for r in opencode_log(tmp_path) if r.get("method") == "session/resume"] == [sid]
+    assert any(r.get("http") == f"/api/session/{sid}" and r["method"] == "GET" for r in opencode_log(tmp_path))
 
 
 def test_a_lost_session_preserves_original_identity_and_reports_failure(tmp_path):
@@ -159,7 +160,7 @@ def test_a_lost_session_preserves_original_identity_and_reports_failure(tmp_path
         with pytest.raises(OpencodeSetupError, match="session not found"):
             await link.start()
         assert not link.alive
-        assert not any(row.get("method") == "session/new" for row in opencode_log(tmp_path))
+        assert not any(row.get("http") == "/api/session" and row["method"] == "POST" for row in opencode_log(tmp_path))
     asyncio.run(main())
 
 
@@ -211,20 +212,136 @@ def test_crash_mid_turn_is_reported_once_as_an_exit(tmp_path):
     assert rec.exits == [(False, "boom")] and rec.turn_ends == []
 
 
-def test_unknown_agent_requests_get_method_not_found(tmp_path):
+def test_unknown_permission_is_rejected_without_phone_card(tmp_path):
     async def main():
         link, rec = make_link(tmp_path)
-        await link.start()
-        replies = []
-        orig = link._proc.send_json
-
-        async def spy(obj):
-            replies.append(obj)
-            await orig(obj)
-        link._proc.send_json = spy
-        link._on_message({"jsonrpc": "2.0", "id": 99, "method": "fs/read_text_file", "params": {}})
-        await until(lambda: replies)
+        sid = await link.start()
+        link._on_native({"type": "permission.asked", "data": {
+            "id": "per_unknown", "sessionID": sid, "action": "edit",
+            "resources": [str(tmp_path / "frameworks/.claude/skills/sediment-framework/SKILL.md")],
+            "source": {"type": "tool", "id": "missing", "messageID": "msg_unknown"},
+        }})
+        await until(lambda: any(r.get("http", "").endswith("per_unknown/reply") for r in opencode_log(tmp_path)))
         await link.close()
-        return replies
-    assert asyncio.run(main())[0] == {"jsonrpc": "2.0", "id": 99,
-                                      "error": {"code": -32601, "message": "fs/read_text_file is not supported"}}
+        assert rec.permissions == []
+        response = next(r for r in opencode_log(tmp_path) if r.get("http", "").endswith("per_unknown/reply"))
+        assert response["body"]["decision"] == "reject"
+    asyncio.run(main())
+
+
+def test_child_skill_permission_is_rejected_even_with_a_known_main_tool(tmp_path):
+    async def main():
+        link, rec = make_link(tmp_path)
+        sid = await link.start()
+        await link.prompt('slow')
+        await until(lambda: link._tools)
+        _, call_id = next(iter(link._tools))
+        (tmp_path / 'oc-sessions/ses_child.json').write_text(
+            (tmp_path / 'oc-sessions' / f'{sid}.json').read_text())
+        link._on_native({'type': 'permission.asked', 'data': {
+            'id': 'per_child', 'sessionID': 'ses_child', 'action': 'edit',
+            'resources': [str(tmp_path / 'frameworks/.claude/skills/sediment-framework/SKILL.md')],
+            'source': {'type': 'tool', 'id': call_id, 'messageID': 'msg_child'},
+        }})
+        await until(lambda: any(r.get('http', '').endswith('per_child/reply') for r in opencode_log(tmp_path)))
+        assert rec.permissions == []
+        response = next(r for r in opencode_log(tmp_path) if r.get('http', '').endswith('per_child/reply'))
+        assert response['body']['decision'] == 'reject'
+        await link.interrupt()
+        await until(lambda: rec.turn_ends)
+        await link.close()
+    asyncio.run(main())
+
+
+def test_start_waits_for_compaction_plugin_readiness(tmp_path):
+    async def main():
+        link, _ = make_link(tmp_path, env={'FAKE_OPENCODE_PLUGIN_DELAY': '0.5'})
+        await link.start()
+        ready = link._plugin_ready
+        assert ready.exists(), 'start returned before the required compaction hook registered'
+        await link.close()
+    asyncio.run(main())
+
+
+def test_stop_removes_admitted_input_before_interrupting_execution(tmp_path):
+    async def main():
+        link, rec = make_link(tmp_path)
+        sid = await link.start()
+        await link.prompt('pending')
+        await link.interrupt()
+        await until(lambda: rec.turn_ends)
+        calls = opencode_log(tmp_path)
+        prompt = next(r for r in calls if r.get('http', '').endswith('/prompt'))
+        deletions = [r for r in calls if r.get('http', '').endswith('/inbox/' + prompt['body']['id'])]
+        assert deletions, 'stopped admitted input remains in the native inbox'
+        deletion = deletions[0]
+        interruption = next(r for r in calls if r.get('http', '').endswith('/interrupt'))
+        assert deletion['method'] == 'DELETE' and calls.index(deletion) < calls.index(interruption)
+        native = json.loads((tmp_path / 'oc-sessions' / f'{sid}.json').read_text())
+        assert native.get('inbox', []) == []
+        assert rec.turn_ends == [('cancelled', None)]
+        await link.close()
+    asyncio.run(main())
+
+
+def test_skill_permission_cannot_smuggle_a_second_external_resource(tmp_path):
+    async def main():
+        link, rec = make_link(tmp_path)
+        sid = await link.start()
+        await link.prompt('skill')
+        await until(lambda: rec.permissions)
+        original_id, tool_id, _, _ = rec.permissions[0]
+        source, native_id = next(key for key, tracked in link._tools.items() if tracked['public_id'] == tool_id)
+        before = len(rec.permissions)
+        link._on_native({'type': 'permission.asked', 'data': {
+            'id': 'per_external', 'sessionID': sid, 'action': 'edit',
+            'resources': [str(tmp_path / 'frameworks/.claude/skills/sediment-framework/SKILL.md'), '/outside/file.md'],
+            'source': {'type': 'tool', 'id': native_id, 'messageID': source},
+        }})
+        await asyncio.sleep(.05)
+        assert len(rec.permissions) == before
+        await until(lambda: any(r.get('http', '').endswith('per_external/reply') for r in opencode_log(tmp_path)))
+        reply = next(r for r in opencode_log(tmp_path) if r.get('http', '').endswith('per_external/reply'))
+        assert reply['body']['decision'] == 'reject'
+        await link.answer(original_id, False)
+        await until(lambda: rec.turn_ends)
+        await link.close()
+    asyncio.run(main())
+
+
+@pytest.mark.parametrize('inbox_only', [False, True])
+def test_restart_reconciles_accepted_input_after_lost_admission_ack_by_exact_id(tmp_path, inbox_only):
+    async def main():
+        link, _ = make_link(tmp_path, env={'FAKE_OPENCODE_PROMPT_DROP_ACK': '1',
+                                             'FAKE_OPENCODE_ACK_INBOX_ONLY': '1' if inbox_only else '0'})
+        sid = await link.start()
+        try:
+            with pytest.raises((OpencodeHttpError, OpencodeSetupError)):
+                await link.prompt('same content can appear more than once')
+            user = next(e for e in link._log.entries() if e['type'] == 'user')
+            stable_id = user['opencode_input_id']
+            assert link._log.native_id(user['uuid']) is None
+            path = tmp_path / 'oc-sessions' / f'{sid}.json'
+            native = json.loads(path.read_text())
+            native.setdefault('messages', []).insert(0, {'id': 'msg_duplicate_text', 'type': 'user',
+                                           'text': user['message']['content'], 'time': {'created': 0}})
+            if inbox_only:
+                # Native history can contain an accepted message while it still waits in the inbox.
+                native['messages'].insert(0, {'id': stable_id, 'type': 'user',
+                                              'text': user['message']['content'], 'time': {'created': 0}})
+            path.write_text(json.dumps(native))
+        finally:
+            await link.close()
+        resumed, rec = make_link(tmp_path, c=oc_conv(opencode_session=sid))
+        try:
+            if inbox_only:
+                with pytest.raises(OpencodeSetupError, match="消息"):
+                    await resumed.start()
+            else:
+                await resumed.start()
+            assert resumed._log.native_id(user['uuid']) == (None if inbox_only else stable_id)
+            assert rec.entries == []
+            assert sum(r.get('http', '').endswith('/prompt') for r in opencode_log(tmp_path)) == 1
+        finally:
+            await resumed.close()
+    asyncio.run(main())

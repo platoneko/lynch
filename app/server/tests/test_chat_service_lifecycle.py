@@ -20,14 +20,25 @@ def test_completed_turn_during_send_drain_stays_idle(tmp_path, agent, model, eff
             chat = await service.create("research", None, "first", model, effort, window, agent=agent)
             await until(lambda: state_of(service, chat.id) == "idle")
             link = service._live[chat.id].proc
-            original_write = link._proc.send_json
+            if agent == "opencode":
+                original_request = link._http.request
 
-            async def drain_until_response(obj):
-                await original_write(obj)
-                if obj.get("method") == "session/prompt":
-                    await until(lambda: link._prompt_id is None)
+                async def drain_until_response(method, path, body=None, **kwargs):
+                    result = await original_request(method, path, body, **kwargs)
+                    if path.endswith("/prompt"):
+                        await until(lambda: link._deferred_end is not None)
+                    return result
 
-            link._proc.send_json = drain_until_response
+                link._http.request = drain_until_response
+            else:
+                original_write = link._proc.send_json
+
+                async def drain_until_response(obj):
+                    await original_write(obj)
+                    if obj.get("method") == "session/prompt":
+                        await until(lambda: link._prompt_id is None)
+
+                link._proc.send_json = drain_until_response
             await service.send(chat.id, "second")
             assert service.snapshot(chat.id)["items"][-1]["text"] == "echo: second"
             assert state_of(service, chat.id) == "idle"
@@ -50,10 +61,13 @@ def test_failed_send_leaves_the_chat_resumable(tmp_path, agent, model, effort, w
             await until(lambda: state_of(service, chat.id) == "idle")
             link = service._live[chat.id].proc
 
-            async def broken(_obj):
+            async def broken(*_args, **_kwargs):
                 raise BrokenPipeError("synthetic broken input")
 
-            link._proc.send_json = broken
+            if agent == "opencode":
+                link._http.request = broken
+            else:
+                link._proc.send_json = broken
             with pytest.raises(Conflict):
                 await service.send(chat.id, "lost input")
             assert state_of(service, chat.id) == "dormant"

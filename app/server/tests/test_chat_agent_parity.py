@@ -216,6 +216,29 @@ def test_edit_commits_native_fork_and_active_log_branch_together(
     asyncio.run(main())
 
 
+def test_opencode_edit_commits_remapped_native_ids_with_branch(tmp_path, monkeypatch):
+    async def main():
+        service, conversation, link = controlled(tmp_path, monkeypatch, "opencode")
+        try:
+            await service.send(conversation.id, "keep")
+            link.finish()
+            first = next(e for e in link._log.entries() if e.get("message", {}).get("content") == "keep")
+            link._log.bind_native(first["uuid"], "old-id")
+            await service.send(conversation.id, "replace")
+            link.finish()
+            old = next(item for item in service.snapshot(conversation.id)["items"] if item.get("text") == "replace")
+            link.fork_native_ids = {first["uuid"]: "fork-id"}
+            await service.edit(conversation.id, old["uuid"], "edited")
+            from lynch_reader.chat.app_log import AppLog
+            assert AppLog(link._log.path).native_id(first["uuid"]) == "fork-id"
+            branch = next(e for e in reversed(link._log.entries()) if e.get("subtype") == "lynch_branch")
+            assert branch["native_ids"] == link.fork_native_ids
+            assert branch["native_session"] == "forked-session"
+        finally:
+            await service.shutdown()
+    asyncio.run(main())
+
+
 def test_restart_reconciles_only_inputs_with_persisted_native_acceptance(
     tmp_path, monkeypatch
 ):

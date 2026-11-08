@@ -1,11 +1,48 @@
 import asyncio
 import json
+import tomllib
 
 import pytest
 
 from lynch_reader.chat.service import Conflict, Live
 from tests.chat_helpers import conv
 from tests.test_chat_codex_service import codex_service
+
+
+def test_grok_research_uses_configured_user_skill_home(tmp_path):
+    async def main():
+        user_home = tmp_path / "custom-grok"
+        (user_home / "skills").mkdir(parents=True)
+        service = codex_service(tmp_path, env={"GROK_HOME": str(user_home)})
+        conversation = conv(kind="research", ticker=None, agent="grok", model="grok-4.6", effort="high")
+        service._index.put(conversation)
+        try:
+            await service._spawn_research_grok(conversation)
+            home = tmp_path / "grok-logs/c1.grok-home"
+            config = tomllib.loads((home / "config.toml").read_text())
+            assert config["skills"]["paths"] == [str(user_home / "skills")]
+        finally:
+            await service.shutdown()
+
+    asyncio.run(main())
+
+
+def test_grok_research_preserves_unknown_legacy_skill_entry(tmp_path):
+    async def main():
+        service = codex_service(tmp_path)
+        conversation = conv(kind="research", ticker=None, agent="grok", model="grok-4.6", effort="high")
+        service._index.put(conversation)
+        entry = tmp_path / "grok-logs/c1.grok-home/skills"
+        entry.mkdir(parents=True)
+        (entry / "keep").write_text("keep")
+        try:
+            await service._spawn_research_grok(conversation)
+            assert (entry / "keep").read_text() == "keep"
+            assert service._live[conversation.id].proc is not None
+        finally:
+            await service.shutdown()
+
+    asyncio.run(main())
 
 
 def test_codex_unacknowledged_native_send_stays_uncertain(tmp_path):
@@ -179,8 +216,8 @@ def test_discover_failed_result_without_progress_keeps_uncertain_input(
 @pytest.mark.parametrize("agent", ["claude", "codex", "grok", "opencode"])
 @pytest.mark.parametrize("action", ["stop", "shutdown"])
 def test_stopping_during_research_preparation_prevents_start(tmp_path, agent, action):
-    from types import SimpleNamespace
-    from tests.test_chat_finance_skills import MODELS, noop
+    models = {"claude": ("claude-opus-5-5", "medium"), "codex": ("gpt-test", "low"),
+              "grok": ("grok-4.6", "high"), "opencode": ("0g/deepseek-v4.1-flash", "default")}
 
     entered, release = asyncio.Event(), asyncio.Event()
 
@@ -189,12 +226,11 @@ def test_stopping_during_research_preparation_prevents_start(tmp_path, agent, ac
         await release.wait()
 
     async def main():
-        service = codex_service(
-            tmp_path, skills=SimpleNamespace(refresh=prepare, close=noop)
-        )
+        service = codex_service(tmp_path)
+        service._make_room = prepare
         task = asyncio.create_task(
             service.create(
-                "research", None, "do not execute", *MODELS[agent], agent=agent
+                "research", None, "do not execute", *models[agent], agent=agent
             )
         )
         try:

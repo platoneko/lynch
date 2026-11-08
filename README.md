@@ -17,14 +17,14 @@ Agent 应加载 skill **`sediment-framework`**：**先持续对话**对齐分类
 模板：`frameworks/_TEMPLATE.md`。协作硬约束：`frameworks/AGENTS.md`（框架）· `AGENTS.md`（开发）。  
 标的池 = 扫 `frameworks/*.md`（排除 `_` 前缀与 `AGENTS.md` / `README.md`）；**不**维护 `universe.yaml`。
 
-首次克隆：`gh repo clone platoneko/lynch-frameworks frameworks`（在本仓库根执行）。代码仓库与内容仓库需要分别克隆；然后执行 `just skills-update` 安装最新版 finance-skills，四种 agent 共用，不需要原机器上的 `agent/finance-skills`。在 `frameworks/` 执行 `just check` 验证框架。
+首次克隆：`gh repo clone platoneko/lynch-frameworks frameworks`（在本仓库根执行）。代码仓库与内容仓库需要分别克隆。在 `frameworks/` 执行 `just check` 验证框架。
 
 ## 目录
 
 | 路径 | 说明 |
 |------|------|
 | `frameworks/` | 内容仓库 `lynch-frameworks` 的检出（本仓忽略）：单票框架、共享情景轴、每票演算、skill |
-| `.agents/skills` | 项目自有技能与 finance-skills 的共享入口；第三方源码保存在内容仓库 `frameworks/.claude/skills/` |
+| `.agents/skills` | 项目自有技能入口 |
 | `.claude/skills`、`.grok/skills` | → `.agents/skills`（软链）；sediment-framework 仍来自内容仓库 |
 | `eval/lib/` | 估值 / 解析 / zone 规则库 |
 | `scripts/` | 日报、财报提醒、索引生成、跨票体检 |
@@ -32,13 +32,7 @@ Agent 应加载 skill **`sediment-framework`**：**先持续对话**对齐分类
 | `.mcp.json` | Wisburg MCP（本地，gitignore） |
 | `_local/` | 个人草稿，不入库 |
 
-## 四种研究工具的 finance-skills
-
-Claude Code、Codex、Grok 研究模式和 opencode 每次启动或恢复研究进程前，都会检查并同步上游 `himself65/finance-skills` 的全部技能；更新失败或超时会明确报错，不启动该次研究进程。更新不会主动重启已有对话；Grok「发现新票」继续使用搜索专用规则。
-
-终端里运行 `just skills-update` 可以手动同步；它调用内容仓库自己的更新器，再把 app 的技能入口链接到内容仓库。单独在 lynch-frameworks 中运行同名命令也能更新，不依赖外层 lynch。完整第三方源码、参考文件和来源清单随内容仓库保存，更新会体现在内容仓库的 Git 差异里；代码仓库不再安装另一套副本。更新不会自动暂存或提交文件。
-
-安装使用固定版本的标准 skills 安装器，并把它需要的 Node 22.20 运行时缓存到内容仓库的 `_local/tmp/`，不改系统 Node。安装先完整检查，再统一发布；本地改写的技能与未知入口会报错保留，sediment-framework 和 discover-kol 保留。发布中断后下次更新先恢复旧文件；旧版本备份也留在内容仓库的 `_local/tmp/`。首次安装需要能访问 GitHub 和 npm。
+Claude Code、Codex、Grok 和 opencode 的研究对话使用的外部技能，由用户级安装器独立安装和更新；各工具按自己的规则发现技能。app 启动对话时不再安装或更新外部技能。
 
 ## 手机 app 的对话功能
 

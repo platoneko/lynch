@@ -1,4 +1,4 @@
-"""Authenticated loopback bridge to the HTTP API served by our own ACP process."""
+"""Authenticated loopback client for the private OpenCode 2 server."""
 
 from __future__ import annotations
 
@@ -9,7 +9,9 @@ from urllib.parse import urlencode
 
 
 class OpencodeHttpError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 class OpencodeHttp:
@@ -24,7 +26,7 @@ class OpencodeHttp:
         )
         payload = b"" if body is None else json.dumps(body, ensure_ascii=False).encode()
         path += ("&" if "?" in path else "?") + urlencode(
-            {"directory": self._directory}
+            {"location[directory]": self._directory}
         )
         headers = (
             f"{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{self.port}\r\n"
@@ -42,8 +44,15 @@ class OpencodeHttp:
                 key, value = line.decode().split(":", 1)
                 response_headers[key.lower()] = value.strip()
             if len(status) < 2 or int(status[1]) >= 400:
+                data = b"".join([chunk async for chunk in self._chunks(reader, response_headers)])
+                try:
+                    message = json.loads(data).get("message", "")
+                except (ValueError, AttributeError):
+                    message = ""
                 raise OpencodeHttpError(
                     f"opencode HTTP {status[1] if len(status) > 1 else '连接中断'}"
+                    + (f"：{message}" if message else ""),
+                    status=int(status[1]) if len(status) > 1 else None,
                 )
             return reader, writer, response_headers
         except BaseException:
@@ -87,15 +96,17 @@ class OpencodeHttp:
                 await writer.wait_closed()
 
     async def events(self):
-        reader, writer, headers = await self._open("GET", "/event")
+        reader, writer, headers = await self._open("GET", "/api/event")
         pending = b""
         try:
             async for chunk in self._chunks(reader, headers):
                 pending += chunk
                 while b"\n" in pending:
                     line, pending = pending.split(b"\n", 1)
-                    if line.startswith(b"data: "):
-                        yield json.loads(line[6:])
+                    if line.startswith(b"data:"):
+                        event = json.loads(line[5:].strip())
+                        # V2's SSE schema encodes each event as a JSON string.
+                        yield json.loads(event) if isinstance(event, str) else event
         finally:
             writer.close()
             await writer.wait_closed()

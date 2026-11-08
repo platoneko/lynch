@@ -1,4 +1,4 @@
-"""Regression coverage for lifecycle rules shared by the two research ACP links."""
+"""Regression coverage for lifecycle rules shared by the research links."""
 
 from __future__ import annotations
 
@@ -6,7 +6,9 @@ import asyncio
 
 import pytest
 
-from tests.chat_helpers import until
+from lynch_reader.chat.opencode_link import OpencodeLink
+from lynch_reader.chat.opencode_http import OpencodeHttp
+from tests.chat_helpers import opencode_log, until
 from tests.test_chat_grok_link import make_link as grok_link
 from tests.test_chat_opencode_link import make_link as opencode_link
 
@@ -23,12 +25,16 @@ def test_cancelled_start_closes_the_process(tmp_path, factory, hang):
         link, _ = factory(tmp_path, env={hang: "1"})
         starting = asyncio.create_task(link.start())
         try:
-            await until(lambda: link.alive and bool(link._calls))
+            if isinstance(link, OpencodeLink):
+                await until(lambda: link.alive and any(r.get("http") == "/api/info" for r in opencode_log(tmp_path)))
+            else:
+                await until(lambda: link.alive and bool(link._calls))
             starting.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await starting
             assert not link.alive
-            assert not link._calls
+            if not isinstance(link, OpencodeLink):
+                assert not link._calls
         finally:
             await link.close()
 
@@ -38,6 +44,16 @@ def test_cancelled_start_closes_the_process(tmp_path, factory, hang):
 def offline_wire(link):
     """Model the native protocol boundary, including accepted user identities and history reads."""
     messages = []
+    if isinstance(link, OpencodeLink):
+        link._session = "offline-session"
+        link._http = OpencodeHttp(0, "unused-test-password", str(link._cfg.repo_root))
+
+        async def admit(method, path, body=None, **kwargs):
+            assert method == "POST" and path.endswith("/prompt")
+            return {"data": {"id": body["id"], "sessionID": link._session}}
+
+        link._http.request = admit
+        return
 
     async def request(method, path, body=None, **kwargs):
         assert method == "GET" and path.endswith("/message")
@@ -112,14 +128,23 @@ def test_a_turn_without_usage_does_not_record_the_previous_turns_usage(
         offline_wire(link)
         for count, used in enumerate((123, None), 1):
             await link.prompt("question")
-            if used is not None:
+            if isinstance(link, OpencodeLink):
+                if used is not None:
+                    link._on_native({"type": "session.step.ended", "data": {
+                        "sessionID": link._session, "assistantMessageID": f"reply-{count}", "finish": "stop",
+                        "cost": 0, "tokens": {"input": used, "output": 0, "cache": {"read": 0, "write": 0}}}})
+                link._on_native({"type": "session.text.delta", "data": {
+                    "sessionID": link._session, "assistantMessageID": f"reply-{count}", "ordinal": 0, "delta": "reply"}})
+                link._on_native({"type": "session.execution.succeeded", "data": {"sessionID": link._session}})
+            else:
+                if used is not None:
+                    link._on_update(
+                        {"sessionUpdate": "usage_update", "used": used, "size": 500000}
+                    )
                 link._on_update(
-                    {"sessionUpdate": "usage_update", "used": used, "size": 500000}
+                    {"sessionUpdate": "agent_message_chunk", "content": {"text": "reply"}}
                 )
-            link._on_update(
-                {"sessionUpdate": "agent_message_chunk", "content": {"text": "reply"}}
-            )
-            link._on_response(link._prompt_id, {"result": {"stopReason": "end_turn"}})
+                link._on_response(link._prompt_id, {"result": {"stopReason": "end_turn"}})
             await until(lambda: len(events.turn_ends) == count)
         replies = [e for e in events.entries if e["type"] == "assistant"]
         assert replies[0]["message"]["usage"] == {"input_tokens": 123}

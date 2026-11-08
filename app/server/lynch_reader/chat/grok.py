@@ -165,21 +165,29 @@ def write_research_rules(cfg: GrokConfig, conv: Conversation) -> Path:
     return path
 
 
-def write_research_home(cfg: GrokConfig, conv: Conversation, real_home: Path) -> Path:
+def write_research_home(cfg: GrokConfig, conv: Conversation, real_home: Path, *, skill_home: Path | None = None) -> Path:
     """A per-chat grok home so dontAsk / allow / ask / deny override the user's always-approve (spike §2)."""
-    home = cfg.logs / f"{conv.id}.grok-home"
-    home.mkdir(parents=True, exist_ok=True)
-    home.joinpath("config.toml").write_text(_research_config_toml(), encoding="utf-8")
-    for name in ("auth.json", "models_cache.json"):
-        src, dest = real_home / name, home / name
-        if dest.is_symlink() or dest.exists():
-            dest.unlink()
-        if src.exists():
-            dest.symlink_to(src)
+    try:
+        home = cfg.logs / f"{conv.id}.grok-home"
+        home.mkdir(parents=True, exist_ok=True)
+        source = (skill_home or real_home) / "skills"
+        if source.exists() and not source.is_dir():
+            raise GrokSetupError(f"Grok 用户技能路径 {source} 不是目录")
+        home.joinpath("config.toml").write_text(_research_config_toml(source), encoding="utf-8")
+        for name in ("auth.json", "models_cache.json"):
+            src, dest = real_home / name, home / name
+            if dest.is_symlink() and dest.resolve() == src.resolve():
+                continue
+            if dest.is_symlink() or dest.exists():
+                raise GrokSetupError(f"Grok 对话目录中的 {name} 已存在，已保留原文件")
+            if src.exists():
+                dest.symlink_to(src)
+    except (OSError, RuntimeError) as error:
+        raise GrokSetupError(f"无法准备 Grok 对话目录：{error}") from error
     return home
 
 
-def _research_config_toml() -> str:
+def _research_config_toml(skill_source: Path) -> str:
     def block(key: str, rules: tuple[str, ...]) -> str:
         body = "".join(f'    "{r}",\n' for r in rules)
         return f"{key} = [\n{body}]"
@@ -191,6 +199,9 @@ def _research_config_toml() -> str:
         block("allow", RESEARCH_ALLOW),
         block("ask", RESEARCH_ASK),
         block("deny", RESEARCH_DENY),
+        "",
+        "[skills]",
+        f"paths = [{json.dumps(str(skill_source), ensure_ascii=False)}]",
         "",
     ])
 

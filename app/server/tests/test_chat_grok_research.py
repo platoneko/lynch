@@ -94,11 +94,26 @@ def test_write_research_home_is_dontAsk_with_symlinked_auth(tmp_path):
     (real / "auth.json").write_text("token", encoding="utf-8")
     (real / "models_cache.json").write_text("{}", encoding="utf-8")
     home = write_research_home(cfg(tmp_path), conv(kind="research", ticker=None), real)
-    assert home == tmp_path / "logs" / "c1.grok-home"
     text = (home / "config.toml").read_text(encoding="utf-8")
     assert 'permission_mode = "dontAsk"' in text
     assert "Edit(frameworks/**)" in text and "sediment-framework" in text
     assert (home / "auth.json").resolve() == (real / "auth.json").resolve()
+    assert (home / "sessions").resolve() == (tmp_path / "logs/c1.grok-home/sessions").resolve()
+
+
+def test_write_research_home_allows_absent_user_skills(tmp_path):
+    home = write_research_home(cfg(tmp_path), conv(), tmp_path / "missing-home")
+    assert not (home / "skills").exists()
+
+
+def test_write_research_home_rejects_non_directory_skills(tmp_path):
+    from lynch_reader.chat.grok import GrokSetupError
+    real = tmp_path / "real-grok"
+    real.mkdir()
+    (real / "skills").write_text("keep")
+    with pytest.raises(GrokSetupError, match="技能路径"):
+        write_research_home(cfg(tmp_path), conv(), real)
+    assert (real / "skills").read_text() == "keep"
 
 
 @pytest.mark.parametrize("tool,path,denied", [
