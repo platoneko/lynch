@@ -17,7 +17,7 @@ from lynch_reader.chat import transcript
 from lynch_reader.chat.approvals import (AUTO_DENY_MESSAGE, USER_DENY_MESSAGE, Approval, approvable_path,
                                          new_approval)
 from lynch_reader.chat.candidates import CandidateStore
-from lynch_reader.chat.codex import CodexConfig, CodexModel, codex_env
+from lynch_reader.chat.codex import DEFAULT_CODEX_EFFORT, DEFAULT_CODEX_MODEL, CodexConfig, CodexModel, codex_env
 from lynch_reader.chat.codex_link import CodexLink, CodexSetupError, discover_models
 from lynch_reader.chat.events import LinkEvents
 from lynch_reader.chat.watch import WatchStore
@@ -182,6 +182,10 @@ class ChatService:
                 return
             try:
                 self._codex_models = await discover_models(self._codex, self._codex_env)
+                self._codex_models = [
+                    replace(m, default_effort=DEFAULT_CODEX_EFFORT)
+                    if m.id == DEFAULT_CODEX_MODEL and DEFAULT_CODEX_EFFORT in m.efforts else m
+                    for m in self._codex_models]
                 self._codex_hint = None if self._codex_models else "Codex 没有可用模型，请在终端检查 codex 登录与模型配置"
             except (CodexSetupError, OSError) as e:
                 self._codex_models = []
@@ -189,7 +193,8 @@ class ChatService:
             self._codex_models_at = self._now()
 
     def _codex_default(self) -> CodexModel:
-        return next((m for m in self._codex_models if m.is_default), self._codex_models[0])
+        return next((m for m in self._codex_models if m.id == DEFAULT_CODEX_MODEL),
+                    next((m for m in self._codex_models if m.is_default), self._codex_models[0]))
 
     def _grok_block(self, models: list, preferred: str, *, lookback: bool) -> dict:
         default = next((m for m in models if m.id == preferred), models[0] if models else None)

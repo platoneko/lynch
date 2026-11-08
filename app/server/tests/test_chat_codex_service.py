@@ -64,6 +64,29 @@ def test_codex_catalog_is_shared_cached_and_refreshes_after_five_minutes(tmp_pat
     assert refreshed["codex"]["default_model"] == "gpt-other"
 
 
+@pytest.mark.parametrize("kind,ticker", [("research", None), ("ticker", "AAA.US")])
+def test_new_chats_prefer_terra_xhigh_over_codex_account_defaults(tmp_path, monkeypatch, kind, ticker):
+    async def discover(cfg, env):
+        return [*models(), CodexModel("gpt-6.1-terra", "GPT 6.1 Terra", ("medium", "high", "xhigh"), "high")]
+
+    monkeypatch.setattr("lynch_reader.chat.service.discover_models", discover)
+    svc = codex_service(tmp_path)
+    (tmp_path / "frameworks" / "AAA.US.md").write_text("# AAA\n")
+    with TestClient(Starlette(routes=chat_routes(svc, tmp_path / "frameworks"), lifespan=chat_lifespan(svc))) as client:
+        catalog = client.get("/api/chats/codex/options").json()
+        assert catalog["default_model"] == "gpt-6.1-terra"
+        assert next(m for m in catalog["models"] if m["id"] == "gpt-6.1-terra")["default_effort"] == "xhigh"
+        response = client.post("/api/chats", json={"kind": kind, "ticker": ticker, "text": "hi", "agent": "codex"})
+        response.raise_for_status()
+        row = svc.snapshot(response.json()["id"])["conv"]
+        assert (row["agent"], row["model"], row["effort"]) == ("codex", "gpt-6.1-terra", "xhigh")
+        explicit = client.post("/api/chats", json={"kind": kind, "ticker": ticker, "text": "hi",
+                                                  "agent": "codex", "model": "gpt-selected", "effort": "high"})
+        explicit.raise_for_status()
+        row = svc.snapshot(explicit.json()["id"])["conv"]
+        assert (row["model"], row["effort"]) == ("gpt-selected", "high")
+
+
 @pytest.mark.parametrize("error", [CodexSetupError("请在终端运行 codex login"), OSError("codex missing")])
 def test_codex_catalog_failure_is_visible_and_does_not_break_other_options(tmp_path, monkeypatch, error):
     async def discover(cfg, env):

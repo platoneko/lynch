@@ -18,6 +18,8 @@ from lynch_reader.chat.config import GIT_BLOCKED_COMMANDS, GIT_RULE_TAIL, LONGBR
 from lynch_reader.chat.index import Conversation
 
 SETUP_TIMEOUT_S = 45.0
+DEFAULT_CODEX_MODEL = "gpt-6.1-terra"
+DEFAULT_CODEX_EFFORT = "xhigh"
 _BASH_LANGUAGE = Language(tree_sitter_bash.language())
 _SHELLS = {"bash", "sh", "zsh", "dash"}
 _DYNAMIC_WORDS = {"simple_expansion", "expansion", "command_substitution", "process_substitution",
