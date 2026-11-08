@@ -33,6 +33,19 @@ const options: ChatOptions = {
 };
 
 describe('Codex model selection', () => {
+  it('uses the server Codex defaults when creating a research chat', () => {
+    const defaults = { ...options, default_agent: 'codex' as const, codex: {
+      models: [...options.codex.models,
+        { id: 'gpt-6.1-terra', label: 'GPT 6.1 Terra', efforts: ['medium', 'high', 'xhigh'], default_effort: 'xhigh' }],
+      default_model: 'gpt-6.1-terra', hint: null,
+    } };
+    const picked = researchSettings(defaults, defaults.default_agent);
+    expect(canStartResearch(defaults, defaults.default_agent, picked.model, picked.effort)).toBe(true);
+    expect(newChatBody({ discover: false, kind: 'research', ticker: null, text: '调研',
+      agent: defaults.default_agent, model: picked.model, effort: picked.effort, ctxWindow: 0, lookbackDays: 2,
+    })).toEqual({ kind: 'research', ticker: null, text: '调研', agent: 'codex', model: 'gpt-6.1-terra', effort: 'xhigh' });
+  });
+
   it('uses the server model list and the selected model default effort', () => {
     const selection = researchSettings(options, 'codex');
     expect(selection.models.map((m) => m.id)).toEqual(['server-model-a', 'server-model-b']);
