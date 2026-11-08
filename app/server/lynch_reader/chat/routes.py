@@ -16,7 +16,7 @@ from lynch_reader.catalog import framework_path
 from lynch_reader.chat.config import DEFAULT_EFFORT, DEFAULT_MODEL
 from lynch_reader.chat.grok import DEFAULT_RESEARCH_EFFORT, DEFAULT_RESEARCH_MODEL, DEFAULT_WINDOW
 from lynch_reader.chat.opencode import DEFAULT_OPENCODE_MODEL, OPENCODE_EFFORT
-from lynch_reader.chat.service import ChatService, Conflict, Invalid, NotFound
+from lynch_reader.chat.service import DEFAULT_AGENT, ChatService, Conflict, Invalid, NotFound
 
 log = logging.getLogger(__name__)
 
@@ -98,9 +98,11 @@ def chat_routes(service: ChatService, frameworks_dir: Path) -> list[Route]:
         kind, ticker = body.get("kind"), body.get("ticker")
         if kind == "ticker" and framework_path(str(ticker or ""), frameworks_dir) is None:
             raise Invalid("unknown ticker")
-        # 研究 / 讨论 default Grok (model, effort, window); Claude / opencode leave those to their agent defaults.
+        # 研究 / 讨论 default Codex; each agent resolves its own model and effort defaults.
         # 发现新票 names model, effort, window and lookback.
         agent = body.get("agent")
+        if agent is None or agent == "":
+            agent = "grok" if kind == "discover" else DEFAULT_AGENT
         window = body.get("context_window")
         if kind == "discover" or agent == "codex":
             model, effort = None, None
