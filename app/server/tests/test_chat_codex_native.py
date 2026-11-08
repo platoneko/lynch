@@ -52,14 +52,14 @@ def child_event(link, method, **params):
     link._on_message({"method": method, "params": {"threadId": "child", "turnId": "child-turn", **params}})
 
 
-def start_child(link, parent="parent", child="child", via_thread_started=False):
+def start_child(link, parent="parent", child="child", via_thread_started=False, kind="started"):
     if via_thread_started:
         link._on_message({"method": "thread/started", "params": {"thread": {
             "id": child, "parentThreadId": parent}}})
     else:
         link._on_message({"method": "item/started", "params": {"threadId": parent,
             "turnId": "turn" if parent == "parent" else "child-turn", "item": {
-                "id": "spawn-" + child, "type": "subAgentActivity", "kind": "started", "agentThreadId": child}}})
+                "id": "spawn-" + child, "type": "subAgentActivity", "kind": kind, "agentThreadId": child}}})
     link._on_message({"method": "turn/started", "params": {"threadId": child,
         "turn": {"id": "child-turn", "status": "inProgress"}}})
 
@@ -67,9 +67,10 @@ def start_child(link, parent="parent", child="child", via_thread_started=False):
 @pytest.mark.parametrize("command,accepted", [("cat frameworks/TEST.US.md", True),
                                            ("cd frameworks && just check", True),
                                            ("git -C frameworks push", False), ("longbridge assets", False)])
-def test_child_commands_use_same_guardrails_as_parent(tmp_path, monkeypatch, command, accepted):
+@pytest.mark.parametrize("kind", ["started", "interacted"])
+def test_child_commands_use_same_guardrails_as_parent(tmp_path, monkeypatch, command, accepted, kind):
     rec, link, replies = active_link(tmp_path, monkeypatch)
-    start_child(link)
+    start_child(link, kind=kind)
     link._on_message({"id": "child-approval", "method": "item/commandExecution/requestApproval", "params": {
         "threadId": "child", "turnId": "child-turn", "command": command}})
     assert replies == [(("child-approval", {"decision": "accept" if accepted else "decline"}), {})]
@@ -78,9 +79,10 @@ def test_child_commands_use_same_guardrails_as_parent(tmp_path, monkeypatch, com
 
 @pytest.mark.parametrize("path,accepted", [("frameworks/TEST.US.md", True),
     ("frameworks/.claude/skills/sediment-framework/SKILL.md", False), ("app/server/outside.py", False)])
-def test_child_patches_check_paths_and_cannot_request_skill_edits(tmp_path, monkeypatch, path, accepted):
+@pytest.mark.parametrize("kind", ["started", "interacted"])
+def test_child_patches_check_paths_and_cannot_request_skill_edits(tmp_path, monkeypatch, path, accepted, kind):
     rec, link, replies = active_link(tmp_path, monkeypatch)
-    start_child(link)
+    start_child(link, kind=kind)
     child_event(link, "item/started", item={"id": "patch", "type": "fileChange", "changes": [
         {"path": path, "kind": {"type": "update"}, "diff": "+change"}]})
     link._on_message({"id": "child-approval", "method": "item/fileChange/requestApproval", "params": {
@@ -90,9 +92,10 @@ def test_child_patches_check_paths_and_cannot_request_skill_edits(tmp_path, monk
 
 
 @pytest.mark.parametrize("state", ["unrelated", "stale", "completed", "parent-ended"])
-def test_child_approvals_reject_unrelated_or_inactive_turns(tmp_path, monkeypatch, state):
+@pytest.mark.parametrize("kind", ["started", "interacted"])
+def test_child_approvals_reject_unrelated_or_inactive_turns(tmp_path, monkeypatch, state, kind):
     rec, link, replies = active_link(tmp_path, monkeypatch)
-    start_child(link, parent="other" if state == "unrelated" else "parent")
+    start_child(link, parent="other" if state == "unrelated" else "parent", kind=kind)
     if state == "completed":
         child_event(link, "turn/completed", turn={"id": "child-turn", "status": "completed"})
     elif state == "parent-ended":
@@ -104,10 +107,11 @@ def test_child_approvals_reject_unrelated_or_inactive_turns(tmp_path, monkeypatc
         assert rec.turn_ends == []
 
 
-def test_grandchild_is_recognized_and_child_items_do_not_alias_parent_items(tmp_path, monkeypatch):
+@pytest.mark.parametrize("kind", ["started", "interacted"])
+def test_grandchild_is_recognized_and_child_items_do_not_alias_parent_items(tmp_path, monkeypatch, kind):
     rec, link, replies = active_link(tmp_path, monkeypatch)
-    start_child(link)
-    start_child(link, parent="child", child="grandchild")
+    start_child(link, kind=kind)
+    start_child(link, parent="child", child="grandchild", kind=kind)
     item_event(link, {"id": "patch", "type": "fileChange", "changes": [
         {"path": "frameworks/TEST.US.md", "kind": {"type": "update"}}]})
     child_event(link, "item/started", item={"id": "patch", "type": "fileChange", "changes": [
@@ -128,10 +132,11 @@ def test_child_thread_started_metadata_remains_supported(tmp_path, monkeypatch):
     assert replies == [(("read", {"decision": "accept"}), {})]
 
 
-def test_child_creation_and_approval_wait_for_parent_turn_start_ack(tmp_path, monkeypatch):
+@pytest.mark.parametrize("kind", ["started", "interacted"])
+def test_child_creation_and_approval_wait_for_parent_turn_start_ack(tmp_path, monkeypatch, kind):
     _, link, replies = active_link(tmp_path, monkeypatch)
     link._starting = True
-    start_child(link)
+    start_child(link, kind=kind)
     link._on_message({"id": "read", "method": "item/commandExecution/requestApproval", "params": {
         "threadId": "child", "turnId": "child-turn", "command": "cat README.md"}})
     assert replies == []
