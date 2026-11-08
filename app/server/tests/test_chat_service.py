@@ -414,7 +414,7 @@ def test_list_counts_running_and_hides_missing_transcripts(tmp_path):
 def test_create_validates(tmp_path, kind, ticker, text, model, effort):
     svc, _ = make_service(tmp_path)
     with pytest.raises(Invalid):
-        asyncio.run(svc.create(kind, ticker, text, model, effort, agent="claude"))
+        asyncio.run(svc.create(kind, ticker, text, model, effort))
 
 
 def test_options_lists_models_and_defaults(tmp_path):
@@ -424,9 +424,9 @@ def test_options_lists_models_and_defaults(tmp_path):
     assert {"id": "claude-haiku-4-5", "label": "Haiku 4.5"} in opts["models"]
 
 
-def test_options_list_agents_with_codex_default(tmp_path):
+def test_options_list_agents_with_grok_default(tmp_path):
     opts = make_service(tmp_path)[0].options()
-    assert opts["default_agent"] == "codex"
+    assert opts["default_agent"] == "grok"
     assert opts["agents"][0] == {"id": "grok", "label": "Grok"}
     assert {a["id"] for a in opts["agents"]} == {"grok", "claude", "opencode", "codex"}
     assert opts["grok"]["default_model"] == "grok-4.6"

@@ -67,7 +67,7 @@ export function ChatPage({ id, newTicker, newDiscover, firstMessage, options: pr
   const [compactOpen, setCompactOpen] = useState(false);
   const [compactHint, setCompactHint] = useState('');
   const [renaming, setRenaming] = useState<string | null>(null); // the title being typed, while the sheet is open
-  const [agent, setAgent] = useState<ChatAgent>(() => options?.default_agent ?? 'codex'); // 研究 / 讨论
+  const [agent, setAgent] = useState<ChatAgent>(() => options?.default_agent ?? 'grok'); // 研究 / 讨论
   const [model, setModel] = useState('');
   const [effort, setEffort] = useState('');
   const initialized = useRef(false); // do not replace an explicitly selected unavailable agent

@@ -53,7 +53,7 @@ def test_codex_catalog_is_shared_cached_and_refreshes_after_five_minutes(tmp_pat
         return initial, svc.options()
 
     initial, refreshed = asyncio.run(main())
-    assert initial["default_agent"] == "codex"
+    assert initial["default_agent"] == "grok"
     assert {"id": "grok", "label": "Grok"} in initial["agents"]
     assert initial["grok"]["default_model"] == "grok-4.6"
     assert {"id": "codex", "label": "Codex"} in initial["agents"]
@@ -76,7 +76,7 @@ def test_new_chats_prefer_terra_xhigh_over_codex_account_defaults(tmp_path, monk
         catalog = client.get("/api/chats/codex/options").json()
         assert catalog["default_model"] == "gpt-6.1-terra"
         assert next(m for m in catalog["models"] if m["id"] == "gpt-6.1-terra")["default_effort"] == "xhigh"
-        response = client.post("/api/chats", json={"kind": kind, "ticker": ticker, "text": "hi"})
+        response = client.post("/api/chats", json={"kind": kind, "ticker": ticker, "text": "hi", "agent": "codex"})
         response.raise_for_status()
         row = svc.snapshot(response.json()["id"])["conv"]
         assert (row["agent"], row["model"], row["effort"]) == ("codex", "gpt-6.1-terra", "xhigh")

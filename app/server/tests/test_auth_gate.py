@@ -42,7 +42,7 @@ def test_unpaired_page_load_goes_to_pairing(app_parts):
 def test_unpaired_api_asset_and_stream_are_401(app_parts):
     app, _, cookies = app_parts
     with TestClient(app, cookies=cookies) as paired:
-        conv_id = paired.post("/api/chats", json={"kind": "research", "text": "hi", "agent": "grok"}).json()["id"]
+        conv_id = paired.post("/api/chats", json={"kind": "research", "text": "hi"}).json()["id"]
         c = anon(app)
         for path in ("/api/tickers", "/api/frameworks/AAA.US", "/assets/app.js"):
             r = c.get(path)
