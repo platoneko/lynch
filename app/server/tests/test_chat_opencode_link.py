@@ -325,6 +325,10 @@ def test_restart_reconciles_accepted_input_after_lost_admission_ack_by_exact_id(
             native = json.loads(path.read_text())
             native.setdefault('messages', []).insert(0, {'id': 'msg_duplicate_text', 'type': 'user',
                                            'text': user['message']['content'], 'time': {'created': 0}})
+            if inbox_only:
+                # Native history can contain an accepted message while it still waits in the inbox.
+                native['messages'].insert(0, {'id': stable_id, 'type': 'user',
+                                              'text': user['message']['content'], 'time': {'created': 0}})
             path.write_text(json.dumps(native))
         finally:
             await link.close()

@@ -121,7 +121,7 @@ class OpencodeLink:
                 if any(item["type"] == "compaction" for item in inbox["data"]):
                     raise OpencodeSetupError("原生会话仍有待核实的压缩请求，未恢复执行；请先核实原会话")
                 messages = await self._messages()
-                await self._reconcile_admission(messages)
+                await self._reconcile_admission(messages, inbox["data"])
                 if inbox["data"]:
                     raise OpencodeSetupError("原生会话仍有待核实的消息，未恢复执行；请先核实原会话")
                 await self._sync_compactions(messages)
@@ -449,8 +449,9 @@ class OpencodeLink:
         title = info.get("title") or self._title
         return title if title and not title.startswith("New session") else None
 
-    async def _reconcile_admission(self, messages: list[dict]) -> None:
-        received = {m["id"] for m in messages if m["type"] == "user"}
+    async def _reconcile_admission(self, messages: list[dict], inbox: list[dict]) -> None:
+        pending = {item["id"] for item in inbox}
+        received = {m["id"] for m in messages if m["type"] == "user" and m["id"] not in pending}
         branch = current_branch(self._log.entries())
         uncertain = [e for e in branch if e.get("opencode_input_id")
                      and self._log.native_id(e["uuid"]) is None]
