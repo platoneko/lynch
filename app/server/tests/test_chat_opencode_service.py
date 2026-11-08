@@ -41,9 +41,9 @@ def test_opencode_create_streams_a_reply_and_lists_labels(tmp_path):
     assert row["cost_usd"] == 0.01
     assert conv.title == "hello"  # no auto title: the first message stays
     launch = opencode_log(tmp_path)[0]
-    assert launch["argv"][:3] == ["acp", "--hostname", "127.0.0.1"] and "--port" in launch["argv"]
+    assert launch["argv"][:3] == ["serve", "--hostname", "127.0.0.1"] and "--port" in launch["argv"]
     assert launch["cwd"] == str(tmp_path)
-    assert launch["config"]["agent"]["orchestrator"]["permission"]["edit"]
+    assert launch["config"]["agents"]["orchestrator"]["permissions"]
 
 
 def test_opencode_deltas_stream_live(tmp_path):
@@ -79,9 +79,9 @@ def test_opencode_resumes_its_session_after_restart(tmp_path):
     sid, before, after = asyncio.run(main())
     assert before == [("user", "one"), ("text", "echo: one")]
     assert after == before + [("user", "two"), ("text", "echo: two")]
-    calls = [r for r in opencode_log(tmp_path) if r.get("method") in ("session/new", "session/resume")]
-    assert [r["method"] for r in calls] == ["session/new", "session/resume"]
-    assert calls[1]["params"]["sessionId"] == sid
+    calls = opencode_log(tmp_path)
+    assert sum(r.get("http") == "/api/session" and r.get("method") == "POST" for r in calls) == 1
+    assert any(r.get("http") == f"/api/session/{sid}" and r.get("method") == "GET" for r in calls)
 
 
 def test_opencode_stop_clears_pending_approval(tmp_path):

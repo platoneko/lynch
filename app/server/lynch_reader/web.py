@@ -248,7 +248,7 @@ def main(argv: list[str] | None = None) -> None:
                         skill=REPO_ROOT / ".agents" / "skills" / "discover-kol" / "references" / "search.md"),
         candidates=CandidateStore(CANDIDATES_FILE),
         watch=WatchStore(WATCH_FILE),
-        opencode=OpencodeConfig((shutil.which("opencode") or "opencode",), REPO_ROOT, output / "chat" / "opencode"),
+        opencode=OpencodeConfig((shutil.which("opencode2") or "opencode2",), REPO_ROOT, output / "chat" / "opencode"),
         codex=CodexConfig((shutil.which("codex") or "codex",), REPO_ROOT, output / "chat" / "codex"),
         skills=FinanceSkills(REPO_ROOT, os.environ),
     )

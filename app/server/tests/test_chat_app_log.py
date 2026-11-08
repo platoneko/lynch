@@ -78,3 +78,15 @@ def test_refresh_detects_torn_append_before_next_message(tmp_path):
     following = log.user("two")
     assert following["parentUuid"] == first["uuid"]
     assert [entry["message"]["content"] for entry in transcript.current_branch(log.entries())] == ["one", "two"]
+
+
+def test_branch_commits_remapped_native_ids_with_the_session(tmp_path):
+    path = tmp_path / "chat.jsonl"
+    log = AppLog(path)
+    first = log.user("one")
+    log.bind_native(first["uuid"], "original-one")
+    parent = log.message(grok_assistant({"type": "text", "text": "reply"}))
+    log.user("replace")
+    log.branch_at(parent["uuid"], agent="opencode", native_session="fork",
+                  native_ids={first["uuid"]: "fork-one"})
+    assert AppLog(path).native_id(first["uuid"]) == "fork-one"

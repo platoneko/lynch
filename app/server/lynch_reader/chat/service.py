@@ -635,7 +635,8 @@ class ChatService:
                     self._checkpoint(conv_id, live, generation)
                     session = await live.proc.rewind(message_uuid)
                     self._checkpoint(conv_id, live, generation)
-                    self._app_log(conv_id).branch_at(cut, agent=conv.agent, native_session=session)
+                    self._app_log(conv_id).branch_at(cut, agent=conv.agent, native_session=session,
+                                                     native_ids=getattr(live.proc, "fork_native_ids", None))
                     field = {"codex": "codex_thread", "grok": "grok_session", "opencode": "opencode_session"}[conv.agent]
                     conv = self._index.update(conv_id, **{field: session})
                 except asyncio.CancelledError:
