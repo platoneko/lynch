@@ -10,7 +10,7 @@ import pytest
 
 from lynch_reader.chat import transcript
 from lynch_reader.chat.app_log import AppLog
-from lynch_reader.chat.codex import CodexConfig, codex_env
+from lynch_reader.chat.codex import DEFAULT_CODEX_MODEL, CodexConfig, codex_env
 from lynch_reader.chat.codex_link import CodexLink, discover_models
 from tests.chat_helpers import LinkRecorder, conv, until
 
@@ -22,7 +22,7 @@ def test_native_compaction_and_resumed_context(tmp_path):
         cfg = CodexConfig((shutil.which("codex") or "codex",), tmp_path, tmp_path / "app-logs")
         env = codex_env(os.environ)
         models = await discover_models(cfg, env)
-        chosen = next((m for m in models if m.is_default), models[0])
+        chosen = next((m for m in models if m.id == DEFAULT_CODEX_MODEL), models[0])
         c = conv(agent="codex", model=chosen.id, effort=chosen.default_effort)
         rec = LinkRecorder()
         path = cfg.logs / "compact.jsonl"
