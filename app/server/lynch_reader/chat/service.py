@@ -17,6 +17,7 @@ from lynch_reader.chat import transcript
 from lynch_reader.chat.approvals import (AUTO_DENY_MESSAGE, USER_DENY_MESSAGE, Approval, approvable_path,
                                          new_approval)
 from lynch_reader.chat.candidates import CandidateStore
+from lynch_reader.chat.claude_skills import ClaudeSkillBridgeError, prepare_claude_skill_bridge
 from lynch_reader.chat.codex import DEFAULT_CODEX_EFFORT, DEFAULT_CODEX_MODEL, CodexConfig, CodexModel, codex_env
 from lynch_reader.chat.codex_link import CodexLink, CodexSetupError, discover_models
 from lynch_reader.chat.events import LinkEvents
@@ -39,7 +40,6 @@ from lynch_reader.chat.opencode_link import OpencodeLink, OpencodeSetupError
 from lynch_reader.chat.opencode_http import OpencodeHttpError
 from lynch_reader.chat.process import ChatProcess
 from lynch_reader.chat.queue import MessageQueue
-from lynch_reader.chat.skills import FinanceSkills, FinanceSkillsError
 
 log = logging.getLogger(__name__)
 
@@ -128,7 +128,6 @@ class ChatService:
                  grok: GrokConfig | None = None, candidates: CandidateStore | None = None,
                  watch: WatchStore | None = None, opencode: OpencodeConfig | None = None,
                  codex: CodexConfig | None = None,
-                 skills: FinanceSkills | None = None,
                  monotonic: Callable[[], float] = time.monotonic, wall: Callable[[], float] = time.time,
                  idle_timeout_s: float = IDLE_TIMEOUT_S, max_processes: int = MAX_PROCESSES) -> None:
         self._index = index
@@ -143,7 +142,6 @@ class ChatService:
         self._opencode = opencode
         self._opencode_env = dict(base_env)  # opencode bills its own providers; the Claude billing guard is moot
         self._codex = codex
-        self._skills = skills
         self._codex_env = codex_env(base_env)
         self._codex_models: list[CodexModel] = []
         self._codex_hint: str | None = "Codex 模型清单尚未读取" if codex else "Codex 未配置"
@@ -791,31 +789,28 @@ class ChatService:
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-        if self._skills is not None:
-            await self._skills.close()
         for conv_id in list(self._live):
             self._pause_inputs(conv_id)
             await self._stop(conv_id)
 
     # ---- process lifecycle
 
-    async def _prepare_research_skills(self) -> None:
-        if self._skills is not None:
-            try:
-                await self._skills.refresh()
-            except FinanceSkillsError as error:
-                raise Conflict(str(error)) from error
-
     async def _spawn(self, conv: Conversation, resume_at: str | None = None) -> None:
         live = self._live.setdefault(conv.id, Live())
         generation = live.generation
         self._checkpoint(conv.id, live, generation)
-        await self._prepare_research_skills()
-        self._checkpoint(conv.id, live, generation)
         await self._make_room()
         self._checkpoint(conv.id, live, generation)
         resume = self._transcript(conv.id).exists()
-        argv = launch_argv(self._launch, conv, resume=resume, resume_at=resume_at)
+        try:
+            configured_home = self._env.get("CLAUDE_CONFIG_DIR")
+            skill_bridge = prepare_claude_skill_bridge(
+                self._launch.repo_root, Path(self._env.get("HOME") or Path.home()),
+                claude_home=self._launch.repo_root / configured_home if configured_home else None,
+            )
+        except ClaudeSkillBridgeError as e:
+            raise Conflict(f"无法启动 Claude：{e}") from e
+        argv = launch_argv(self._launch, conv, resume=resume, resume_at=resume_at, skill_bridge=skill_bridge)
         proc = ChatProcess(argv, self._env, self._launch.repo_root,
                            on_message=lambda msg: self._on_message(conv.id, proc, msg),
                            on_exit=lambda p, expected, err: self._on_exit(conv.id, p, expected, err))
@@ -940,8 +935,6 @@ class ChatService:
         generation = live.generation
         self._checkpoint(conv.id, live, generation)
         cfg = self._require_opencode()
-        await self._prepare_research_skills()
-        self._checkpoint(conv.id, live, generation)
         await self._make_room()
         self._checkpoint(conv.id, live, generation)
         env = opencode_env(self._opencode_env, write_rules(cfg, conv))
@@ -963,11 +956,14 @@ class ChatService:
         generation = live.generation
         self._checkpoint(conv.id, live, generation)
         cfg = self._require_grok()
-        await self._prepare_research_skills()
-        self._checkpoint(conv.id, live, generation)
         await self._make_room()
         self._checkpoint(conv.id, live, generation)
-        home = write_research_home(cfg, conv, cfg.home / ".grok")
+        skill_home = self._env.get("GROK_HOME")
+        try:
+            home = write_research_home(cfg, conv, cfg.home / ".grok",
+                                       skill_home=self._launch.repo_root / skill_home if skill_home else None)
+        except GrokSetupError as e:
+            raise Conflict(f"无法启动 Grok：{e}") from e
         env = research_env(self._env, home)
         link = GrokLink(cfg, conv, env, self._app_log(conv.id),
                         self._link_events(conv.id, lambda: link), self._launch.repo_root)
@@ -988,8 +984,6 @@ class ChatService:
         generation = live.generation
         self._checkpoint(conv.id, live, generation)
         cfg = self._require_codex()
-        await self._prepare_research_skills()
-        self._checkpoint(conv.id, live, generation)
         await self._make_room()
         self._checkpoint(conv.id, live, generation)
         link = CodexLink(cfg, conv, self._codex_env, self._app_log(conv.id),

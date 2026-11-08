@@ -41,7 +41,7 @@ def make_service(tmp_path: Path, env: dict[str, str] | None = None, **kwargs):
     projects.mkdir(exist_ok=True)
     (tmp_path / "frameworks").mkdir(exist_ok=True)
     log = tmp_path / "launches.jsonl"
-    env = {**os.environ, "FAKE_CLAUDE_PROJECTS": str(projects), "FAKE_CLAUDE_LOG": str(log),
+    env = {**os.environ, "HOME": str(tmp_path / "home"), "FAKE_CLAUDE_PROJECTS": str(projects), "FAKE_CLAUDE_LOG": str(log),
            "ANTHROPIC_API_KEY": "must-not-leak", **fake_grok_env(tmp_path), **fake_opencode_env(tmp_path),
            **(env or {})}
     svc = ChatService(ChatIndex(tmp_path / "index.json"), LaunchConfig(FAKE_CMD, tmp_path), projects, env,

@@ -3,7 +3,7 @@
 Only paired devices get in (lynch_reader.auth): a one-time code from `just app-pair` buys a long-lived cookie.
 Chats run Claude Code or opencode subprocesses that may write frameworks/ under a tool whitelist and the
 sediment-framework skill, and read-only grok subprocesses that search X (AGENTS.md「app 对话」). The server itself
-writes runtime output and refreshes the shared finance-skills installation before research chats.
+writes runtime output.
 """
 from __future__ import annotations
 
@@ -42,7 +42,6 @@ from lynch_reader.chat.index import ChatIndex
 from lynch_reader.chat.kol import INVEST_ROOT
 from lynch_reader.chat.routes import _body, _guarded, chat_lifespan, chat_routes
 from lynch_reader.chat.service import ChatService, Invalid
-from lynch_reader.chat.skills import FinanceSkills
 from lynch_reader.chat.transcript import projects_dir_for
 from lynch_reader.chat.watch import WATCH_FILE, WatchStore
 from lynch_reader.earnings import (
@@ -250,7 +249,6 @@ def main(argv: list[str] | None = None) -> None:
         watch=WatchStore(WATCH_FILE),
         opencode=OpencodeConfig((shutil.which("opencode2") or "opencode2",), REPO_ROOT, output / "chat" / "opencode"),
         codex=CodexConfig((shutil.which("codex") or "codex",), REPO_ROOT, output / "chat" / "codex"),
-        skills=FinanceSkills(REPO_ROOT, os.environ),
     )
     # An open chat stream never ends by itself: without a graceful-shutdown timeout, SIGTERM waits on it
     # forever and the lifespan shutdown that stops the claude processes never runs.

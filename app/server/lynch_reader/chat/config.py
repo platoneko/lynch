@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from lynch_reader.chat.claude_skills import ClaudeSkillBridge, permission_pattern
 from lynch_reader.chat.index import Conversation
 
 CHAT_MODELS: tuple[tuple[str, str], ...] = (
@@ -125,12 +126,16 @@ def system_prompt(conv: Conversation) -> str:
     return f"{scope_line(conv)}\n{SHARED_RULES}\n{CLAUDE_TOOL_RULES}"
 
 
-def launch_argv(cfg: LaunchConfig, conv: Conversation, *, resume: bool, resume_at: str | None = None) -> list[str]:
+def launch_argv(cfg: LaunchConfig, conv: Conversation, *, resume: bool, resume_at: str | None = None,
+                skill_bridge: ClaudeSkillBridge | None = None) -> list[str]:
     if resume_at is not None and not resume:
         raise ValueError("--resume-session-at needs --resume")
     session = ["--resume", conv.id] if resume else ["--session-id", conv.id]
     if resume_at is not None:
         session += ["--resume-session-at", resume_at]
+    skill_args = ["--add-dir", str(skill_bridge.path)] if skill_bridge else []
+    skill_denies = ([f"{tool}(/{permission_pattern(path)}/**)" for path in (skill_bridge.path, *skill_bridge.protected)
+                     for tool in ("Write", "Edit")] if skill_bridge else [])
     return [
         *cfg.claude_cmd, "-p",
         "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
@@ -139,12 +144,13 @@ def launch_argv(cfg: LaunchConfig, conv: Conversation, *, resume: bool, resume_a
         "--model", conv.model, "--effort", conv.effort,
         # Project layer only: .claude/settings.local.json allows broad Bash that would bypass the whitelist.
         "--setting-sources", "project",
+        "--permission-mode", "manual", *skill_args,
         "--mcp-config", str(cfg.repo_root / ".mcp.json"), "--strict-mcp-config",
         # Calls the whitelist does not cover come to the app (chat/approvals.py): skill edits wait for the
         # phone, the rest are refused. Without it claude refuses every write under .claude/ outright.
         "--permission-prompt-tool", "stdio",
         "--append-system-prompt", system_prompt(conv),
-        "--disallowedTools", *DENIED_TOOLS,  # variadic: ends at the next flag
+        "--disallowedTools", *DENIED_TOOLS, *skill_denies,  # variadic: ends at the next flag
         "--allowedTools", *ALLOWED_TOOLS,  # variadic: must stay last
     ]
 

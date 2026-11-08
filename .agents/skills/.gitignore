@@ -1,4 +1,4 @@
-# Third-party skill links are restored by just skills-update.
+# Keep locally managed third-party skill links out of version control.
 /*
 !.gitignore
 !discover-kol/
