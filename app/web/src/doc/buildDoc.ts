@@ -19,10 +19,15 @@ export interface BuiltDoc {
 }
 
 type Token = ReturnType<MarkdownIt['parse']>[number];
-/** What a document may link to in-app: pool tickers and scenario axes (by file stem). */
+/** What a document may link to in-app: pool tickers and existing axis documents. */
 export interface LinkTargets {
   pool: ReadonlySet<string>;
   axes: ReadonlySet<string>;
+}
+
+/** An older offline catalog only knows the scenario-axis names it cached. */
+export function documentAxisNames(documents: string[] | undefined, axes: ReadonlyArray<{ name: string }>): Set<string> {
+  return new Set(documents ?? axes.map((axis) => axis.name));
 }
 
 interface RenderEnv extends LinkTargets {
@@ -137,13 +142,13 @@ export function linkedTicker(href: string, pool: ReadonlySet<string>): string | 
   return m && pool.has(m[1]) ? m[1] : null;
 }
 
-/** `./axes/coal-price.md` → `coal-price`, only for known scenario axes. */
+/** `./axes/coal-price.md` → `coal-price`, only for existing axis documents. */
 export function linkedAxis(href: string, axes: ReadonlySet<string>): string | null {
   const m = /^(?:\.\/)?axes\/([^/#?:]+)\.md(?:#.*)?$/.exec(href);
   return m && axes.has(m[1]) ? m[1] : null;
 }
 
-/** `_AXIS.coal-price` (also with `.md`) → `coal-price`, only for known scenario axes. */
+/** `_AXIS.coal-price` (also with `.md`) → `coal-price`, only for existing axis documents. */
 export function citedAxis(code: string, axes: ReadonlySet<string>): string | null {
   const m = /^_AXIS\.([a-z0-9-]+)(?:\.md)?$/.exec(code.trim());
   return m && axes.has(m[1]) ? m[1] : null;

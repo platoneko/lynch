@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import logging
+import copy
 import os
-import re
 import subprocess
 import threading
 import time
@@ -11,16 +11,14 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from eval.lib.frameworks import list_framework_paths, load_framework
 from eval.lib.zones import zone_of
 from eval.lib.price import SessionQuote
 from lynch_reader import catalog as catalog_module
 from lynch_reader.catalog import (
     FRAMEWORKS_DIR, NO_QUOTE, QUOTE_POLL_S, QuotePoller, QuoteCache, axis_path_in, catalog, framework_path,
+    framework_updates,
 )
 from tests.conftest import NOW, FakeFetch, framework_md
-
-needs_content = pytest.mark.skipif(not FRAMEWORKS_DIR.is_dir(), reason="content repo not cloned at frameworks/")
 
 AS_OF = datetime.fromtimestamp(NOW, ZoneInfo("Asia/Shanghai")).isoformat(timespec="seconds")
 
@@ -28,8 +26,27 @@ AS_OF = datetime.fromtimestamp(NOW, ZoneInfo("Asia/Shanghai")).isoformat(timespe
 POOL = ["AAA.US", "BBB.US", "0001.HK"]
 
 
-def rows_by_ticker(fw, quotes):
-    return {r["ticker"]: r for r in catalog(fw, quotes)["tickers"]}
+class SyntheticResults:
+    """Confirmed synthetic outputs; quote and document code never runs a model."""
+    def __init__(self):
+        self.values = {
+            ticker: {'status': 'confirmed', 'review_id': f'review-{ticker}', 'output': {
+                'ticker': ticker, 'currency': 'USD', 'units': {'price': 'USD_PER_SHARE'},
+                'anchors': {'L': 10, 'M': 20, 'H': 40}, 'candidate': None, 'option': None,
+            }} for ticker in ('AAA.US', 'BBB.US')
+        }
+
+    def current(self, ticker):
+        return copy.deepcopy(self.values.get(ticker, {'status': 'missing'}))
+
+
+@pytest.fixture
+def results():
+    return SyntheticResults()
+
+
+def rows_by_ticker(fw, quotes, results=None):
+    return {r["ticker"]: r for r in catalog(fw, quotes, valuation_provider=results)["tickers"]}
 
 
 def next_poll(clock, quotes):
@@ -55,11 +72,11 @@ def test_archived_rows_are_marked_not_dropped(repo, quotes):
     assert rows["0001.HK"]["error"]  # a broken framework can be put away too
 
 
-def test_parsed_row_is_zoned_on_the_live_price(repo, quotes):
-    out = catalog(repo, quotes)
+def test_parsed_row_is_zoned_on_the_live_price(repo, quotes, results):
+    out = catalog(repo, quotes, valuation_provider=results)
     assert out["quote_error"] is None
     row = {r["ticker"]: r for r in out["tickers"]}["AAA.US"]
-    assert row == {
+    expected = {
         "ticker": "AAA.US", "name": "Alpha Corp", "market": "US",
         "lynch_primary": "fast_grower", "lynch_secondary": "cyclical", "currency": "USD",
         "L": 10.0, "M": 20.0, "H": 40.0, "option": None, "candidate": None, "axes": [], "ref_axes": [], "consensus": None,
@@ -68,12 +85,13 @@ def test_parsed_row_is_zoned_on_the_live_price(repo, quotes):
         "quote_error": None, "error": None, "archived": False,
         "framework_updated": "2026-09-21", "last_earnings": None, "next_earnings": None, "stale_after_earnings": False,
     }
+    assert {key: row[key] for key in expected} == expected
 
 
 def test_earnings_dates_are_asked_with_each_frameworks_header_day(repo, quotes):
     asked = []
 
-    def dates(updated):
+    def dates(updated, versions):
         asked.append(dict(updated))
         # A broken framework is still in the pool, so the calendar answers for it too.
         return {t: {"last_earnings": {"date": "2026-09-18"}, "stale_after_earnings": True} for t in ("AAA.US", "0001.HK")}
@@ -84,7 +102,59 @@ def test_earnings_dates_are_asked_with_each_frameworks_header_day(repo, quotes):
     assert rows["0001.HK"]["stale_after_earnings"] is False  # a broken framework is never flagged
 
 
-def test_option_and_candidate_zones(repo, fetch, quotes):
+def test_earnings_header_date_does_not_depend_on_valuation_in_document(repo, quotes):
+    (repo / "AAA.US.md").write_text(
+        "# AAA.US — Alpha Corp\n\n"
+        "> 林奇：`fast_grower` | 更新：2026-09-21 | eval: eval/AAA.US.py\n"
+        "> 主尺：按业务估值\n\n"
+        "## 估值区间\n\n情景估值由脚本计算。\n",
+        encoding="utf-8",
+    )
+    assert framework_updates(repo)["AAA.US"] == date(2026, 9, 21)
+    def dates(updated, versions):
+        assert updated["AAA.US"] == date(2026, 9, 21)
+        return {"AAA.US": {"last_earnings": {"date": "2026-09-18"}, "stale_after_earnings": True}}
+
+    row = {r["ticker"]: r for r in catalog(repo, quotes, earnings_dates=dates)["tickers"]}["AAA.US"]
+    assert row["name"] == "Alpha Corp"
+    assert row["lynch_primary"] == "fast_grower"
+    assert row["framework_updated"] == "2026-09-21"
+    assert row["last_earnings"] == {"date": "2026-09-18"}
+    assert row["band"]["price"] == 25
+    assert row["band"]["zone"] is None
+
+
+def test_earnings_uses_same_document_version_as_the_catalog_row(repo, quotes, monkeypatch):
+    original_read = quotes.read
+    asked = []
+
+    def change_file_during_quote_read(symbols):
+        document = framework_md("AAA.US", "Alpha Corp", "`fast_grower` / `cyclical`")
+        (repo / "AAA.US.md").write_text(document.replace("2026-09-21", "2026-10-21"), encoding="utf-8")
+        return original_read(symbols)
+
+    def dates(updated, versions):
+        asked.append(dict(updated))
+        return {}
+
+    monkeypatch.setattr(quotes, "read", change_file_during_quote_read)
+    rows = {r["ticker"]: r for r in catalog(repo, quotes, earnings_dates=dates)["tickers"]}
+    assert asked[0]["AAA.US"].isoformat() == rows["AAA.US"]["framework_updated"]
+
+
+def test_catalog_parses_the_document_bytes_it_already_read(repo, quotes, monkeypatch):
+    real_parse = catalog_module.parse_framework_identity
+
+    def change_file_before_parse(md, ticker):
+        if ticker == "AAA.US":
+            (repo / 'AAA.US.md').write_text(framework_md("AAA.US", "Changed", "`stalwart`"), encoding="utf-8")
+        return real_parse(md, ticker)
+
+    monkeypatch.setattr(catalog_module, "parse_framework_identity", change_file_before_parse)
+    assert rows_by_ticker(repo, quotes)["AAA.US"]["name"] == "Alpha Corp"
+
+
+def test_option_and_candidate_zones(repo, fetch, quotes, results):
     # +V band = (10, 25, 50); candidate (36, 50, 60) sits above the price.
     text = framework_md("AAA.US", "Alpha Corp", "`fast_grower`") + (
         "\n### Outputs\n\n"
@@ -92,8 +162,12 @@ def test_option_and_candidate_zones(repo, fetch, quotes):
         "- 候选带（T）：L′ = **36** · M′ = **50** · H′ = **60** · 门槛 A9\n"
     )
     (repo / "AAA.US.md").write_text(text, encoding="utf-8")
+    results.values['AAA.US']['output']['option'] = {
+        'value': 10, 'value_unit': 'USD_PER_SHARE', 'anchors': {'L': 10, 'M': 25, 'H': 50}}
+    results.values['AAA.US']['output']['candidate'] = {
+        'label': 'T', 'anchors': {'L': 36, 'M': 50, 'H': 60}}
     fetch.prices["AAA.US"] = 35.0
-    band = rows_by_ticker(repo, quotes)["AAA.US"]["band"]
+    band = rows_by_ticker(repo, quotes, results)["AAA.US"]["band"]
     assert band["zone"] == zone_of(35.0, 10, 20, 40) == "optimistic"
     assert band["option_zone"] == zone_of(35.0, 10, 25, 50) == "neutral"
     assert band["candidate_zone"] == zone_of(35.0, 36, 50, 60) == "deep_discount"
@@ -163,8 +237,8 @@ def settle(path, seconds_ago: float = 60.0) -> None:
 
 def test_only_changed_files_are_parsed_again(repo, quotes, monkeypatch):
     parsed: list[str] = []
-    real = catalog_module.load_framework
-    monkeypatch.setattr(catalog_module, "load_framework", lambda p: (parsed.append(p.stem), real(p))[1])
+    real = catalog_module.parse_framework_identity
+    monkeypatch.setattr(catalog_module, "parse_framework_identity", lambda md, ticker: (parsed.append(ticker), real(md, ticker))[1])
     for p in repo.glob("*.md"):
         settle(p)
     catalog(repo, quotes)
@@ -185,8 +259,8 @@ def test_only_changed_files_are_parsed_again(repo, quotes, monkeypatch):
 def test_a_just_written_file_is_parsed_on_every_read(repo, quotes, monkeypatch):
     # A same-size rewrite inside one timestamp tick keeps mtime and size: a fresh file is never trusted.
     parsed: list[str] = []
-    real = catalog_module.load_framework
-    monkeypatch.setattr(catalog_module, "load_framework", lambda p: (parsed.append(p.stem), real(p))[1])
+    real = catalog_module.parse_framework_identity
+    monkeypatch.setattr(catalog_module, "parse_framework_identity", lambda md, ticker: (parsed.append(ticker), real(md, ticker))[1])
     for p in repo.glob("*.md"):
         settle(p)
     (repo / "AAA.US.md").write_text(framework_md("AAA.US", "Alpha Corp", "`stalwart`"), encoding="utf-8")
@@ -196,15 +270,13 @@ def test_a_just_written_file_is_parsed_on_every_read(repo, quotes, monkeypatch):
     assert parsed == ["AAA.US"]
 
 
-def test_axis_files_are_parsed_again_only_when_changed(repo, quotes, monkeypatch):
+def test_axis_documents_do_not_supply_homepage_relationships(repo, quotes, results):
     _axis(repo, "al", ["AAA.US"])
-    parsed: list[str] = []
-    real = catalog_module.load_axis
-    monkeypatch.setattr(catalog_module, "load_axis", lambda p: (parsed.append(p.stem), real(p))[1])
-    settle(repo / "axes" / "al.md")
-    catalog(repo, quotes)
-    catalog(repo, quotes)
-    assert parsed == ["al"]
+    body = catalog(repo, quotes, valuation_provider=results)
+    row = {item['ticker']: item for item in body['tickers']}['AAA.US']
+    assert row['valuation_status'] == 'confirmed' and row['M'] == 20
+    assert row['axis_status'] == 'unknown' and row['axes'] == []
+    assert body['axes'] == []
 
 
 def test_missing_symbol_nulls_only_its_row(repo, fetch, quotes, caplog):
@@ -316,14 +388,14 @@ def test_requests_waiting_on_a_failing_call_reuse_its_failure(repo, clock):
     assert results["first"]["quote_error"] == results["waiter"]["quote_error"] == "取价失败：boom"
 
 
-def test_out_of_order_option_band_is_one_row(repo, quotes):
-    # p_L > p_M passes the parse ([0,1] each) but yields a +V band with L > M.
-    text = framework_md("AAA.US", "Alpha Corp", "`fast_grower`") + (
-        "\n### Outputs\n\n- \\(V_{opt}\\) = **100** · \\(p_L/p_M/p_H\\) = **1 / 0 / 0**\n"
-    )
-    (repo / "AAA.US.md").write_text(text, encoding="utf-8")
-    rows = rows_by_ticker(repo, quotes)
-    assert rows["AAA.US"]["error"] and rows["AAA.US"]["band"] is None
+def test_out_of_order_option_band_is_one_row(repo, quotes, results):
+    # An invalid result must not affect a different stock or hide its quote.
+    results.values['AAA.US']['output']['option'] = {
+        'value': 100, 'value_unit': 'USD_PER_SHARE', 'anchors': {'L': 110, 'M': 20, 'H': 40}}
+    rows = rows_by_ticker(repo, quotes, results)
+    assert rows["AAA.US"]["valuation_status"] == 'invalid'
+    assert rows["AAA.US"]["band"]["price"] == 25
+    assert rows["AAA.US"]["band"]["zone"] is None
     assert rows["BBB.US"]["band"]["price"] == 5.0
 
 
@@ -359,55 +431,61 @@ def write_candidate(fw, line: str, assumptions: str = ASSUMPTIONS) -> None:
     (fw / "AAA.US.md").write_text(text, encoding="utf-8")
 
 
-def test_candidate_with_gate_row(repo, quotes):
+def test_candidate_values_and_label_come_from_saved_result(repo, quotes, results):
     fw = repo
     write_candidate(fw, "- 候选带（T）：L′ = **11** · M′ = **22** · H′ = **44** · 门槛 A3′（note 门槛 A1）")
-    assert rows_by_ticker(fw, quotes)["AAA.US"]["candidate"] == {
-        "label": "T", "L": 11.0, "M": 22.0, "H": 44.0, "gate": "A3′",
-        "background": "**候选带（T）**：only one house \\| escaped pipe, \\(g_1\\)",
-    }
+    results.values['AAA.US']['output']['candidate'] = {'label': '产能', 'anchors': {'L': 12, 'M': 23, 'H': 45}}
+    assert rows_by_ticker(fw, quotes, results)["AAA.US"]["candidate"] == {
+        "label": "产能", "L": 12, "M": 23, "H": 45}
 
 
-def test_candidate_gate_row_missing(repo, quotes):
+def test_candidate_unavailable_does_not_display_band(repo, quotes, results):
     fw = repo
     write_candidate(fw, "- 候选带（T）：L′ = **11** · M′ = **22** · H′ = **44** · 门槛 A9")
-    cand = rows_by_ticker(fw, quotes)["AAA.US"]["candidate"]
-    assert cand["gate"] == "A9" and cand["background"] is None
+    results.values['AAA.US']['output']['candidate'] = {'status': 'unavailable'}
+    row = rows_by_ticker(fw, quotes, results)["AAA.US"]
+    assert row['candidate'] is None
+    assert row['candidate_review_status'] == 'unavailable'
+    assert row['band']['candidate_zone'] is None
 
 
-def test_candidate_gate_only_counts_in_assumptions(repo, quotes):
+def test_document_gate_does_not_override_saved_candidate(repo, quotes, results):
     fw = repo
     other = ASSUMPTIONS + "\n| A9 | not an assumption | x | y | z |\n"
     write_candidate(fw, "- 候选带（T）：L′ = **11** · M′ = **22** · H′ = **44** · 门槛 A9", other)
-    assert rows_by_ticker(fw, quotes)["AAA.US"]["candidate"]["background"] is None
+    results.values['AAA.US']['output']['candidate'] = {'label': '单家', 'anchors': {'L': 11, 'M': 22, 'H': 44}}
+    cand = rows_by_ticker(fw, quotes, results)["AAA.US"]["candidate"]
+    assert cand == {'label': '单家', 'L': 11, 'M': 22, 'H': 44}
+    assert 'gate' not in cand and 'background' not in cand
 
 
-def test_candidate_without_gate_token(repo, quotes):
+def test_candidate_label_is_preserved_without_interpreting_gate_tokens(repo, quotes, results):
     # 600096.SH shape: the label mentions an assumption id, but nothing follows the prices.
     fw = repo
     write_candidate(fw, "- 候选带（FY2027·单家，A3′）：L′ = **11** · M′ = **22** · H′ = **44**；门槛 FY2027 ≥2 家")
-    cand = rows_by_ticker(fw, quotes)["AAA.US"]["candidate"]
+    results.values['AAA.US']['output']['candidate'] = {
+        'label': 'FY2027·单家，A3′', 'anchors': {'L': 11, 'M': 22, 'H': 44}}
+    cand = rows_by_ticker(fw, quotes, results)["AAA.US"]["candidate"]
     assert cand["label"] == "FY2027·单家，A3′"
-    assert cand["gate"] is None and cand["background"] is None
+    assert 'gate' not in cand and 'background' not in cand
 
 
-def test_no_candidate_is_null(repo, quotes):
-    assert rows_by_ticker(repo, quotes)["AAA.US"]["candidate"] is None
+def test_no_candidate_is_null(repo, quotes, results):
+    write_candidate(repo, '- 候选带（T）：L′ = **11** · M′ = **22** · H′ = **44**')
+    row = rows_by_ticker(repo, quotes, results)['AAA.US']
+    assert row['valuation_status'] == 'confirmed' and row['M'] == 20
+    assert row['candidate'] is None and row['band']['candidate_zone'] is None
 
 
-@needs_content
-def test_real_frameworks_candidates(quotes):
-    rows = rows_by_ticker(FRAMEWORKS_DIR, quotes)
-    line = re.compile(r"^-\s+(?:\*\*)?候选带（", re.MULTILINE)
-    with_line = [p.stem for p in list_framework_paths(FRAMEWORKS_DIR)
-                 if line.search(p.read_text(encoding="utf-8"))]
-    assert with_line
-    for ticker in with_line:
-        cand = rows[ticker]["candidate"]
-        assert cand is not None, ticker
-        assert cand["L"] < cand["M"] < cand["H"], ticker
-    # Every gated band resolves its assumption row; which tickers are gated is research content.
-    assert all(rows[t]["candidate"]["background"] for t in with_line if rows[t]["candidate"]["gate"])
+def test_candidate_bands_come_from_each_saved_result_and_validate_order(repo, quotes, results):
+    results.values['AAA.US']['output']['candidate'] = {'label': '扩产', 'anchors': {'L': 11, 'M': 22, 'H': 44}}
+    results.values['BBB.US']['output']['candidate'] = {'label': '单家', 'anchors': {'L': 15, 'M': 14, 'H': 45}}
+    rows = rows_by_ticker(repo, quotes, results)
+    assert rows['AAA.US']['candidate'] == {'label': '扩产', 'L': 11, 'M': 22, 'H': 44}
+    assert rows['AAA.US']['band']['candidate_zone'] == zone_of(25, 11, 22, 44)
+    assert rows['BBB.US']['valuation_status'] == 'invalid'
+    assert rows['BBB.US']['band']['price'] == 5
+    assert rows['BBB.US']['band']['candidate_zone'] is None
 
 
 OPTION_ASSUMPTIONS = """
@@ -430,24 +508,22 @@ def write_option(fw, outputs: str, assumptions: str = OPTION_ASSUMPTIONS) -> Non
     (fw / "AAA.US.md").write_text(text, encoding="utf-8")
 
 
-def test_option_band_with_its_background(repo, quotes):
+def test_option_band_comes_from_saved_result_not_document_formula(repo, quotes, results):
     write_option(repo, f"- {OPTION_LINE}\n")
-    assert rows_by_ticker(repo, quotes)["AAA.US"]["option"] == {
-        "v_opt": 10.0, "L": 10.0, "M": 25.0, "H": 50.0, "line": OPTION_LINE,
-        # Ids in the line's order, once each; only those that head an Assumptions row.
-        "rows": [
-            {"id": "A12", "text": "**SiC 走 \\(V_{opt}\\)**：one-off external price"},
-            {"id": "A2e-7c-4", "text": "option ceiling rule"},
-            {"id": "A3′", "text": "primed row"},
-        ],
-    }
+    results.values['AAA.US']['output']['option'] = {
+        'label': '新产线', 'value': 8, 'value_unit': 'USD_PER_SHARE',
+        'anchors': {'L': 10, 'M': 24, 'H': 48}}
+    assert rows_by_ticker(repo, quotes, results)["AAA.US"]["option"] == {
+        "v_opt": 8, "L": 10, "M": 24, "H": 48, "label": '新产线'}
 
 
-def test_option_outside_outputs_is_ignored(repo, quotes):
+def test_option_outside_outputs_is_ignored(repo, quotes, results):
     # The line contract puts V_opt and p_k in Outputs; prose elsewhere (ORCL.US's old §0) is not an option.
     elsewhere = OPTION_ASSUMPTIONS + "\n\\(V_{opt}\\) = **10** · \\(p_L/p_M/p_H\\) = **0 / 0.5 / 1.0**\n"
     write_option(repo, "- 底牌说明\n", elsewhere)
-    assert rows_by_ticker(repo, quotes)["AAA.US"]["option"] is None
+    row = rows_by_ticker(repo, quotes, results)['AAA.US']
+    assert row['valuation_status'] == 'confirmed' and row['M'] == 20
+    assert row['option'] is None and row['band']['option_zone'] is None
 
 
 @pytest.mark.parametrize("outputs", [
@@ -455,35 +531,23 @@ def test_option_outside_outputs_is_ignored(repo, quotes):
     "- \\(V_{opt}\\) = **0** · \\(p_L/p_M/p_H\\) = **0 / 0.5 / 1.0**\n",
     "- \\(V_{opt}\\) = **10**（no per-tier credit）\n",
 ], ids=["zero", "zero-with-p", "no-p"])
-def test_no_option_band_is_null(repo, quotes, outputs):
+def test_no_option_band_is_null(repo, quotes, results, outputs):
     write_option(repo, outputs)
-    assert rows_by_ticker(repo, quotes)["AAA.US"]["option"] is None
+    row = rows_by_ticker(repo, quotes, results)['AAA.US']
+    assert row['valuation_status'] == 'confirmed' and row['M'] == 20
+    assert row['option'] is None and row['band']['option_zone'] is None
 
 
-@needs_content
-def test_real_frameworks_options(quotes):
-    """The book's bands survive the parse; what each is worth is the book's business, not the test's.
-
-    The amounts move whenever a framework is recomputed, and that ticker's own eval script is what
-    reconciles them against the document (`just check`); a copy here would only be a second number
-    to keep in sync, and when it reds it cannot say whether the book moved or the code broke.
-    """
-    rows = rows_by_ticker(FRAMEWORKS_DIR, quotes)
-    with_option = {t: r["option"] for t, r in rows.items() if r["option"] is not None}
-    assert len(with_option) >= 20
-    for ticker, option in with_option.items():
-        assert option["v_opt"] > 0, ticker
-        # Every credited band today keeps the strict ladder: no ties.
-        assert option["L"] < option["M"] < option["H"], ticker
-        assert option["line"] and option["line"].startswith("\\(V_{opt}\\)"), ticker
-        # The rows the line cites are the option's background in the app: a citation the §2 table
-        # does not hold would silently drop out of it.
-        cited = set(catalog_module._ASSUMPTION_ID.findall(option["line"]))
-        assert {r["id"] for r in option["rows"]} == cited, ticker
-    # A V_opt = 0 line is a disclosure, not a band (test_no_option_band_is_null owns the rule).
-    zero = [p.stem for p in list_framework_paths(FRAMEWORKS_DIR) if load_framework(p).v_opt == 0]
-    for ticker in zero:
-        assert rows[ticker]["option"] is None, ticker
+def test_option_bands_use_saved_values_and_zero_credit_hides_band(repo, quotes, results):
+    results.values['AAA.US']['output']['option'] = {
+        'value': 10, 'value_unit': 'USD_PER_SHARE', 'anchors': {'L': 10, 'M': 25, 'H': 50}}
+    results.values['BBB.US']['output']['option'] = {
+        'value': 0, 'value_unit': 'USD_PER_SHARE', 'anchors': {'L': 10, 'M': 20, 'H': 40}}
+    rows = rows_by_ticker(repo, quotes, results)
+    assert rows['AAA.US']['option'] == {'L': 10, 'M': 25, 'H': 50, 'v_opt': 10}
+    assert rows['AAA.US']['band']['option_zone'] == zone_of(25, 10, 25, 50)
+    assert rows['BBB.US']['option'] is None
+    assert rows['BBB.US']['band']['option_zone'] is None
 
 
 def ny(day: int, hh: int, mm: int = 0) -> float:
@@ -510,7 +574,7 @@ def test_poll_fetches_only_after_a_market_traded(fetch, clock, quotes):
     (ny(28, 7), 24.0, "pre"),  # Monday pre-market is newer than Friday's post-market
     (ny(28, 10), 25.0, None),  # Monday's regular session has opened: extended prices are older
 ])
-def test_us_row_takes_the_newest_price_since_the_regular_close(repo, fetch, clock, quotes, now, price, session):
+def test_us_row_takes_the_newest_price_since_the_regular_close(repo, fetch, clock, quotes, results, now, price, session):
     printed = (
         SessionQuote("post", 27.0, datetime.fromtimestamp(ny(25, 17, 30), timezone.utc)),
         SessionQuote("pre", 24.0, datetime.fromtimestamp(ny(28, 6), timezone.utc)),
@@ -519,7 +583,7 @@ def test_us_row_takes_the_newest_price_since_the_regular_close(repo, fetch, cloc
     # Only trades printed by `now` can be in the quote.
     fetch.extended["AAA.US"] = tuple(x for x in printed if x.at.timestamp() <= now)
     clock.now = now
-    band = rows_by_ticker(repo, quotes)["AAA.US"]["band"]
+    band = rows_by_ticker(repo, quotes, results)["AAA.US"]["band"]
     assert (band["price"], band["session"]) == (price, session)
     assert band["zone"] == zone_of(price, 10, 20, 40)
 
@@ -534,47 +598,58 @@ def _axis(repo, name, mounts, extra=""):
     )
 
 
-def test_axes_and_mounts(repo, quotes):
+def test_axes_and_mounts(repo, quotes, results):
     _axis(repo, "al", "AAA.US · CCC.US；候选：BBB.US", "> 共识：L（高盛 2027E；as-of 2026-09-03）\n")
     _axis(repo, "cu", "AAA.US")
     (repo / "axes" / "rates.md").write_text(
         "# _AXIS.rates — 无风险利率轴\n> 轴类型：`rates_axis` | 挂载票：AAA.US\n", encoding="utf-8")
-    body = catalog(repo, quotes)
-    assert [a["name"] for a in body["axes"]] == ["al", "cu"]
-    al = body["axes"][0]
-    assert al["label"] == "AL 价格"
-    assert al["consensus"] == {"tier": "L", "note": "高盛 2027E；as-of 2026-09-03"}
-    assert al["tickers"] == ["AAA.US", "CCC.US"]
-    assert body["axes"][1]["consensus"] is None
+    body = catalog(repo, quotes, valuation_provider=results)
+    assert body["axes"] == []
     rows = {r["ticker"]: r for r in body["tickers"]}
-    assert rows["AAA.US"]["axes"] == ["al", "cu"]
+    assert all(rows[ticker]['valuation_status'] == 'confirmed' and rows[ticker]['M'] == 20
+               for ticker in ('AAA.US', 'BBB.US'))
+    assert rows["AAA.US"]["axes"] == []
+    assert rows["AAA.US"]["axis_status"] == 'unknown'
     assert rows["BBB.US"]["axes"] == []
 
 
-def test_reference_mounts_are_listed_apart(repo, quotes):
+def test_document_reference_mounts_do_not_supply_axis_relations(repo, quotes, results):
     _axis(repo, "al", "AAA.US ｜ 参照：BBB.US；候选：CCC.US")
-    body = catalog(repo, quotes)
-    al = body["axes"][0]
-    assert (al["tickers"], al["refs"]) == (["AAA.US"], ["BBB.US"])
+    body = catalog(repo, quotes, valuation_provider=results)
+    assert body['axes'] == []
     rows = {r["ticker"]: r for r in body["tickers"]}
-    assert (rows["AAA.US"]["axes"], rows["AAA.US"]["ref_axes"]) == (["al"], [])
-    assert (rows["BBB.US"]["axes"], rows["BBB.US"]["ref_axes"]) == ([], ["al"])
+    assert all(rows[ticker]['valuation_status'] == 'confirmed' and rows[ticker]['M'] == 20
+               for ticker in ('AAA.US', 'BBB.US'))
+    assert rows['AAA.US']['axis_status'] == 'unknown'
+    assert rows['BBB.US']['axis_status'] == 'unknown'
 
 
-def test_bad_axis_is_dropped_alone(repo, quotes, caplog):
+def test_bad_saved_axis_is_dropped_without_losing_good_axis_or_band(repo, quotes, results):
     _axis(repo, "al", "AAA.US", "> 共识：高（x）\n")
     _axis(repo, "cu", "AAA.US")
-    body = catalog(repo, quotes)
-    assert [a["name"] for a in body["axes"]] == ["cu"]
-    assert "axis parse failed: al.md" in caplog.text
+    results.values['AAA.US']['output'].update(
+        source_versions={'axis:bad': 'old-bad', 'axis:good': 'old-good'},
+        axis_metadata={
+            'bad': {'axis_type': 'shared_scenario_axis', 'axis_id': 'bad'},
+            'good': {'axis_type': 'shared_scenario_axis', 'axis_id': 'cu', 'logical_id': '_AXIS.cu',
+                     'title': '铜价情景轴', 'label': '铜价', 'role': 'priced',
+                     'priced_mounts': ['AAA.US'], 'reference_mounts': [], 'historical_consensus': None},
+        })
+    body = catalog(repo, quotes, valuation_provider=results)
+    row = {item['ticker']: item for item in body['tickers']}['AAA.US']
+    assert row['valuation_status'] == 'confirmed' and row['M'] == 20
+    assert row['axis_status'] == 'unknown' and row['axes'] == ['cu']
+    assert [axis['name'] for axis in body['axes']] == ['cu']
 
 
-def test_ticker_consensus_line(repo, quotes):
+def test_ticker_consensus_line(repo, quotes, results):
     md = framework_md("BBB.US", "Beta Inc", "`stalwart`").replace(
         "> 主尺：test ruler", "> 主尺：test ruler\n> 共识：H（卖方 2027；as-of 2026-09-20）")
     (repo / "BBB.US.md").write_text(md, encoding="utf-8")
-    rows = {r["ticker"]: r for r in catalog(repo, quotes)["tickers"]}
-    assert rows["BBB.US"]["consensus"] == {"tier": "H", "note": "卖方 2027；as-of 2026-09-20"}
+    rows = {r["ticker"]: r for r in catalog(repo, quotes, valuation_provider=results)["tickers"]}
+    assert rows['BBB.US']['valuation_status'] == 'confirmed' and rows['BBB.US']['M'] == 20
+    assert rows["BBB.US"]["consensus"] is None
+    assert rows["BBB.US"]["axis_status"] == 'unknown'
     assert rows["AAA.US"]["consensus"] is None
 
 

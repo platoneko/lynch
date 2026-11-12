@@ -22,6 +22,8 @@ than it earns, so for `g <= 0` this collapses to `1/(r - g)`.
 """
 from __future__ import annotations
 
+import math
+
 # When ROE sits within this of r, growth is close to value-neutral: the
 # multiple barely moves with g until it runs into the pole at g = r, and then
 # a fraction of a turn of PE swings g by points.  Inverting a price for g in
@@ -53,8 +55,19 @@ def basket_r(basket: int) -> float:
     return BASKET_R[basket][1]
 
 
+def _is_finite_number(value: float) -> bool:
+    if isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(value)
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
 def check_r(r: float, where: str, basket: int | None = None) -> list[str]:
     """A leg's r must be a basket value; with the basket named it must be THAT basket's."""
+    if not _is_finite_number(r):
+        return [f"{where}: discount rate must be a finite number"]
     if basket is not None:
         if basket not in BASKET_R:
             return [f"{where}: 篮 {basket} is not one of 1..7 (valuation-rules.md「§r 篮子」)"]
@@ -130,6 +143,8 @@ def g_cap(r: float, mega_hw: bool = False) -> float:
 
 def check_g_cap(g: float, r: float, where: str, mega_hw: bool = False) -> list[str]:
     """A perpetual g must sit at or below g_cap(r); the excess belongs in g1."""
+    if not _is_finite_number(g) or not _is_finite_number(r):
+        return [f"{where}: growth and discount rate must be finite numbers"]
     cap = g_cap(r, mega_hw)
     if g > cap + 1e-9:
         rule = "「巨型硬件上限」— the excess belongs in the candidate band" if mega_hw \
@@ -157,6 +172,61 @@ def perpetual_pe(g: float, roe: float, r: float) -> float:
     if r - g <= 0:
         raise ValueError(f"perpetuity diverges: g={g} >= r={r}")
     return payout(g, roe) / (r - g)
+
+
+def return_path_pe(start_year: int, fade_start: int, fade_end: int,
+                   mature_return: float, growth: float, forward_return: float,
+                   discount_rate: float, *, growth_first: float = 0.0,
+                   transition_years: int = 0, margin_start: float = 1.0,
+                   margin_end: float = 1.0) -> float:
+    """Value one unit of next-year earnings through a return fade and Gordon tail.
+
+    Returns and margins stay at their initial values through ``fade_start``,
+    move linearly, and reach maturity in ``fade_end``.  With a margin path the
+    result is per unit of revenue times after-tax margin, not per unit of
+    earnings.  The initial transition does not model a changing margin: reject
+    that combination rather than silently omitting its effect.
+    """
+    numbers = (mature_return, growth, forward_return, discount_rate,
+               growth_first, margin_start, margin_end)
+    if not all(math.isfinite(value) for value in numbers):
+        raise ValueError("return-path inputs must be finite")
+    if any(isinstance(year, bool) or not isinstance(year, int)
+           for year in (start_year, fade_start, fade_end, transition_years)):
+        raise ValueError("return-path years must be integers")
+    if fade_start >= fade_end or transition_years < 0:
+        raise ValueError("invalid return-path years")
+    if forward_return <= 0 or mature_return <= 0:
+        raise ValueError("return-path returns must be positive")
+    if discount_rate <= -1 or growth <= -1 or growth_first <= -1 or growth >= discount_rate:
+        raise ValueError("invalid growth or discount rate")
+    if margin_start < 0 or margin_end < 0:
+        raise ValueError("margins must be non-negative")
+    if transition_years and (margin_start != 1.0 or margin_end != 1.0):
+        raise ValueError("transition with an explicit margin path is not modelled")
+
+    mature_return = min(forward_return, mature_return)
+    if growth >= mature_return:
+        raise ValueError("perpetual growth requires a positive distribution")
+    pv, earnings, period = 0.0, 1.0, 1
+    for _ in range(transition_years):
+        pv += earnings * (1.0 - growth_first / forward_return) / (1.0 + discount_rate) ** period
+        earnings *= 1.0 + growth_first
+        period += 1
+
+    while True:
+        year = start_year + period - 1
+        progress = min(1.0, max(0.0, (year - fade_start) / (fade_end - fade_start)))
+        current_return = forward_return + (mature_return - forward_return) * progress
+        margin = margin_start + (margin_end - margin_start) * progress
+        distribution = payout(growth, current_return)
+        if year >= fade_end:
+            return pv + earnings * margin * distribution / (
+                (discount_rate - growth) * (1.0 + discount_rate) ** (period - 1)
+            )
+        pv += earnings * margin * distribution / (1.0 + discount_rate) ** period
+        earnings *= 1.0 + growth
+        period += 1
 
 
 def capped_payout_pe(g_raw: float, roe: float, r: float, payout_observed: float) -> float:

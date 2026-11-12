@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TickerRow, ZoneId } from '../types';
-import { applyFilter, consensusText, DEFAULT_FILTER, extraBands, inArchiveScope, latestAsOf, lynchClasses, quoteTimeText } from './listModel';
+import { applyFilter, availableAxes, consensusText, DEFAULT_FILTER, extraBands, inArchiveScope, latestAsOf, lynchClasses, quoteTimeText } from './listModel';
 
 const ZONES = ['deep_discount', 'conservative', 'neutral', 'optimistic', 'stretched'];
 
@@ -16,6 +16,13 @@ function row(ticker: string, over: Partial<TickerRow> = {}): TickerRow {
 const withZone = (t: string, zone: ZoneId | null) =>
   row(t, { band: { price: 1, session: null, as_of: '2026-09-26T09:03:00+08:00', zone, option_zone: null, candidate_zone: null } });
 const tickers = (rows: TickerRow[]) => rows.map((r) => r.ticker);
+
+it('shows axes of archived tickers only when archived tickers are visible', () => {
+  const axes = [{ name: 'old', label: '旧轴', title: '旧轴', consensus: null, tickers: ['OLD.US'], refs: [] }];
+  const rows = [row('OLD.US', { archived: true, axes: ['old'] })];
+  expect(availableAxes(axes, rows, DEFAULT_FILTER)).toEqual([]);
+  expect(availableAxes(axes, rows, { ...DEFAULT_FILTER, showArchived: true })).toEqual(axes);
+});
 
 describe('search', () => {
   const rows = [row('NVDA.US', { name: '英伟达' }), row('0700.HK', { name: '腾讯控股', market: 'HK' })];
@@ -148,6 +155,15 @@ describe('extraBands', () => {
   });
   it('formats V_opt like the price labels', () => {
     expect(extraBands(row('A.US', { option: { ...option, v_opt: 4 } }))[0].label).toBe('+V 4.00');
+  });
+  it('shows an option band when the result contains only its three prices', () => {
+    const band = { L: 10, M: 25, H: 58.17 };
+    expect(extraBands(row('A.US', { option: band, band: zones }))).toEqual([
+      { kind: 'option', label: '+V', anchors: band, zone: 'conservative' },
+    ]);
+  });
+  it('uses the short label supplied by the result for the option band', () => {
+    expect(extraBands(row('A.US', { option: { ...option, label: '新产线' } }))[0].label).toBe('新产线');
   });
   it('keeps a band whose zone is missing, with a null zone', () => {
     expect(extraBands(row('A.US', { option, band: null })).map((b) => b.zone)).toEqual([null]);

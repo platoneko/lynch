@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
-from .axes import Consensus, header_consensus
+from .axes import Consensus, header_block, header_consensus
 from .inputs import parse_baskets
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -104,6 +104,31 @@ def lynch_cn(primary: str, secondary: str | None = None) -> str:
     if secondary:
         return f"{p}/{LYNCH_CN.get(secondary, secondary)}"
     return p
+
+
+@dataclass(frozen=True)
+class FrameworkIdentity:
+    ticker: str
+    name: str
+    lynch_primary: str
+    lynch_secondary: str | None
+    updated: date | None
+
+
+def parse_framework_identity(md: str, stem: str) -> FrameworkIdentity:
+    """Read identifying header information independently of valuation results."""
+    heading = next((line for line in md.splitlines() if line.startswith("# ")), "")
+    title = _TITLE.fullmatch(heading)
+    if not title:
+        raise ValueError(f"{stem}.md: missing `# TICKER — name` title")
+    ticker, name = title.group(1), title.group(2).strip()
+    if stem != ticker:
+        raise ValueError(f"{stem}.md: stem {stem!r} != title ticker {ticker!r}")
+    header = "\n".join(header_block(md))
+    lynch = _LYNCH.search(header)
+    if not lynch:
+        raise ValueError(f"{ticker}: missing 林奇：`primary` header")
+    return FrameworkIdentity(ticker, name, lynch.group(1), lynch.group(2), _parse_updated(header))
 
 
 @dataclass(frozen=True)
@@ -316,14 +341,67 @@ _PRICE_FREE_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     # 实现价 (realised selling price) is not 现价.
     (re.compile(r"(?<!实)现价\s?(?:\*\*)?[0-9]"), "current price figure"),
     (re.compile(r"已过 A2f"), "A2f verdict (a research-time check)"),
-    (re.compile(r"状态：\**\s*BLOCKED"), "BLOCKED status line (BLOCKED never lands)"),
 )
 
 
+_HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
+_HEADING_NUMBER = re.compile(r"^\d+(?:\.\d+)*[.、．)]?[ \t]+")
+_HEADING_NOTE = re.compile(r"\s*(?:（[^（）]*）|\([^()]*\))\s*$")
+_HISTORY_TITLE = re.compile(
+    r"^(?:(?:历次|历史|数据|引用数据|客观数据|财务数据|重要|近期|既往|事件|版本)\s*)?"
+    r"(?:更新(?:记录|日志|历史)?|修改记录|变更记录|changelog)$", re.IGNORECASE,
+)
+_MIXED_HISTORY_TITLE = re.compile(r"^(?:资料|数据|来源|依据)\s*(?:与|和|及|、|/|&)\s*(?:更新记录|更新日志|更新历史|changelog)$", re.IGNORECASE)
+_HISTORY_DATE = re.compile(r"^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}(?:$|[\s：:])")
+_INLINE_HISTORY_DATE = re.compile(r"^\s*(?:[-*+]\s+)?(?:\*\*)?\d{4}[-/.]\d{1,2}[-/.]\d{1,2}(?:$|[\s：:])")
+_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+
+
+def _without_history(md: str) -> str:
+    """Mask explicit history only; retain newlines for diagnostic line numbers."""
+    section_level = None
+    history_only = False
+    dated_level = None
+    fence = None
+    result = []
+    for line in md.splitlines(keepends=True):
+        stripped = line.rstrip('\r\n')
+        fence_marker = _FENCE.match(stripped)
+        was_fenced = fence is not None
+        if fence_marker:
+            marker = fence_marker.group(1)
+            if fence is None:
+                fence = (marker[0], len(marker))
+            elif marker[0] == fence[0] and len(marker) >= fence[1]:
+                fence = None
+        heading = None if was_fenced or fence_marker else _HEADING.match(stripped)
+        if heading:
+            level = len(heading.group(1))
+            title = _HEADING_NUMBER.sub('', heading.group(2).strip()).strip()
+            title = _HEADING_NOTE.sub('', title).strip()
+            if section_level is not None and level <= section_level:
+                section_level, dated_level, history_only = None, None, False
+            elif dated_level is not None and level <= dated_level:
+                dated_level = None
+            if _HISTORY_TITLE.fullmatch(title):
+                section_level, dated_level, history_only = level, None, True
+            elif _MIXED_HISTORY_TITLE.fullmatch(title):
+                section_level, dated_level, history_only = level, None, False
+            elif section_level is not None and not history_only and _HISTORY_DATE.match(title):
+                dated_level = level
+        is_history = section_level is not None and (history_only or dated_level is not None)
+        if (section_level is not None and not history_only and not heading
+                and not was_fenced and not fence_marker and _INLINE_HISTORY_DATE.match(stripped)):
+            is_history = True
+        if is_history:
+            line = ''.join(char if char in '\r\n' else ' ' for char in line)
+        result.append(line)
+    return ''.join(result)
+
+
 def price_free_violations(md: str) -> list[str]:
-    """`line N: what` for each own-price form outside §4 Changelog (event history keeps them)."""
-    m_log = re.search(r"^## 4\.", md, re.MULTILINE)
-    body = md[: m_log.start()] if m_log else md
+    """`line N: what` for own-price forms outside clearly identified history."""
+    body = _without_history(md)
     out: list[str] = []
     for rx, what in _PRICE_FREE_RULES:
         for m in rx.finditer(body):
@@ -332,13 +410,13 @@ def price_free_violations(md: str) -> list[str]:
 
 
 def load_framework(path: Path) -> FrameworkMeta:
-    md = path.read_text(encoding="utf-8")
-    tm = _TITLE.search(md)
-    if not tm:
-        raise ValueError(f"{path.name}: missing `# TICKER — name` title")
-    ticker, name = tm.group(1), tm.group(2).strip()
-    if path.stem != ticker:
-        raise ValueError(f"{path.name}: stem {path.stem!r} != title ticker {ticker!r}")
+    return parse_framework(path.read_text(encoding="utf-8"), path)
+
+
+def parse_framework(md: str, path: Path) -> FrameworkMeta:
+    """Parse one already-read document snapshot."""
+    identity = parse_framework_identity(md, path.stem)
+    ticker = identity.ticker
     L, M, H = _parse_anchors(md)
     if not (L < M < H):
         raise ValueError(f"{ticker}: need L < M < H, got {L}, {M}, {H}")
@@ -350,11 +428,6 @@ def load_framework(path: Path) -> FrameworkMeta:
         raise ValueError(f"{ticker}: p_L/p_M/p_H out of [0,1], got {p_tiers}")
     currency = _parse_currency(md)
     baskets = parse_baskets(md)
-    lm = _LYNCH.search(md)
-    if not lm:
-        raise ValueError(f"{ticker}: missing 林奇：`primary` header")
-    lynch_primary = lm.group(1)
-    lynch_secondary = lm.group(2)
     ev: Path | None = None
     em = _EVAL_PTR.search(md)
     if em:
@@ -368,14 +441,14 @@ def load_framework(path: Path) -> FrameworkMeta:
     return FrameworkMeta(
         ticker=ticker,
         path=path,
-        name=name,
+        name=identity.name,
         L=L,
         M=M,
         H=H,
         currency=currency,
         eval_script=ev,
-        lynch_primary=lynch_primary,
-        lynch_secondary=lynch_secondary,
+        lynch_primary=identity.lynch_primary,
+        lynch_secondary=identity.lynch_secondary,
         v_opt=v_opt,
         p_tiers=p_tiers,
         option_line=_parse_option_line(md),
@@ -384,7 +457,7 @@ def load_framework(path: Path) -> FrameworkMeta:
         candidate_gate=candidate[2] if candidate else None,
         baskets=baskets,
         consensus=header_consensus(md),
-        updated=_parse_updated(md),
+        updated=identity.updated,
     )
 
 

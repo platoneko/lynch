@@ -12,12 +12,13 @@
 
 Agent 应加载 skill **`sediment-framework`**：**先持续对话**对齐分类 / thesis / 主尺 / 假设 / 价带公式；你明确说「可以落盘」后，才按模板写入：
 
-- `frameworks/<TICKER>.md` — 真源（题头含林奇类 + 主尺一行）
+- `frameworks/<TICKER>.md` — 人读解释（题头含林奇类 + 主尺一行）
+- `frameworks/eval/<TICKER>.py` — 量化输入与计算来源；采纳结果另行保存供首页和日报读取
 
 模板：`frameworks/_TEMPLATE.md`。协作硬约束：`frameworks/AGENTS.md`（框架）· `AGENTS.md`（开发）。  
 标的池 = 扫 `frameworks/*.md`（排除 `_` 前缀与 `AGENTS.md` / `README.md`）；**不**维护 `universe.yaml`。
 
-首次克隆：`gh repo clone platoneko/lynch-frameworks frameworks`（在本仓库根执行）。代码仓库与内容仓库需要分别克隆。在 `frameworks/` 执行 `just check` 验证框架。
+首次克隆：`gh repo clone platoneko/lynch-frameworks frameworks`（在本仓库根执行）。代码仓库与内容仓库需要分别克隆。在 `frameworks/` 执行 `just check` 前，按 [框架检查说明](frameworks/README.md) 显式提供归档清单；需要的基金历史数据也须明确提供。
 
 ## 目录
 
@@ -72,7 +73,7 @@ Codex 在每次启动或恢复对话进程时，从仓库 `.mcp.json` 接入 `wi
 
 ## 日报价带 + 飞书
 
-每天扫 `frameworks/*.md` 的 \(L/M/H\)，用 Longbridge 常规 `last` 归 zone，写入 `output/bands/<TICKER>.json`（gitignore），并飞书推送：
+每天读取已保存结果中的 \(L/M/H\)，用 Longbridge 常规 `last` 归 zone，写入 `output/bands/<TICKER>.json`（gitignore），并飞书推送。结果库路径由 `LYNCH_VALUATION_DB` 指定；详情见 [框架检查说明](frameworks/README.md)：
 
 - **每天**：一条飞书 **post 富文本**全池日报，每票 2–3 行，形如  
   `🟡 603993.SH 洛阳钼业 19.01 CNY`  
@@ -82,14 +83,14 @@ Codex 在每次启动或恢复对话进程时，从仓库 `.mcp.json` 接入 `wi
 
 ```bash
 # dry-run：不写盘、不 POST
-python3 scripts/daily_bands.py --dry-run
+app/server/.venv/bin/python scripts/daily_bands.py --dry-run
 
 # 实跑：默认复用 ../invest 的飞书 webhook（policies.toml [alerts].feishu_webhook）
 # 也可设 FEISHU_ALERT_WEBHOOK，或在 config/daily.toml 覆盖（见 example）
-python3 scripts/daily_bands.py
+app/server/.venv/bin/python scripts/daily_bands.py
 
 # 只算价带、不推飞书
-python3 scripts/daily_bands.py --no-notify
+app/server/.venv/bin/python scripts/daily_bands.py --no-notify
 ```
 
 安装工作日 cron（`Asia/Shanghai`：`09:03` 早盘 + `16:13` 午后；脚本内 as_of 同此时区）：
@@ -98,4 +99,4 @@ python3 scripts/daily_bands.py --no-notify
 bash scripts/install-daily-cron.sh
 ```
 
-**MUST NOT** 让日报改写 `frameworks/*.md`。单票完整公式校验仍用 `python3 frameworks/eval/<TICKER>.py`。
+**MUST NOT** 让日报改写 `frameworks/*.md`。单票计算与规则检查通过框架仓的统一检查入口执行。

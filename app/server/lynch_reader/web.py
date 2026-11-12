@@ -30,9 +30,10 @@ from lynch_reader.archive import ARCHIVE_FILE, FrameworkArchive
 from lynch_reader.auth.gate import DeviceAuth, pair_routes
 from lynch_reader.auth.store import DEVICES_FILE, DeviceStore
 from lynch_reader.catalog import (
-    FRAMEWORKS_DIR, REPO_ROOT, QuoteCache, QuotePoller, axis_path_in, catalog, framework_path, framework_updates,
+    FRAMEWORKS_DIR, REPO_ROOT, QuoteCache, QuotePoller, axis_path_in, catalog, framework_path, framework_snapshots,
     quote_failure, quote_pool,
 )
+from lynch_reader.valuation_catalog import ValuationProvider
 from lynch_reader.chat.candidates import CANDIDATES_FILE, CandidateStore
 from lynch_reader.chat.config import LaunchConfig
 from lynch_reader.chat.grok import GrokConfig
@@ -50,6 +51,7 @@ from lynch_reader.earnings import (
 
 from eval.lib.axes import list_axis_paths  # noqa: E402 — after catalog, which puts the repo root on sys.path
 from eval.lib.frameworks import list_framework_paths  # noqa: E402 — after catalog, which puts the repo root on sys.path
+from eval.lib.result_service import open_result_reader  # noqa: E402
 
 WEB_DIST = REPO_ROOT / "app" / "web" / "dist"
 # The personal tailnet address of this host; other local users must not reach it via 0.0.0.0.
@@ -116,15 +118,17 @@ def app_lifespan(chat: ChatService | None, poller: QuotePoller | None):
 def create_app(frameworks_dir: Path, web_dist: Path, quotes: QuoteCache, devices: DeviceStore,
                archive: FrameworkArchive, chat: ChatService | None = None,
                earnings: Earnings | None = None, anomalies: Anomalies | None = None,
-               poller: QuotePoller | None = None) -> Starlette:
+               poller: QuotePoller | None = None, *,
+               valuation_provider: ValuationProvider | None = None) -> Starlette:
     pool = lambda: active_pool(frameworks_dir, archive)  # noqa: E731
     if anomalies is not None:
         quotes.subscribe(lambda batch: anomalies.observe(batch, pool()))
 
     def tickers(request: Request) -> Response:
         dates = None if earnings is None else (
-            lambda updated: earnings.ticker_dates(pool(), revised_by(updated, frameworks_dir)))
-        return unless_held(request, JSONResponse(catalog(frameworks_dir, quotes, archive.tickers(), dates)))
+            lambda updated, versions: earnings.ticker_dates(pool(), revised_by(updated, frameworks_dir, versions)))
+        return unless_held(request, JSONResponse(catalog(
+            frameworks_dir, quotes, archive.tickers(), dates, valuation_provider=valuation_provider)))
 
     def framework(request: Request) -> Response:
         path = framework_path(request.path_params["ticker"], frameworks_dir)
@@ -160,7 +164,8 @@ def create_app(frameworks_dir: Path, web_dist: Path, quotes: QuoteCache, devices
     def earnings_list(request: Request) -> Response:
         # Sync: the first request after the daily calendar run falls due may wait on longbridge in the thread pool.
         tag = anomalies.earnings_tag if anomalies is not None else (lambda t: None)
-        revised = revised_by(framework_updates(frameworks_dir), frameworks_dir)
+        updates, versions = framework_snapshots(frameworks_dir)
+        revised = revised_by(updates, frameworks_dir, versions)
         return JSONResponse(earnings.snapshot(pool(), revised, tag))
 
     def set_ignored(ignored: bool):
@@ -241,7 +246,7 @@ def main(argv: list[str] | None = None) -> None:
         ChatIndex(output / "chat" / "index.json"),
         LaunchConfig((shutil.which("claude") or "claude",), REPO_ROOT),
         projects_dir_for(REPO_ROOT, Path.home()),
-        dict(os.environ),
+        {**os.environ, "LYNCH_FRAMEWORK_ARCHIVE": str(ARCHIVE_FILE)},
         grok=GrokConfig((shutil.which("grok") or "grok",), workdir=output / "chat" / "grok-workdir",
                         home=Path.home(), logs=output / "chat" / "grok", invest_root=INVEST_ROOT,
                         skill=REPO_ROOT / ".agents" / "skills" / "discover-kol" / "references" / "search.md"),
@@ -254,13 +259,15 @@ def main(argv: list[str] | None = None) -> None:
     # forever and the lifespan shutdown that stops the claude processes never runs.
     quotes = QuoteCache()
     archive = FrameworkArchive(ARCHIVE_FILE)
+    devices = DeviceStore(DEVICES_FILE)
+    valuation_provider = open_result_reader()
     calendar = CalendarCache(CALENDAR_FILE)
     anomalies = Anomalies(AnomalyStore(EVENTS_FILE), BaselineCache(BASELINE_FILE), calendar)
     poller = QuotePoller(quotes, lambda: quote_pool(FRAMEWORKS_DIR),
                          after=lambda: anomalies.upkeep(active_pool(FRAMEWORKS_DIR, archive)))
-    uvicorn.run(create_app(FRAMEWORKS_DIR, WEB_DIST, quotes, DeviceStore(DEVICES_FILE), archive, chat=chat,
+    uvicorn.run(create_app(FRAMEWORKS_DIR, WEB_DIST, quotes, devices, archive, chat=chat,
                            earnings=Earnings(calendar, IgnoreStore(IGNORED_FILE)), anomalies=anomalies,
-                           poller=poller),
+                           poller=poller, valuation_provider=valuation_provider),
                 host=args.host, port=args.port, timeout_graceful_shutdown=5)
 
 

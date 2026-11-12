@@ -121,6 +121,17 @@ class DeviceStore:
     def is_paired(self, token: str) -> bool:
         return _sha256(token) in self._token_hashes()
 
+    @contextmanager
+    def lock_paired(self, token: str) -> Iterator[bool]:
+        """Serialize a short protected action with pairing and revocation.
+
+        Callers must acquire this lock before any downstream storage lock and
+        must not run a valuation calculation while holding it.
+        """
+        token_hash = _sha256(token)
+        with self._locked() as data:
+            yield any(secrets.compare_digest(token_hash, device['token_sha256']) for device in data['devices'])
+
     def devices(self) -> list[Device]:
         return [Device(d["id"], d["name"], d["paired_at"]) for d in self._read()["devices"]]
 

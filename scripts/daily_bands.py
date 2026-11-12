@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 import re
 import sys
 from dataclasses import dataclass
@@ -20,17 +21,22 @@ from zoneinfo import ZoneInfo
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+SERVER_ROOT = REPO_ROOT / 'app' / 'server'
+if str(SERVER_ROOT) not in sys.path:
+    sys.path.insert(0, str(SERVER_ROOT))
 
-from eval.lib.axes import load_rates  # noqa: E402
-from eval.lib.bands_io import build_record, read_previous, read_rf_readings, write_bands  # noqa: E402
+from eval.lib.bands_io import build_record, read_previous, write_bands  # noqa: E402
 from eval.lib.feishu import send_post  # noqa: E402
-from eval.lib.frameworks import FrameworkMeta, load_all_frameworks  # noqa: E402
+from eval.lib.frameworks import (FRAMEWORKS_DIR, FrameworkMeta, list_framework_paths,
+                                 parse_framework_identity)  # noqa: E402
 from eval.lib.price import fetch_quotes  # noqa: E402
+from eval.lib.result_view import SOURCE_STATUS_MESSAGES, map_result, status_text  # noqa: E402
+from eval.lib.result_service import open_result_reader  # noqa: E402
+from lynch_reader.archive import ARCHIVE_FILE, FrameworkArchive  # noqa: E402
 # candidate_zone / credited_option_zone are re-exported: the digest tests call them from here.
 from eval.lib.zones import (  # noqa: E402, F401
     candidate_zone,
     credited_option_zone,
-    price_zones,
     zone_bound_edges,
     zone_emoji,
     zone_label,
@@ -57,12 +63,156 @@ class Row:
     candidate_zone: str | None = None
     previous_candidate_zone: str | None = None
     candidate_crossed: bool = False
-    # r_f readings from output/rates/ (eval-written); readings only, never a cross.
+    # Rate sensitivities come from the stored result; they never trigger a cross.
     rf: dict | None = None
 
     @property
     def any_crossed(self) -> bool:
         return self.crossed or self.option_crossed or self.candidate_crossed
+
+
+@dataclass(frozen=True)
+class ResultMeta:
+    ticker: str
+    name: str
+    currency: str
+    L: float
+    M: float
+    H: float
+    option_band: tuple[float, float, float] | None
+    v_opt: float | None
+    candidate: tuple[float, float, float] | None
+    candidate_label: str | None
+    candidate_status: str | None
+    option_status: str | None
+    review_flags: tuple[str, ...]
+    historical_evidence_flags: tuple[str, ...]
+    historical_review_flags: tuple[str, ...]
+    historical_option_status: str | None
+    fund_reference_status: str | None
+    historical_fund_reference_status: str | None
+    legacy_accepted: bool
+    archived: bool = False
+    option_label: str | None = None
+    historical_reference_bands: tuple[dict, ...] = ()
+    historical_reference_only: bool = False
+    historical_reference_double_counting: bool = False
+    valuation_as_of: str | None = None
+
+
+@dataclass(frozen=True)
+class ArchivedRow:
+    ticker: str
+    name: str
+    price: float | None
+    currency: str | None
+    status: str = "missing"
+    meta: ResultMeta | None = None
+    rf: dict | None = None
+    rate_error: bool = False
+    notes: tuple[str, ...] = ()
+    record: dict | None = None
+
+    @property
+    def any_crossed(self) -> bool:
+        return False
+
+
+def _quote(quote):
+    price = quote if type(quote) in (int, float) else getattr(quote, "last", None)
+    try:
+        valid = type(price) in (int, float) and math.isfinite(price) and price > 0
+    except OverflowError:
+        valid = False
+    currency = getattr(quote, "currency", None)
+    if currency not in ("USD", "CNY", "HKD", "TWD"):
+        currency = None
+    return (price if valid else None), getattr(quote, "status", None), currency
+
+
+def build_rows_from_results(identities, provider, quotes, previous, *, archived, price_source='injected_quote'):
+    """Build the daily view from injected quotes, observations and saved results.
+
+    The caller supplies identities only; numeric values come from the provider.
+    Provider.current is a read-only lookup and must never execute any model,
+    including for archived securities.
+    """
+    rows, errors = [], []
+    for identity in identities:
+        ticker = identity.ticker
+        is_archived = ticker in archived
+        price, quote_status, quote_currency = _quote(quotes.get(ticker))
+        if price is None and not is_archived:
+            errors.append(f'{ticker}: 未取得有效报价')
+        try:
+            status, result = map_result(ticker, provider.current(ticker))
+        except Exception:  # One unavailable result must not hide other rows.
+            if is_archived:
+                rows.append(ArchivedRow(ticker, identity.name, price, quote_currency, status="unavailable"))
+            else:
+                errors.append(f"{ticker}: 估值结果暂不可读取")
+            continue
+        if result is None:
+            if is_archived:
+                rows.append(ArchivedRow(ticker, identity.name, price, quote_currency, status=status))
+            else:
+                errors.append(f"{ticker}: {status_text(status)}")
+            continue
+        L, M, H = result.anchors
+        meta = ResultMeta(ticker, identity.name, result.currency, L, M, H, result.option_band,
+                          result.option_value, result.candidate, result.candidate_label,
+                          result.candidate_status, result.option_status, result.review_flags,
+                          result.historical_evidence_flags, result.historical_review_flags,
+                          result.historical_option_status, result.fund_reference_status,
+                          result.historical_fund_reference_status, status == "legacy_accepted", is_archived,
+                          result.option_label, result.historical_reference_bands,
+                          result.historical_reference_only, result.historical_reference_double_counting,
+                          result.valuation_as_of)
+        rf = None
+        if result.rate_consensus is not None and result.rate_pressure is not None:
+            rf = {"stale": False, "delta_cons": result.delta_cons, "rf_cap": result.rf_cap,
+                  "consensus": result.rate_consensus, "pressure": result.rate_pressure}
+        if price is None or result.historical_reference_only:
+            # A historical comparison has no current zone and must never
+            # feed the next comparison or trigger a crossing.  Record only a
+            # reset marker, never its historical anchors as a current band.
+            marker = ({'ticker': ticker, 'as_of': _as_of_iso(), 'zone': None,
+                       'option_zone': None, 'candidate_zone': None,
+                       'notes': ['historical_reference_only']}
+                      if result.historical_reference_only and not is_archived else None)
+            rows.append(ArchivedRow(ticker, identity.name, price, result.currency, status=status,
+                                    meta=meta, rf=rf, rate_error=result.rate_error, record=marker))
+            continue
+        zone = zone_of(price, L, M, H)
+        option_zone = zone_of(price, *result.option_band) if result.option_band is not None else None
+        cand_zone = zone_of(price, *result.candidate) if result.candidate is not None else None
+        prior = previous.get(ticker)
+        prior = prior if isinstance(prior, dict) else {}
+        prev = prior.get("zone") if isinstance(prior.get("zone"), str) else None
+        prev_option = prior.get("option_zone") if isinstance(prior.get("option_zone"), str) else None
+        prev_cand = prior.get("candidate_zone") if isinstance(prior.get("candidate_zone"), str) else None
+        notes = ["first_run"] if prev is None else []
+        record = build_record(
+            ticker=ticker, as_of=_as_of_iso(), price=price, currency=result.currency,
+            L=L, M=M, H=H, zone=zone, previous_zone=prev,
+            option_zone=option_zone, previous_option_zone=prev_option,
+            candidate_zone=cand_zone, previous_candidate_zone=prev_cand, notes=notes,
+            formula_id="valuation_result_v1",
+            inputs_used={"price_source": price_source, "price_field": "last",
+                         "quote_status": quote_status, "anchors_source": status,
+                         "valuation_ref": result.result_ref, "rate_format": result.rate_format},
+        )
+        if result.rate_error:
+            errors.append(f"{ticker}: 利率情景结果无效")
+        if result.basket_error:
+            errors.append(f"{ticker}: 估值篮子字段无效")
+        rows.append(Row(meta=meta, price=price, zone=zone, previous_zone=prev,
+                        crossed=zone_changed(prev, zone), notes=notes, record=record,
+                        option_zone=option_zone, previous_option_zone=prev_option,
+                        option_crossed=zone_changed(prev_option, option_zone),
+                        candidate_zone=cand_zone, previous_candidate_zone=prev_cand,
+                        candidate_crossed=zone_changed(prev_cand, cand_zone), rf=rf))
+    return rows, errors
 
 
 def _as_of_iso() -> str:
@@ -141,6 +291,31 @@ def format_pool_lines(r: Row) -> list[str]:
     Tickers carrying a candidate band get one more, last:
     「叙事溢价」 候选(FY28·Piper单家) P > 16.29 · L/M/H = 7.23/15.54/16.29
     """
+    if isinstance(r, ArchivedRow):
+        name = r.name.split(" / ", 1)[0].strip()
+        quote = "暂无报价" if r.price is None else _fmt_num(r.price, price_decimals(r.ticker))
+        if r.price is not None and r.currency is not None:
+            quote += f" {r.currency}"
+        lines = [f"⚪ {r.ticker} {name} {quote}"]
+        if r.meta is None:
+            reason = "未迁移估值" if r.status == "missing" else status_text(r.status)
+            return lines + [f"已归档，{reason}"]
+        dp = price_decimals(r.ticker)
+        if r.meta.archived:
+            lines.append("已归档")
+        lines.append(format_lmh(r.meta.L, r.meta.M, r.meta.H, dp))
+        if r.meta.option_band is not None:
+            label = r.meta.option_label or (f"+V({_fmt_anchor(r.meta.v_opt, dp)})" if r.meta.v_opt is not None else "新业务")
+            lines.append(f"{label} · {format_lmh(*r.meta.option_band, dp)}")
+        if r.meta.candidate is not None:
+            lines.append(f"候选({r.meta.candidate_label}) · {format_lmh(*r.meta.candidate, dp)}")
+        lines.extend(_result_cautions(r.meta))
+        if r.rf:
+            lines.append(f"利率·共识({r.rf['delta_cons'] * 1e4:+.0f}bp) · {format_lmh(*r.rf['consensus'], dp)}")
+            lines.append(f"利率·压力±{r.rf['rf_cap'] * 1e4:.0f}bp · {format_lmh(*r.rf['pressure'], dp)}")
+        if r.rate_error:
+            lines.append("利率情景结果无效")
+        return lines
     title = r.meta.ticker
     if not r.meta.ticker.endswith(".US"):
         title = f"{r.meta.ticker} {_short_name(r.meta)}"
@@ -152,18 +327,16 @@ def format_pool_lines(r: Row) -> list[str]:
         header,
         f"「{zone_label(r.zone)}」 {bounds} · {format_lmh(r.meta.L, r.meta.M, r.meta.H, dp)}",
     ]
+    if getattr(r.meta, "archived", False):
+        lines.append("已归档")
     band = r.meta.option_band
     v_opt = r.meta.v_opt
-    if (
-        band is not None
-        and v_opt is not None
-        and v_opt > 0
-        and r.option_zone
-    ):
+    if band is not None and (v_opt is None or v_opt > 0) and r.option_zone:
         L2, M2, H2 = band
         ob = format_zone_bounds(r.option_zone, L2, M2, H2, dp)
+        option_label = getattr(r.meta, 'option_label', None) or (f"+V({_fmt_anchor(v_opt, dp)})" if v_opt is not None else "新业务")
         lines.append(
-            f"「{zone_label(r.option_zone)}」 +V({_fmt_anchor(v_opt, dp)}) {ob} · {format_lmh(L2, M2, H2, dp)}"
+            f"「{zone_label(r.option_zone)}」 {option_label} {ob} · {format_lmh(L2, M2, H2, dp)}"
         )
     if r.meta.candidate is not None and r.candidate_zone:
         L3, M3, H3 = r.meta.candidate
@@ -172,7 +345,90 @@ def format_pool_lines(r: Row) -> list[str]:
             f"「{zone_label(r.candidate_zone)}」 候选({r.meta.candidate_label}) "
             f"{cb} · {format_lmh(L3, M3, H3, dp)}"
         )
+    lines.extend(_result_cautions(r.meta))
     lines.extend(format_rf_lines(r))
+    return lines
+
+
+def _result_cautions(meta) -> list[str]:
+    lines = []
+    if hasattr(meta, 'valuation_as_of'):
+        label = '历史估值基准' if getattr(meta, 'historical_reference_only', False) else '估值基准'
+        day = meta.valuation_as_of
+        lines.append(f'{label}：{day}' if day else f'{label}日期待核')
+    if (getattr(meta, 'historical_reference_double_counting', False)
+            or 'historical_double_counting' in getattr(meta, 'review_flags', ())
+            or 'historical_double_counting' in getattr(meta, 'historical_review_flags', ())):
+        lines.append('旧估值存在重复计价，仅供历史对照')
+    if ((getattr(meta, 'historical_reference_only', False)
+         or 'historical_reference_only' in getattr(meta, 'review_flags', ()))
+            and not getattr(meta, 'historical_reference_double_counting', False)
+            and 'historical_double_counting' not in getattr(meta, 'review_flags', ())):
+        lines.append('旧估值仅供历史对照，不作为当前价带')
+    if getattr(meta, "review_flags", ()) or getattr(meta, "historical_review_flags", ()):
+        lines.append("估值假设有待核对事项，请查看框架说明")
+    if getattr(meta, "legacy_accepted", False):
+        lines.append("历史框架沿用，计算尚待复核")
+    for reference in getattr(meta, 'historical_reference_bands', ()):
+        kind = '候选' if reference['kind'] == 'candidate' else '新业务'
+        label = f"（{reference['label']}）" if reference.get('label') else ''
+        anchors = reference['anchors']
+        values = ' / '.join(str(anchors[tier]) if tier in anchors else '—' for tier in 'LMH')
+        recorded_unit = reference.get('unit')
+        unit_match = (re.fullmatch(r'(CNY|USD|HKD|TWD)_PER_(SHARE|FUND_UNIT|UNIT)', recorded_unit)
+                      if isinstance(recorded_unit, str) else None)
+        if unit_match:
+            currencies = {'CNY': '元', 'USD': '美元', 'HKD': '港元', 'TWD': '新台币'}
+            denominators = {'SHARE': '股', 'FUND_UNIT': '份', 'UNIT': '单位'}
+            unit = f'{currencies[unit_match[1]]}/{denominators[unit_match[2]]}'
+        else:
+            unit = '单位待核'
+        lines.append(f'历史{kind}{label}：{values} {unit} · 仅供对照，当前采用状态待核')
+    evidence_messages = {
+        **SOURCE_STATUS_MESSAGES,
+        "candidate_unknown": "旧材料的候选价带是否完整仍待核对",
+        "option_unknown": "旧材料的新业务价带是否完整仍待核对",
+        "candidate_absence_attested": "候选价带的缺省由历史材料人工核对",
+        "option_absence_attested": "新业务价带的缺省由历史材料人工核对",
+        "option_anchors_unknown": "旧材料的新业务价带档位仍待核对",
+        "anchors_unit_unknown": "历史估值区间的计价单位待核对",
+        "candidate_unit_unknown": "历史候选价带的计价单位待核对",
+        "option_unit_unknown": "历史新业务价带的计价单位待核对",
+        "option_value_unit_unknown": "历史新业务价值的单位待核对",
+        "option_value_unknown": "历史新业务价值的数额仍待核对",
+        "option_value_unit_incompatible": "历史新业务价值与价带的计价口径不同",
+        "review_flags_unknown": "旧框架的风险提示是否完整仍待核对",
+        "option_status_unknown": "旧材料的新业务状态仍待核对",
+        "display_precision_attested": "历史价格按原资料的显示精度对照",
+        "price_unit_attested": "历史价格单位按资料说明对照",
+        "historical_values_differ": "历史材料与当前估值结果有差异，请查看框架说明",
+    }
+    evidence_flags = getattr(meta, "historical_evidence_flags", ())
+    for flag in evidence_flags:
+        if flag == 'precision_unknown' and any(known in evidence_flags for known in
+                                               ('historical_option_mid_high_two_decimals', 'historical_base_two_decimals',
+                                                'historical_option_mid_high_one_decimal')):
+            lines.append('其他历史数字的精度仍待核')
+        else:
+            lines.append(evidence_messages.get(flag, "历史材料部分细节待核对"))
+    candidate_status = getattr(meta, "candidate_status", None)
+    if candidate_status == "unavailable":
+        lines.append("候选价带暂不可用，请查看框架说明")
+    elif candidate_status not in (None, "conditional"):
+        lines.append("候选估值需要核对，请查看框架说明")
+    option_status = getattr(meta, "option_status", None)
+    if option_status == "unavailable":
+        lines.append("新业务估值暂不可用，请查看框架说明")
+    elif option_status not in (None, "conditional"):
+        lines.append("新业务估值需要核对，请查看框架说明")
+    historical_option_status = getattr(meta, "historical_option_status", None)
+    if historical_option_status not in (None, "conditional") and historical_option_status != option_status:
+        lines.append("旧材料的新业务估值状态仍需核对")
+    fund_status = getattr(meta, "fund_reference_status", None)
+    historical_fund_status = getattr(meta, "historical_fund_reference_status", None)
+    if (fund_status not in (None, "available", "confirmed")
+            or historical_fund_status not in (None, "available", "confirmed")):
+        lines.append("基金穿透对照存在待核对事项")
     return lines
 
 
@@ -228,6 +484,8 @@ def build_cross_post(crosses: list[Row], *, as_of_local: str) -> tuple[str, list
     title = f"lynch 跨带 · {as_of_local}"
     blocks: list[list[str]] = []
     for r in crosses:
+        if isinstance(r, ArchivedRow):
+            continue
         block = format_pool_lines(r)
         if r.crossed:
             prev = r.previous_zone or "?"
@@ -235,11 +493,15 @@ def build_cross_post(crosses: list[Row], *, as_of_local: str) -> tuple[str, list
         if r.option_crossed:
             prev_o = r.previous_option_zone or "?"
             cur_o = r.option_zone or "?"
-            block.append(f"+V 「{zone_label(prev_o)}」 → 「{zone_label(cur_o)}」")
+            option_label = getattr(r.meta, 'option_label', None) or (
+                "新业务" if isinstance(r.meta, ResultMeta) and r.meta.v_opt is None else "+V")
+            block.append(f"{option_label} 「{zone_label(prev_o)}」 → 「{zone_label(cur_o)}」")
         if r.candidate_crossed:
             prev_c = r.previous_candidate_zone or "?"
             cur_c = r.candidate_zone or "?"
-            block.append(f"候选 「{zone_label(prev_c)}」 → 「{zone_label(cur_c)}」")
+            label = getattr(r.meta, 'candidate_label', None)
+            block.append(f"候选({label}) 「{zone_label(prev_c)}」 → 「{zone_label(cur_c)}」" if label
+                         else f"候选 「{zone_label(prev_c)}」 → 「{zone_label(cur_c)}」")
         blocks.append(block)
     return title, _join_ticker_blocks(blocks)
 
@@ -260,119 +522,51 @@ def _send_post(title: str, lines: list[str], *, at_all: bool, dry_run: bool) -> 
     return result
 
 
+def _report_failure(errors: list[str], *, dry_run: bool, notify: bool) -> int:
+    """Report a failed whole run without producing a successful observation."""
+    title = f"lynch 日报失败 · {datetime.now(TZ).strftime('%Y-%m-%d %H:%M %Z')}"
+    lines = ['日报未生成', '【失败】', *(f'• {error}' for error in errors)]
+    print(title)
+    print('\n'.join(lines))
+    if notify or dry_run:
+        _send_post(title, lines, at_all=False, dry_run=dry_run or not notify)
+    return 2
+
+
 
 def run(*, dry_run: bool, notify: bool, bands_dir: Path | None) -> int:
-    # A parse failure or a quote failure used to kill the cron before it could
-    # say so; both now degrade to an alert / per-ticker error instead.
+    # Only framework identities come from prose; all bands come from the
+    # same persisted result reader used by the app and index.
+    identities, errors = [], []
+    for path in list_framework_paths(FRAMEWORKS_DIR):
+        try:
+            identities.append(parse_framework_identity(path.read_text(encoding='utf-8'), path.stem))
+        except (OSError, ValueError) as exc:
+            errors.append(f'{path.stem}: 框架题头不可读取: {exc}')
     try:
-        metas = load_all_frameworks()
-    except Exception as e:  # noqa: BLE001
-        log.error("framework parse failed: %s", e)
-        _send_post(
-            f"lynch 价带日报 · 解析失败 · {datetime.now(TZ).strftime('%Y-%m-%d %H:%M %Z')}",
-            ["【框架解析失败，本次未出日报】", str(e)],
-            at_all=False,
-            dry_run=dry_run or not notify,
-        )
-        return 2
-
-    symbols = [m.ticker for m in metas]
-    rows: list[Row] = []
-    errors: list[str] = []
+        archived = FrameworkArchive(ARCHIVE_FILE).tickers()
+    except (OSError, ValueError) as exc:
+        log.error('archive unavailable: %s', exc)
+        return _report_failure(['归档清单不可读取'], dry_run=dry_run, notify=notify)
+    symbols = [identity.ticker for identity in identities]
     try:
         quotes = fetch_quotes(symbols, allow_missing=True)
-    except Exception as e:  # noqa: BLE001
-        log.error("quote fetch failed: %s", e)
+    except Exception as exc:  # noqa: BLE001 — frozen bands remain usable without quotes
+        log.error('quote fetch failed: %s', exc)
         quotes = {}
-        errors.append(f"报价整体失败: {e}")
-
-    # _AXIS.rates segment by listing currency; an unbuilt segment (CNY / TWD)
-    # simply prints no r_f lines.
-    rate_segs: dict[str, dict[str, float] | None] = {}
-    for ccy in {m.currency for m in metas}:
-        try:
-            rate_segs[ccy] = load_rates(ccy)
-        except ValueError:
-            rate_segs[ccy] = None
-
-    for meta in metas:
-        notes: list[str] = []
-        try:
-            if meta.ticker not in quotes:
-                raise KeyError("longbridge 未返回报价（停牌/代码变更/接口异常）")
-            q = quotes[meta.ticker]
-            price = q.last
-            zone, option_zone, cand_zone = price_zones(price, meta)
-        except Exception as e:  # noqa: BLE001
-            errors.append(f"{meta.ticker}: {e}")
-            continue
-
-        prev = read_previous(meta.ticker, bands_dir)
-        previous_zone = None
-        previous_option_zone = None
-        if prev and isinstance(prev.get("zone"), str):
-            previous_zone = prev["zone"]
-        if prev and isinstance(prev.get("option_zone"), str):
-            previous_option_zone = prev["option_zone"]
-        previous_candidate_zone = None
-        if prev and isinstance(prev.get("candidate_zone"), str):
-            previous_candidate_zone = prev["candidate_zone"]
-        crossed = zone_changed(previous_zone, zone)
-        option_crossed = zone_changed(previous_option_zone, option_zone)
-        candidate_crossed = zone_changed(previous_candidate_zone, cand_zone)
-        if previous_zone is None:
-            notes.append("first_run")
-
-        record = build_record(
-            ticker=meta.ticker,
-            as_of=_as_of_iso(),
-            price=price,
-            currency=meta.currency,
-            L=meta.L,
-            M=meta.M,
-            H=meta.H,
-            zone=zone,
-            previous_zone=previous_zone,
-            option_zone=option_zone,
-            previous_option_zone=previous_option_zone,
-            candidate_zone=cand_zone,
-            previous_candidate_zone=previous_candidate_zone,
-            notes=notes,
-            inputs_used={
-                "price_source": "longbridge",
-                "price_field": "last",
-                "quote_status": q.status,
-                "anchors_source": str(meta.path.relative_to(REPO_ROOT)),
-            },
-        )
-        if not dry_run:
-            write_bands(record, bands_dir)
-        rows.append(
-            Row(
-                meta=meta,
-                price=price,
-                zone=zone,
-                previous_zone=previous_zone,
-                crossed=crossed,
-                notes=notes,
-                record=record,
-                option_zone=option_zone,
-                previous_option_zone=previous_option_zone,
-                option_crossed=option_crossed,
-                candidate_zone=cand_zone,
-                previous_candidate_zone=previous_candidate_zone,
-                candidate_crossed=candidate_crossed,
-                rf=(
-                    read_rf_readings(meta.ticker, seg, (meta.L, meta.M, meta.H))
-                    if (seg := rate_segs.get(meta.currency))
-                    else None
-                ),
-            )
-        )
+        errors.append('报价整体不可用')
+    previous = {ticker: read_previous(ticker, bands_dir) for ticker in symbols}
+    rows, result_errors = build_rows_from_results(identities, open_result_reader(), quotes, previous,
+                                                  archived=archived, price_source='longbridge')
+    errors.extend(result_errors)
+    if not dry_run:
+        for row in rows:
+            if row.record is not None:
+                write_bands(row.record, bands_dir)
 
     if not rows and errors:
         log.error("no rows computed: %s", "; ".join(errors))
-        return 2
+        return _report_failure(errors, dry_run=dry_run, notify=notify)
 
     crosses = [r for r in rows if r.any_crossed]
     as_of_local = datetime.now(TZ).strftime("%Y-%m-%d %H:%M %Z")

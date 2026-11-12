@@ -12,6 +12,7 @@ ticker's task).  New evals should import from here.
 
 from __future__ import annotations
 
+import math
 import re
 import sys
 
@@ -71,6 +72,17 @@ def stated_anchors(md: str) -> dict[str, float | None]:
 def check_missing(inp: dict[str, float], required: list[str]) -> list[str]:
     missing = [k for k in required if k not in inp]
     return [f"missing inputs {missing}"] if missing else []
+
+
+def require_whole_years(inp: dict[str, float], fields: tuple[str, ...]) -> None:
+    """Reject nonintegral calendar years or year counts before conversion."""
+    for field in fields:
+        value = inp[field]
+        valid = (not isinstance(value, bool) and
+                 (isinstance(value, int) or
+                  (isinstance(value, float) and math.isfinite(value) and value.is_integer())))
+        if not valid:
+            raise ValueError(f'{field} must be a finite whole year')
 
 
 def check_against_stated(md: str, computed: dict[str, float], tol: float = 0.05) -> list[str]:

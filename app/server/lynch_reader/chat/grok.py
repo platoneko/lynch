@@ -82,7 +82,7 @@ RESEARCH_ENV: dict[str, str] = {
 _RESEARCH_TOOL_RULES = f"""\
 - 改 sediment-framework skill（frameworks/.claude/skills/sediment-framework/）和改框架一样，要用户明确同意；\
 同意后，每次用 write 或 search_replace 改都会把 diff 推到用户手机上，等用户答复。其他需要审批的调用一律拒绝。
-- 写文件只用 write 和 search_replace 工具，且只写 frameworks/ 下。{GIT_RULE_TAIL}
+- 修改框架文件只用 write 和 search_replace 工具，且只写 frameworks/ 下；结果库只通过上述专用命令维护，不用 shell 绕过其他文件审批。{GIT_RULE_TAIL}
 - 对话里提示已连接的 MCP 外部工具服务，仓库 .mcp.json 以外的一律调用不了，也不要尝试。"""
 
 

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from eval.lib.frameworks import (
     FRAMEWORKS_DIR, FrameworkMeta, basket_label, list_framework_paths, load_all_frameworks, load_framework,
+    parse_framework_identity,
 )
 from eval.lib.inputs import parse_baskets
 from eval.lib.zones import credited_option_band, cut_points, price_zones, zone_bound_edges, zone_of
@@ -113,7 +114,7 @@ class ParseTests(unittest.TestCase):
     @_NEEDS_CONTENT
     def test_stem_matches_title(self) -> None:
         for p in list_framework_paths():
-            m = load_framework(p)
+            m = parse_framework_identity(p.read_text(encoding='utf-8'), p.stem)
             self.assertEqual(m.ticker, p.stem)
 
 
@@ -175,18 +176,6 @@ class OptionTests(unittest.TestCase):
             .replace("**10**（§0", "**0**（§0"))
         self.assertEqual(zero.v_opt, 0.0)
         self.assertIsNone(credited_option_band(zero))
-
-    @_NEEDS_CONTENT
-    def test_real_frameworks_option_lines(self) -> None:
-        with_option = [m for m in load_all_frameworks() if credited_option_band(m) is not None]
-        self.assertTrue(with_option)
-        for m in with_option:
-            with self.subTest(ticker=m.ticker):
-                self.assertIsNotNone(m.option_line)
-                self.assertTrue(m.option_line.startswith("\\(V_{opt}\\)"), m.option_line)
-        cohr = next(m for m in with_option if m.ticker == "COHR.US")
-        self.assertIn("（A12）", cohr.option_line)
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 

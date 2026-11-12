@@ -24,7 +24,7 @@ from datetime import time as clock
 from pathlib import Path
 from typing import Any
 
-from lynch_reader.catalog import REPO_ROOT  # also puts the repo root on sys.path for eval.lib
+from lynch_reader.catalog import REPO_ROOT, FileVersion, file_version  # also puts the repo root on sys.path for eval.lib
 from lynch_reader.daily_cache import BJT, RETRY_S, DailyTickerCache, TickerFetch, write_json  # noqa: F401 — RETRY_S re-exported for tests
 from lynch_reader.market_hours import MARKET_TZ
 
@@ -146,24 +146,44 @@ def updated_since(updated: date | None, since: datetime, changed_at: Callable[[]
 
 
 def file_changed_at(path: Path) -> float | None:
-    """When a framework file last changed: its uncommitted edit's mtime, else its last commit; None if unknown."""
+    """Use mtime for dirty files or the fixed HEAD's author time, only for a stable Git snapshot."""
     def git(*args: str) -> str | None:
         try:
-            # No optional locks: `status` must not take index.lock while a chat commits in frameworks/.
-            proc = subprocess.run(["git", "--no-optional-locks", "-C", str(path.parent), *args, "--", path.name],
+            proc = subprocess.run(["git", "--no-optional-locks", "-C", str(path.parent), *args],
                                   capture_output=True, text=True, timeout=2, check=False)
         except (OSError, subprocess.SubprocessError):
             return None
         return proc.stdout.strip() if proc.returncode == 0 else None
 
-    dirty = git("status", "--porcelain")
-    if dirty:  # a landing not committed yet
+    version = file_version(path)
+    head = git("rev-parse", "--verify", "HEAD")
+    index_name = git("rev-parse", "--path-format=absolute", "--git-path", "index")
+    if version is None or not head or not index_name:
+        return None
+    index = Path(index_name)
+    index_version = file_version(index)
+    if index_version is None:
+        return None
+
+    dirty = git("status", "--porcelain", "--", path.name)
+    if dirty is None:
+        return None
+    if dirty:
         try:
-            return path.stat().st_mtime
+            changed = path.stat().st_mtime
         except OSError:
             return None
-    last = git("log", "-1", "--format=%at")  # author time: a rebase rewrites the committer's
-    return float(last) if last else None
+    else:
+        # Pin history to the HEAD observed before status; rebases change the committer, not author, time.
+        last = git("log", "-1", "--format=%at", head, "--", path.name)
+        try:
+            changed = float(last) if last else None
+        except ValueError:
+            return None
+    if (file_version(path) != version or file_version(index) != index_version
+            or git("rev-parse", "--verify", "HEAD") != head):
+        return None
+    return changed
 
 
 class CalendarCache(DailyTickerCache[list[CalendarEvent]]):
@@ -284,9 +304,17 @@ class Earnings:
         return out
 
 
-def revised_by(updated: Mapping[str, date | None], frameworks_dir: Path) -> Revised:
-    """`Revised` from the frameworks' header days; pool tickers only, as their file is the ticker's name."""
-    return lambda t, since: updated_since(updated.get(t), since, lambda: file_changed_at(frameworks_dir / f"{t}.md"))
+def revised_by(updated: Mapping[str, date | None], frameworks_dir: Path,
+               versions: Mapping[str, FileVersion | None]) -> Revised:
+    """Judge only while the header and change evidence still refer to the same file version."""
+    def revised(t: str, since: datetime) -> bool:
+        path = frameworks_dir / f"{t}.md"
+        version = versions.get(t)
+        if version is None or file_version(path) != version:
+            return False
+        result = updated_since(updated.get(t), since, lambda: file_changed_at(path))
+        return result and file_version(path) == version
+    return revised
 
 
 def _when(r: Row | None) -> dict[str, Any] | None:

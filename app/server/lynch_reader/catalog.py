@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import math
-import re
+import stat
 import subprocess
 import sys
 import threading
@@ -20,18 +20,20 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from eval.lib.axes import AxisMeta, Consensus, list_axis_paths, load_axis  # noqa: E402
+from eval.lib.axes import list_axis_paths  # noqa: E402
 from eval.lib.frameworks import (  # noqa: E402
     FRAMEWORKS_DIR,
-    FrameworkMeta,
+    FrameworkIdentity,
     LYNCH_CN,
     list_framework_paths,
-    load_framework,
     market_bucket,
+    parse_framework_identity,
 )
 from eval.lib.price import Quote, fetch_quotes  # noqa: E402
-from eval.lib.zones import ZONE_CN, ZONE_ORDER, credited_option_band, price_zones  # noqa: E402
+from eval.lib.axis_projection import collect_axes, project_axes  # noqa: E402
+from eval.lib.zones import ZONE_CN, ZONE_ORDER, zone_of  # noqa: E402
 from lynch_reader.market_hours import in_opening_auction, traded_between, us_regular_close  # noqa: E402
+from lynch_reader.valuation_catalog import CatalogValuation, ValuationProvider, map_result  # noqa: E402
 
 __all__ = [
     "FRAMEWORKS_DIR", "REPO_ROOT", "Quote", "QuoteBatch", "QuoteCache", "QuotePoller", "QuoteSnapshot",
@@ -43,14 +45,15 @@ log = logging.getLogger("lynch_reader")
 ROW_KEYS = (
     "ticker", "name", "market", "lynch_primary", "lynch_secondary", "currency",
     "L", "M", "H", "option", "candidate", "axes", "ref_axes", "consensus", "band", "quote_error", "error", "archived",
-    "framework_updated", "last_earnings", "next_earnings", "stale_after_earnings",
+    "framework_updated", "last_earnings", "next_earnings", "stale_after_earnings", "valuation_status", "review_flags",
+    "option_review_status", "historical_evidence_flags", "historical_evidence_states", "fund_reference_status",
+    "historical_evidence_differences", "historical_evidence_source", "historical_review_flags",
+    "historical_option_status", "historical_fund_reference_status", "candidate_review_status", "historical_reference_bands",
+    "historical_reference_only", "historical_reference_double_counting", "valuation_as_of",
 )
-# ticker -> its earnings fields (earnings.py `Earnings.ticker_dates`), given each framework's header 更新 day.
-EarningsDates = Callable[[Mapping[str, date | None]], Mapping[str, dict[str, Any]]]
-# Only scenario axes sit on cards and filters; the rates axis mounts every USD ticker
-# and gives sensitivity readings, never anchors (AGENTS.md「r_f 读数行」).
-SCENARIO_AXIS = "shared_scenario_axis"
-
+# Earnings fields for each ticker, given header dates and their corresponding file versions.
+FileVersion = tuple[int, int, int, int, int]
+EarningsDates = Callable[[Mapping[str, date | None], Mapping[str, FileVersion | None]], Mapping[str, dict[str, Any]]]
 # The poller's pace; the home list and the anomaly checks follow the same 5 minutes (spec).
 QUOTE_POLL_S = 300.0
 QUOTE_TIMEOUT_S = 15
@@ -58,12 +61,6 @@ NO_QUOTE = "无报价（停牌或代码变更）"
 WAITING_QUOTE = "等待下一次取价"
 # Same timestamp form as the daily digest's `_as_of_iso` (scripts/daily_bands.py).
 TZ = ZoneInfo("Asia/Shanghai")
-
-_ASSUMPTIONS = re.compile(r"^## 2\. Assumptions[^\n]*\n(.*?)(?=^## |\Z)", re.MULTILINE | re.DOTALL)
-_CELL_SEP = re.compile(r"(?<!\\)\|")  # `\|` inside a cell is text, not a separator
-# Assumption ids as the prose cites them: `A12`, `A23a`, `A2e-7c-4`, `A3′`.
-_ASSUMPTION_ID = re.compile(r"(?<![0-9A-Za-z])A[0-9][0-9A-Za-z]*(?:-[0-9A-Za-z]+)*′?")
-
 
 @dataclass(frozen=True)
 class QuoteBatch:
@@ -187,7 +184,7 @@ class QuotePoller:
 
 
 class _ParsedFiles:
-    """Each file's parse, kept until its mtime or size changes: a list read parses again only the edited files.
+    """Each file's parse, kept until its identity, size, mtime or ctime changes.
 
     Filesystem timestamps tick coarsely, so a same-size rewrite inside one tick keeps both; like git's racy-clean
     rule, a file modified within `SETTLE_S` of being read is never kept and is parsed again on every read.
@@ -198,7 +195,7 @@ class _ParsedFiles:
     def __init__(self, parse: Callable[[Path], Any]) -> None:
         self._parse = parse
         self._lock = threading.Lock()
-        self._kept: dict[Path, tuple[tuple[int, int], Any]] = {}
+        self._kept: dict[Path, tuple[FileVersion, Any]] = {}
 
     def __call__(self, paths: list[Path]) -> list[Any]:
         with self._lock:
@@ -209,7 +206,7 @@ class _ParsedFiles:
                 except OSError:  # gone since listing: its parse reports the error
                     out.append(self._parse(p))
                     continue
-                key = (st.st_mtime_ns, st.st_size)
+                key = _stat_version(st)
                 hit = self._kept.get(p)
                 value = hit[1] if hit is not None and hit[0] == key else self._parse(p)
                 if time.time() - st.st_mtime > self.SETTLE_S:
@@ -220,18 +217,65 @@ class _ParsedFiles:
 
 
 def catalog(frameworks_dir: Path, quotes: QuoteCache, archived: Set[str] = frozenset(),
-            earnings_dates: EarningsDates | None = None) -> dict[str, Any]:
+            earnings_dates: EarningsDates | None = None, *,
+            valuation_provider: ValuationProvider | None = None) -> dict[str, Any]:
     # Step 1: framework header fields; a bad file costs only its own row. Archived rows stay in the
     # list, quotes included: the web hides them unless asked to show them. Kept parses are shared, so each
     # read fills its own copy of the row.
-    parsed = [(dict(row), meta) for row, meta in _framework_rows(list_framework_paths(frameworks_dir))]
-    for row, _ in parsed:
+    snapshots = _framework_rows(list_framework_paths(frameworks_dir))
+    parsed = [(dict(row), identity) for (row, identity), _ in snapshots]
+    valuations: dict[str, CatalogValuation] = {}
+    projections = {}
+    for row, identity in parsed:
         row["archived"] = row["ticker"] in archived
-    priced = [(row, meta) for row, meta in parsed if meta is not None]
-    axes = _scenario_axes(frameworks_dir)
-    for row, meta in priced:
-        row["axes"] = [a.name for a in axes if meta.ticker in a.mounts]
-        row["ref_axes"] = [a.name for a in axes if meta.ticker in a.refs]
+        if identity is None:
+            continue
+        try:
+            record = valuation_provider.current(identity.ticker) if valuation_provider is not None else {"status": "missing"}
+            status, valuation = map_result(identity.ticker, record)
+        except Exception:  # noqa: BLE001 — failure to read one confirmed result must not take down the list
+            log.exception("valuation provider failed: %s", identity.ticker)
+            status, valuation = "unavailable", None
+        row["valuation_status"] = status
+        if valuation is None:
+            projections[row['ticker']] = {'status': 'unknown', 'axes': []}
+            continue
+        projections[row['ticker']] = project_axes(row['ticker'], record)
+        row.update(currency=valuation.currency, L=valuation.L, M=valuation.M, H=valuation.H,
+                   valuation_as_of=valuation.valuation_as_of,
+                   review_flags=list(valuation.review_flags), option_review_status=valuation.option_status,
+                   historical_evidence_flags=list(valuation.historical_evidence_flags),
+                   historical_evidence_states=valuation.historical_evidence_states,
+                   fund_reference_status=valuation.fund_reference_status,
+                   historical_evidence_differences=list(valuation.historical_evidence_differences),
+                   historical_evidence_source=valuation.historical_evidence_source,
+                   historical_review_flags=list(valuation.historical_review_flags),
+                   historical_option_status=valuation.historical_option_status,
+                   historical_fund_reference_status=valuation.historical_fund_reference_status,
+                   candidate_review_status=valuation.candidate_status,
+                   historical_reference_only=valuation.historical_reference_only,
+                   historical_reference_double_counting=valuation.historical_reference_double_counting,
+                   historical_reference_bands=list(valuation.historical_reference_bands))
+        if valuation.candidate is not None:
+            row["candidate"] = dict(zip(("L", "M", "H"), valuation.candidate), label=valuation.candidate_label)
+        if valuation.option_band is not None:
+            row["option"] = dict(zip(("L", "M", "H"), valuation.option_band))
+            if valuation.option_label is not None:
+                row["option"]["label"] = valuation.option_label
+            if valuation.v_opt is not None:
+                row["option"]["v_opt"] = valuation.v_opt
+            if valuation.option_status is not None:
+                row["option"]["review_status"] = valuation.option_status
+        valuations[identity.ticker] = valuation
+    axes = collect_axes(projections, archived=archived)
+    for row, identity in parsed:
+        if identity is not None:
+            projection = projections[identity.ticker]
+            row['axis_status'] = projection['status']
+            row['axis_details'] = projection['axes']
+            row['axes'] = [a['name'] for a in projection['axes'] if a['role'] == 'priced']
+            row['ref_axes'] = [a['name'] for a in projection['axes'] if a['role'] == 'reference']
+            row['consensus'] = projection.get('own_consensus')
 
     # Step 2: the one quote batch, read. A failed attempt keeps the last good batch, each row showing its own
     # fetch time; with no batch at all every band stays empty.
@@ -239,21 +283,27 @@ def catalog(frameworks_dir: Path, quotes: QuoteCache, archived: Set[str] = froze
     quote_error = None if snap.error is None else quote_failure(snap.error, snap.batch)
     if snap.batch is not None:
         us_close = us_regular_close(snap.batch.fetched_at)
-        for row, meta in priced:
-            _price_row(row, meta, snap.batch, us_close)
+        for row, identity in parsed:
+            if identity is not None:
+                _price_row(row, identity.ticker, valuations.get(identity.ticker), snap.batch, us_close)
 
     # Step 3: earnings dates from the calendar cache, for the tickers it covers (archived ones are not). A broken
     # framework has no header day to judge by, so it carries none.
     if earnings_dates is not None:
-        found = earnings_dates(framework_updates(frameworks_dir))
-        for row, _ in priced:
-            row.update(found.get(row["ticker"], {}))
+        updates = {row["ticker"]: date.fromisoformat(row["framework_updated"]) if row["framework_updated"] else None
+                   for row, _ in parsed if row["name"] is not None}
+        versions = {row["ticker"]: version for (row, _), version in snapshots if row["name"] is not None}
+        found = earnings_dates(updates, versions)
+        for row, _ in parsed:
+            if row["name"] is not None:
+                row.update(found.get(row["ticker"], {}))
 
     return {
         "zones": [{"id": z, "label": ZONE_CN[z]} for z in ZONE_ORDER],
         "lynch_classes": [{"id": k, "label": v} for k, v in LYNCH_CN.items()],
         "quote_error": quote_error,
-        "axes": [_axis_json(a) for a in axes],
+        "axes": axes,
+        "axis_documents": [path.stem for path in list_axis_paths(frameworks_dir / 'axes')],
         "tickers": [row for row, _ in parsed],
     }
 
@@ -264,9 +314,37 @@ def quote_pool(frameworks_dir: Path) -> list[str]:
 
 
 def framework_updates(frameworks_dir: Path) -> dict[str, date | None]:
-    """Each parsed framework's header 更新 day, from the list's kept parses."""
-    return {meta.ticker: meta.updated
-            for _, meta in _framework_rows(list_framework_paths(frameworks_dir)) if meta is not None}
+    """Header research dates do not depend on how valuation results are stored."""
+    updates, _ = framework_snapshots(frameworks_dir)
+    return updates
+
+
+def framework_snapshots(frameworks_dir: Path) -> tuple[dict[str, date | None], dict[str, FileVersion | None]]:
+    """Header dates and versions from the same reads, including cached parses."""
+    snapshots = _framework_identities(list_framework_paths(frameworks_dir))
+    return ({identity.ticker: identity.updated for identity, _ in snapshots if identity is not None},
+            {identity.ticker: version for identity, version in snapshots if identity is not None})
+
+
+def _stat_version(st) -> FileVersion:
+    return st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns
+
+
+def file_version(path: Path) -> FileVersion | None:
+    try:
+        st = path.lstat()
+        return _stat_version(st) if stat.S_ISREG(st.st_mode) else None
+    except OSError:
+        return None
+
+
+def _snapshot_parse(parse: Callable[[Path], Any]) -> Callable[[Path], tuple[Any, FileVersion | None]]:
+    def read(path: Path) -> tuple[Any, FileVersion | None]:
+        before = file_version(path)
+        value = parse(path)
+        after = file_version(path)
+        return value, before if before is not None and before == after else None
+    return read
 
 
 def framework_path(ticker: str, frameworks_dir: Path) -> Path | None:
@@ -285,78 +363,60 @@ def axis_path_in(name: str, frameworks_dir: Path) -> Path | None:
     return None
 
 
-def _scenario_axes(frameworks_dir: Path) -> list[AxisMeta]:
-    """Scenario axes by file name; a bad axis file costs only itself."""
-    axes = _axis_files(list_axis_paths(frameworks_dir / "axes"))
-    return [a for a in axes if a is not None and a.kind == SCENARIO_AXIS]
-
-
-def _axis_or_none(path: Path) -> AxisMeta | None:
-    try:
-        return load_axis(path)
-    except Exception as e:  # noqa: BLE001 — one bad axis must not blank the list
-        log.warning("axis parse failed: %s: %s", path.name, e)
-        return None
-
-
-def _axis_json(a: AxisMeta) -> dict[str, Any]:
-    return {"name": a.name, "label": a.label, "title": a.title,
-            "consensus": _consensus_json(a.consensus), "tickers": list(a.mounts), "refs": list(a.refs)}
-
-
-def _consensus_json(c: Consensus | None) -> dict[str, str] | None:
-    return None if c is None else {"tier": c.tier, "note": c.note}
-
-
-def _ticker_row(path: Path) -> tuple[dict[str, Any], FrameworkMeta | None]:
+def _ticker_row(path: Path) -> tuple[dict[str, Any], FrameworkIdentity | None]:
     row: dict[str, Any] = dict.fromkeys(ROW_KEYS)
     row["ticker"] = path.stem
     row["stale_after_earnings"] = False
     try:
-        meta = load_framework(path)
         md = path.read_text(encoding="utf-8")
+        identity = parse_framework_identity(md, path.stem)
     except Exception as e:  # noqa: BLE001 — one bad file must not blank the whole list
         log.warning("framework parse failed: %s: %s", path.name, e)
         row["error"] = str(e)
         return row, None
-    assumptions = _assumption_rows(md)
     row.update(
-        name=meta.name,
-        market=market_bucket(meta.ticker),
-        lynch_primary=meta.lynch_primary,
-        lynch_secondary=meta.lynch_secondary,
-        currency=meta.currency,
-        L=meta.L,
-        M=meta.M,
-        H=meta.H,
-        option=_option(meta, assumptions),
-        candidate=_candidate(meta, assumptions),
+        name=identity.name,
+        market=market_bucket(identity.ticker),
+        lynch_primary=identity.lynch_primary,
+        lynch_secondary=identity.lynch_secondary,
         axes=[],
-        consensus=_consensus_json(meta.consensus),
-        framework_updated=meta.updated.isoformat() if meta.updated else None,
+        consensus=None,
+        framework_updated=identity.updated.isoformat() if identity.updated else None,
     )
-    return row, meta
+    return row, identity
+
+
+def _framework_identity_or_none(path: Path) -> FrameworkIdentity | None:
+    try:
+        return parse_framework_identity(path.read_text(encoding="utf-8"), path.stem)
+    except (OSError, UnicodeError, ValueError) as e:
+        log.warning("framework identity failed: %s: %s", path.name, e)
+        return None
 
 
 # Kept across reads for every caller: a kept parse equals a fresh one.
-_framework_rows = _ParsedFiles(_ticker_row)
-_axis_files = _ParsedFiles(_axis_or_none)
+_framework_rows = _ParsedFiles(_snapshot_parse(_ticker_row))
+_framework_identities = _ParsedFiles(_snapshot_parse(_framework_identity_or_none))
 
 
-def _price_row(row: dict[str, Any], meta: FrameworkMeta, batch: QuoteBatch, us_close: datetime) -> None:
+def _price_row(row: dict[str, Any], ticker: str, meta: CatalogValuation | None,
+               batch: QuoteBatch, us_close: datetime) -> None:
     """The row's band: live price, fetch time, and zones by the daily digest's own rules."""
-    if meta.ticker not in batch.symbols:  # a framework added since the last fetch
+    if ticker not in batch.symbols:  # a framework added since the last fetch
         row["quote_error"] = WAITING_QUOTE
         return
-    q = batch.quotes.get(meta.ticker)
+    q = batch.quotes.get(ticker)
     if not _usable(q):  # logged once when the batch was fetched
         row["quote_error"] = NO_QUOTE
         return
     price, session = _latest_price(q, us_close)
     try:
-        zone, option_zone, candidate_zone = price_zones(price, meta)
+        comparable = meta is not None and not meta.historical_reference_only
+        zone = zone_of(price, meta.L, meta.M, meta.H) if comparable else None
+        option_zone = zone_of(price, *meta.option_band) if comparable and meta.option_band is not None else None
+        candidate_zone = zone_of(price, *meta.candidate) if comparable and meta.candidate is not None else None
     except ValueError as e:  # a +V band out of order is not caught at parse time
-        log.warning("zones failed: %s: %s", meta.ticker, e)
+        log.warning("zones failed: %s: %s", ticker, e)
         row["error"] = str(e)
         return
     row["band"] = {
@@ -411,43 +471,3 @@ def quote_failure(e: Exception, batch: QuoteBatch | None) -> str:
     if batch is None:
         return text
     return f"{text}（显示的是 {datetime.fromtimestamp(batch.fetched_at, TZ):%H:%M} 的现价）"
-
-
-def _option(meta: FrameworkMeta, assumptions: dict[str, str]) -> dict[str, Any] | None:
-    """The +V band plus where the option comes from: its Outputs line and the rows it cites."""
-    band = credited_option_band(meta)
-    if band is None:
-        return None
-    line = meta.option_line
-    cited = dict.fromkeys(_ASSUMPTION_ID.findall(line)) if line else {}
-    L, M, H = band
-    return {
-        "v_opt": meta.v_opt, "L": L, "M": M, "H": H, "line": line,
-        "rows": [{"id": a, "text": assumptions[a]} for a in cited if a in assumptions],
-    }
-
-
-def _candidate(meta: FrameworkMeta, assumptions: dict[str, str]) -> dict[str, Any] | None:
-    """The candidate band plus why it is only a candidate: its gate assumption's text."""
-    if meta.candidate is None:
-        return None
-    L, M, H = meta.candidate
-    gate = meta.candidate_gate
-    return {
-        "label": meta.candidate_label, "L": L, "M": M, "H": H,
-        "gate": gate, "background": assumptions.get(gate) if gate else None,
-    }
-
-
-def _assumption_rows(md: str) -> dict[str, str]:
-    """{first cell: second cell} of the §2 Assumptions table; the first row of an id wins."""
-    section = _ASSUMPTIONS.search(md)
-    if section is None:
-        return {}
-    rows: dict[str, str] = {}
-    for line in section.group(1).splitlines():
-        cells = [c.strip() for c in _CELL_SEP.split(line.strip())]
-        # `| id | text | …` splits into ['', 'id', 'text', …].
-        if len(cells) >= 3 and cells[0] == "":
-            rows.setdefault(cells[1], cells[2])
-    return rows
