@@ -133,16 +133,17 @@ export function TickerCard({ row, label, axes, onOpen, onOpenAxis }: {
   onOpenAxis: (name: string) => void;
 }) {
   const open = () => onOpen(row.ticker);
+  const nameFirst = (row.market === 'A' || row.market === 'HK') && !!row.name;
+  const title = nameFirst ? row.name!.split(/\s*\/\s*/)[0].trim() : row.ticker;
+  const subtitle = nameFirst ? row.ticker : row.name ?? '';
   // A div, not a button: the axis links inside it are buttons, which a button may not contain.
   return (
     <div className="card" role="button" tabIndex={0} onClick={open}
       onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); open(); } }}>
       <div className="card-line1">
-        <span className="card-ticker">{row.ticker}</span>
-        <span className="card-name">{row.name ?? ''}</span>
+        <span className="card-ticker">{title}</span>
+        <span className="card-name">{subtitle}</span>
         {row.archived && <span className="tag tag-archived">已归档</span>}
-        {row.valuation_status === 'legacy_accepted' && <span className="tag tag-muted">历史框架沿用，计算尚待复核</span>}
-        {row.valuation_status === 'confirmed_snapshot' && <span className="tag tag-muted">已确认快照，当前执行证明不可用</span>}
         {row.band && (
           <span className="card-price">
             {row.band.session && <span className="card-session">{SESSION_CN[row.band.session]}</span>}
@@ -156,7 +157,6 @@ export function TickerCard({ row, label, axes, onOpen, onOpenAxis }: {
         <>
           <div className="card-classes">{lynchClasses(row, label)}</div>
           <AxisLine row={row} axes={axes} onOpenAxis={onOpenAxis} />
-          <ReviewCautions row={row} />
           <CardZone row={row} label={label} />
         </>
       )}
@@ -231,9 +231,9 @@ function CardZone({ row, label }: { row: TickerRow; label: (id: string) => strin
       {resultMessage && <div className="tag tag-muted">{resultMessage}</div>}
       {(row.quote_error || (!resultMessage && !historical)) &&
         <div className="tag tag-muted">{row.quote_error ?? (base ? '估值档位不可用' : '估值结果不可用')}</div>}
-      {base && <div className="band-head">{historical ? '历史估值（仅供对照）' : '估值区间'}：{prices(base)} {row.currency}</div>}
+      {base && <div className="band-head">估值区间：{prices(base)} {row.currency}</div>}
       {base && extraBands(row).map((extra) => (
-        <div key={extra.kind} className="band-head">{historical ? '历史' : ''}{extra.label}：{prices(extra.anchors)} {row.currency}</div>
+        <div key={extra.kind} className="band-head">{extra.label}：{prices(extra.anchors)} {row.currency}</div>
       ))}
     </>;
   }

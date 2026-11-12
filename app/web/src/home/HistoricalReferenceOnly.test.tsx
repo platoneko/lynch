@@ -17,7 +17,7 @@ const row: TickerRow = {
 };
 
 describe('historical-only valuation', () => {
-  it('shows the result date or its absence on both views for historical and current results', () => {
+  it('keeps the result basis notices in the document rather than on the home card', () => {
     for (const day of ['2026-06-30', null]) {
       const historical = {...row, historical_reference_only: true, valuation_as_of: day};
       const card = renderToStaticMarkup(<TickerCard row={historical} label={(id) => id} axes={new Map()}
@@ -25,20 +25,21 @@ describe('historical-only valuation', () => {
       const doc = renderToStaticMarkup(<TickerDocHead ticker="FAKE.HK" row={historical}
         targets={{pool: new Set(), axes: new Set()}} axes={new Map()} zoneLabel={(id) => id} onOpenAxis={() => {}} />);
       const expected = day ? `历史估值基准：${day}` : '历史估值基准日期待核';
-      for (const html of [card, doc]) expect(html).toContain(expected);
+      expect(doc).toContain(expected);
+      expect(card).not.toContain('估值基准');
     }
     const current = {...row, review_flags: [], valuation_as_of: '2026-06-30'};
     const card = renderToStaticMarkup(<TickerCard row={current} label={(id) => id} axes={new Map()}
       onOpen={() => {}} onOpenAxis={() => {}} />);
-    expect(card).toContain('估值基准：2026-06-30');
+    expect(card).not.toContain('估值基准');
     expect(card).not.toContain('历史估值基准');
     const missing = {...current, valuation_as_of: null};
     const missingCard = renderToStaticMarkup(<TickerCard row={missing} label={(id) => id} axes={new Map()}
       onOpen={() => {}} onOpenAxis={() => {}} />);
-    expect(missingCard).toContain('估值基准日期待核');
+    expect(missingCard).not.toContain('估值基准日期待核');
   });
 
-  it('never shows stale current zones but retains clearly labelled old values', () => {
+  it('never shows stale current zones but retains the saved interval', () => {
     expect(rowZone(row)).toBeNull();
     expect(extraBands(row).every((band) => band.zone === null)).toBe(true);
     const card = renderToStaticMarkup(<TickerCard row={row} label={(id) => `分区:${id}`} axes={new Map()}
@@ -46,11 +47,11 @@ describe('historical-only valuation', () => {
     const doc = renderToStaticMarkup(<TickerDocHead ticker="FAKE.HK" row={row}
       targets={{pool: new Set(), axes: new Set()}} axes={new Map()} zoneLabel={(id) => `分区:${id}`} onOpenAxis={() => {}} />);
     for (const html of [card, doc]) {
-      expect(html).toContain('旧估值存在重复计价，仅供历史对照');
       expect(html).not.toContain('分区:neutral');
-      expect(html).toContain('历史');
     }
-    expect(card).toContain('历史估值（仅供对照）');
+    expect(doc).toContain('旧估值存在重复计价，仅供历史对照');
+    expect(card).not.toContain('旧估值存在重复计价，仅供历史对照');
+    expect(card).toContain('估值区间');
     expect(card).toContain('10.00 / 20.00 / 30.00');
     expect(card).toContain('fictional');
     expect(card).not.toContain('估值档位不可用');
@@ -68,8 +69,8 @@ describe('historical-only valuation', () => {
     expect(rowZone(historical)).toBeNull();
     const card = renderToStaticMarkup(<TickerCard row={historical} label={(id) => `分区:${id}`} axes={new Map()}
       onOpen={() => {}} onOpenAxis={() => {}} />);
-    expect(card).toContain('旧估值仅供历史对照，不作为当前价带');
-    expect(card).toContain('历史估值（仅供对照）');
+    expect(card).not.toContain('旧估值仅供历史对照，不作为当前价带');
+    expect(card).toContain('估值区间');
     expect(card).not.toContain('重复计价');
     expect(card).not.toContain('分区:neutral');
   });
@@ -81,14 +82,10 @@ describe('historical-only valuation', () => {
       expect(rowZone(item)).toBeNull();
       const html = renderToStaticMarkup(<TickerCard row={item} label={(id) => `分区:${id}`} axes={new Map()}
         onOpen={() => {}} onOpenAxis={() => {}} />);
-      expect(html).toContain('历史估值（仅供对照）');
+      expect(html).toContain('估值区间');
       expect(html).not.toContain('分区:neutral');
-      if (item.historical_reference_double_counting) {
-        expect(html).toContain('旧估值存在重复计价，仅供历史对照');
-      } else {
-        expect(html).toContain('旧估值仅供历史对照，不作为当前价带');
-        expect(html).not.toContain('重复计价');
-      }
+      expect(html).not.toContain('旧估值存在重复计价，仅供历史对照');
+      expect(html).not.toContain('旧估值仅供历史对照，不作为当前价带');
     }
   });
 });

@@ -243,7 +243,7 @@ export function TickerDocHead({ ticker, row, targets, axes, zoneLabel, onOpenAxi
         <BandBlock key={b.kind} band={b} targets={targets} zoneLabel={zoneLabel} dp={priceDecimals(ticker)}
           historical={isHistoricalReferenceOnly(row)} />
       ))}
-      {row && <AxisLine row={row} axes={axes} onOpenAxis={onOpenAxis} />}
+      {row && <AxisLine row={row} axes={axes} onOpenAxis={onOpenAxis} showDetails />}
       {row && <EarningsLine row={row} />}
     </>
   );
