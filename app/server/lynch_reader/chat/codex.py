@@ -78,7 +78,7 @@ def codex_env(base: Mapping[str, str]) -> dict[str, str]:
 
 def system_prompt(conv: Conversation) -> str:
     return (f"{scope_line(conv)}\n{SHARED_RULES}\n"
-            "- 写文件只用 apply_patch，且只写 frameworks/ 下；不通过 shell 绕过文件审批。\n"
+            "- 修改框架文件只用 apply_patch，且只写 frameworks/ 下；结果库只通过上述专用命令维护，不通过 shell 绕过其他文件审批。\n"
             "- 修改 sediment-framework skill 要你本人操作，每次 patch 会把 diff 推到手机审批；"
             "子 agent 不要改这个 skill。其他不支持的审批会被拒绝。\n"
             f"- {GIT_RULE_TAIL}")

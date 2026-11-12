@@ -33,7 +33,6 @@ class PriceFreeTests(unittest.TestCase):
             "| ha_ratio | 0.6 | 两地现价之比 | 2026-09-11 |\n"          # 5
         )
         self.assertEqual(sorted(price_free_violations(md)), sorted([
-            "line 2: BLOCKED status line (BLOCKED never lands)",
             "line 3: current price figure",
             "line 3: price → zone reading",
             "line 3: stated current zone",

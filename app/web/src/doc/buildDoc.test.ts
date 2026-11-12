@@ -1,5 +1,31 @@
 import { describe, expect, it } from 'vitest';
-import { buildDoc, citedAxis, linkedAxis, linkedTicker, renderFragment, sectionLabel } from './buildDoc';
+import { buildDoc, citedAxis, documentAxisNames, linkedAxis, linkedTicker, renderFragment, sectionLabel } from './buildDoc';
+
+it('keeps old cached scenario-axis links when the document list predates the upgrade', () => {
+  const names = documentAxisNames(undefined, [{ name: 'old-scenario' }]);
+  expect(linkedAxis('./axes/old-scenario.md', names)).toBe('old-scenario');
+  expect(linkedAxis('./axes/not-in-cache.md', names)).toBeNull();
+  expect(linkedAxis('../axes/old-scenario.md', names)).toBeNull();
+});
+
+it('uses a present document list even if it is empty', () => {
+  const names = documentAxisNames([], [{ name: 'old-scenario' }]);
+  expect(linkedAxis('./axes/old-scenario.md', names)).toBeNull();
+});
+
+it('a present document list permits only the listed document names', () => {
+  const names = documentAxisNames(['rates'], [{ name: 'old-scenario' }]);
+  expect(linkedAxis('./axes/rates.md', names)).toBe('rates');
+  expect(linkedAxis('./axes/old-scenario.md', names)).toBeNull();
+});
+
+it('opens an existing non-scenario axis document through the document whitelist', () => {
+  const targets = { pool: new Set<string>(), axes: new Set(['rates']) };
+  const html = buildDoc('## 轴文档\n\n[利率](./axes/rates.md)\n', targets).sections[0].bodyHtml;
+  expect(html).toContain('href="#/axis/rates"');
+  expect(linkedAxis('../axes/rates.md', targets.axes)).toBeNull();
+  expect(linkedAxis('./axes/not-listed.md', targets.axes)).toBeNull();
+});
 
 const SAMPLE = [
   '# AAA.US — Alpha', '', '> 林奇：`stalwart`', '',

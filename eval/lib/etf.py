@@ -68,8 +68,11 @@ def history(src: str, code: str) -> pd.Series:
 
 
 # ---- Step 2: trend channel ----
-def channel(s: pd.Series) -> dict:
-    """Log-linear fit, outliers (>2σ) dropped and refit; M = trend, L/H = residual p10/p90.
+def channel(s: pd.Series, *, residual_quantiles=(0.10, 0.90)) -> dict:
+    """Log-linear fit, outliers (>2σ) dropped and refit; M = trend.
+
+    L/H use residual p10/p90 by default; callers can request another pair
+    for sensitivity without changing the fitted trend or the default band.
 
     Keys: slope (annual, decimal), sigma, z (latest residual / σ), L / M / H in
     index points at the last date, cur (last close), start / end (ISO dates).
@@ -80,7 +83,7 @@ def channel(s: pd.Series) -> dict:
     keep = np.abs(y - (a + b * t)) < 2 * (y - (a + b * t)).std()
     b, a = np.polyfit(t[keep], y[keep], 1)
     res = y - (a + b * t)
-    lo, hi = np.quantile(res, [0.10, 0.90])
+    lo, hi = np.quantile(res, residual_quantiles)
     M = float(np.exp(a + b * t[-1]))
     return dict(slope=float(np.exp(b) - 1), sigma=float(res.std()), z=float(res[-1] / res.std()),
                 L=M * float(np.exp(lo)), M=M, H=M * float(np.exp(hi)), cur=float(s.values[-1]),

@@ -9,7 +9,7 @@ import type { EarningsList } from '../earnings/types';
 import type { Catalog } from '../types';
 import { menuLabel as watchMenuLabel, pendingCount as watchPendingCount } from '../watch/model';
 import type { WatchList } from '../watch/types';
-import { applyFilter, inArchiveScope, latestAsOf, quoteTimeText, type HomeFilter, type SortKey } from './listModel';
+import { applyFilter, availableAxes, inArchiveScope, latestAsOf, quoteTimeText, type HomeFilter, type SortKey } from './listModel';
 import { TickerCard } from './TickerCard';
 
 const SORTS: { id: SortKey; label: string }[] = [
@@ -69,6 +69,7 @@ export function HomePage({ catalog, filter, onFilter, onOpen, onOpenAxis,
   const asOf = latestAsOf(catalog.tickers);
   const toggle = (list: string[], id: string) => (list.includes(id) ? list.filter((x) => x !== id) : [...list, id]);
   const axes = new Map(catalog.axes.map((a) => [a.name, a]));
+  const visibleAxes = availableAxes(catalog.axes, catalog.tickers, filter);
   // A dozen axis chips would crowd the header; they stay folded behind one toggle.
   const [axesOpen, setAxesOpen] = useState(false);
   const [menu, setMenu] = useState(false);
@@ -124,7 +125,7 @@ export function HomePage({ catalog, filter, onFilter, onOpen, onOpenAxis,
           <button className={`chip ${filter.axes.length > 0 ? 'chip-on' : ''}`} onClick={() => setAxesOpen(!axesOpen)}>
             轴{filter.axes.length > 0 ? ` ${filter.axes.length}` : ''} {axesOpen ? '▴' : '▾'}
           </button>
-          {axesOpen && catalog.axes.map((a) => (
+          {axesOpen && visibleAxes.map((a) => (
             <button key={a.name}
               className={`chip ${filter.axes.includes(a.name) ? 'chip-on' : ''}`}
               onClick={() => onFilter({ ...filter, axes: toggle(filter.axes, a.name) })}>

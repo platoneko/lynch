@@ -40,7 +40,8 @@ because those are the parts that are genuinely not shared.
 
 from __future__ import annotations
 
-from .axes import AXIS_AL, check_axis_g_mount
+import math
+
 from .gordon import check_g_cap, check_r, perpetual_pe
 
 REQUIRED = [
@@ -106,7 +107,8 @@ def anchors(inp: dict[str, float], fx: float = 1.0) -> tuple[list[float], list[f
     return [e * pe / fx for e, pe in zip(eps, pes)], eps
 
 
-def check_gordon(inp: dict[str, float], basket: int | None = None) -> list[str]:
+def check_gordon(inp: dict[str, float], basket: int | None = None, *,
+                 shared_growth: dict[str, float]) -> list[str]:
     """Everything valuation-rules.md asks of a generated multiple, in one place.
 
     r in its basket; every g under g_cap(r); the tier shape flat-or-reverse and
@@ -120,7 +122,13 @@ def check_gordon(inp: dict[str, float], basket: int | None = None) -> list[str]:
     stated = {"L": inp["g2_l"], "M": inp["g2_m"], "H": inp["g2_h"]}
     for tag, g in stated.items():
         errors += check_g_cap(g, r, f"g2_{tag.lower()}")
-    errors += check_axis_g_mount(AXIS_AL, stated)
+    if (not isinstance(shared_growth, dict) or set(shared_growth) != {"L", "M", "H"}
+          or any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)
+                 for value in shared_growth.values())):
+        errors.append("aluminium axis must provide finite growth for all three tiers")
+    else:
+        errors.extend(f"{tier} perpetual growth differs from shared aluminium axis"
+                      for tier, value in stated.items() if abs(value - shared_growth[tier]) > 1e-9)
     if errors:
         return errors
 

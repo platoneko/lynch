@@ -79,6 +79,8 @@ SHARED_RULES = """\
 - 行情用 Bash 跑 longbridge 命令行，例如 `longbridge quote AAPL.US --format json`；`longbridge help` 列出全部命令。\
 只允许查询类命令（不能下单、看账户或登录）。
 - 落盘改动之后跑 `cd frameworks && just check`。通过后只 stage 本次对话改过的文件并提交。
+- 仅在用户明确授权框架落盘后，按 sediment-framework 的结果保存步骤，用专用结果写入命令记录本次正式采纳的脚本输出；\
+不是把试算自动发布，也不要求用户另行导入或点击确认。命令记录本次对话引用和用户授权原话，不声称机器验证了原话语义。
 - 工具调用被拒绝时，不要换个命令绕过去；告诉用户什么被拦了。"""
 GIT_RULE_TAIL = ("对 frameworks/ 跑 git 用 `git -C frameworks …`；"
                  "push、reset、checkout、restore、switch、stash、rebase、clean 会被拒绝。")
@@ -87,7 +89,7 @@ CLAUDE_TOOL_RULES = f"""\
 frameworks/_local/tmp/ 再处理；不要用 cp 复制 ~/.claude/ 下的缓存（Claude Code 把那里当敏感目录，一定会被拒绝）。
 - 改 sediment-framework skill（frameworks/.claude/skills/sediment-framework/）和改框架一样，要用户明确同意；\
 同意后，每次 Edit 或 Write 都会把 diff 推到用户手机上，等用户答复。白名单外的其他调用一律拒绝。
-- 写文件只用 Write 和 Edit 工具，且只写 frameworks/ 下。{GIT_RULE_TAIL}
+- 改框架文件只用 Write 和 Edit 工具，且只写 frameworks/ 下；结果库只通过上述专用命令维护，不用 shell 绕过其他文件审批。{GIT_RULE_TAIL}
 - 用户可能编辑之前的消息，这会截断本次对话。被截掉的轮次里做过的文件改动不会撤销，\
 所以基于这些文件行动前，先检查文件和 `git -C frameworks status`。"""
 
@@ -113,12 +115,13 @@ WATCH_RULE = """\
 
 
 def scope_line(conv: Conversation) -> str:
+    reference = f"本次对话引用：{conv.agent}/{conv.id}。"
     if conv.kind == "ticker":
         # The eval script is left unnamed: the framework's header points at it, and naming it here had the
         # agent read it up front in every chat (about 7k tokens) before any number was in question.
         watch_rule = WATCH_RULE.replace("<TICKER>", conv.ticker)
-        return f"本次对话关于 {conv.ticker}：它的框架是 frameworks/{conv.ticker}.md。\n{watch_rule}"
-    return ("本次对话研究一个还没有框架的新标的；落盘后它会成为 "
+        return f"{reference}\n本次对话关于 {conv.ticker}：它的框架是 frameworks/{conv.ticker}.md。\n{watch_rule}"
+    return (reference + "\n本次对话研究一个还没有框架的新标的；落盘后它会成为 "
             "frameworks/<TICKER>.md 和 frameworks/eval/<TICKER>.py。")
 
 

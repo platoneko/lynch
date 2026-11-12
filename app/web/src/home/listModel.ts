@@ -1,5 +1,11 @@
-import type { Candidate, Consensus, OptionBand, TickerRow, ZoneId } from '../types';
+import type { AxisInfo, Candidate, Consensus, OptionBand, TickerRow, ZoneId } from '../types';
 import { fmt, priceDecimals } from './PriceBar';
+
+export function isHistoricalReferenceOnly(r: TickerRow): boolean {
+  // Old comparison flags can remain after the current model has been corrected.
+  return !!(r.historical_reference_only || r.historical_reference_double_counting
+    || r.review_flags?.some((flag) => flag === 'historical_reference_only' || flag === 'historical_double_counting'));
+}
 
 /** The zone a row shows, filters and sorts by. */
 export function rowZone(r: TickerRow): ZoneId | null {
@@ -17,10 +23,12 @@ export const EXTRA_CAPTION: Record<ExtraBand['kind'], string> = { option: '+V', 
 export function extraBands(r: TickerRow): ExtraBand[] {
   const out: ExtraBand[] = [];
   if (r.option) {
-    out.push({ kind: 'option', label: `+V ${fmt(r.option.v_opt, priceDecimals(r.ticker))}`, anchors: r.option, zone: r.band?.option_zone ?? null });
+    const label = r.option.label ?? (r.option.v_opt == null ? '+V' : `+V ${fmt(r.option.v_opt, priceDecimals(r.ticker))}`);
+    out.push({ kind: 'option', label, anchors: r.option, zone: r.band?.option_zone ?? null });
   }
   if (r.candidate) {
-    out.push({ kind: 'candidate', label: r.candidate.label, anchors: r.candidate, zone: r.band?.candidate_zone ?? null });
+    out.push({ kind: 'candidate', label: r.candidate.label, anchors: r.candidate,
+      zone: r.band?.candidate_zone ?? null });
   }
   return out;
 }
@@ -54,6 +62,11 @@ export function applyFilter(rows: TickerRow[], f: HomeFilter, zoneOrder: string[
 /** Archived rows are out of the list, and out of its total, unless the user asks to see them. */
 export function inArchiveScope(r: TickerRow, f: HomeFilter): boolean {
   return f.showArchived || !r.archived;
+}
+
+export function availableAxes(axes: AxisInfo[], rows: TickerRow[], filter: HomeFilter): AxisInfo[] {
+  return axes.filter((axis) => rows.some((row) =>
+    inArchiveScope(row, filter) && [...(row.axes ?? []), ...(row.ref_axes ?? [])].includes(axis.name)));
 }
 
 function matchesQuery(r: TickerRow, query: string): boolean {

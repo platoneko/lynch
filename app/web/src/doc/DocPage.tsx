@@ -4,9 +4,9 @@ import { useOnForeground } from '../foreground';
 import { useConnection } from '../offline/connection';
 import { docEarnings } from '../earnings/model';
 import { AxisLine } from '../home/AxisLine';
-import { consensusText, extraBands, rowZone, type ExtraBand } from '../home/listModel';
+import { extraBands, isHistoricalReferenceOnly, rowZone, type ExtraBand } from '../home/listModel';
 import { fmt, priceDecimals } from '../home/PriceBar';
-import { BandHead } from '../home/TickerCard';
+import { BandHead, ReviewCautions } from '../home/TickerCard';
 import { docHash } from '../route';
 import type { AxisInfo, TickerRow } from '../types';
 import { buildDoc, renderFragment, sectionLabel, type BuiltDoc, type DocSection, type LinkTargets } from './buildDoc';
@@ -237,10 +237,13 @@ export function TickerDocHead({ ticker, row, targets, axes, zoneLabel, onOpenAxi
   return (
     <>
       {zone && <span className={`tag zone-bg-${zone}`}>{zoneLabel(zone)}</span>}
+      {row?.valuation_status === 'legacy_accepted' && <span className="tag tag-muted">历史框架沿用，计算尚待复核</span>}
+      {row && <ReviewCautions row={row} />}
       {row && extraBands(row).map((b) => (
-        <BandBlock key={b.kind} band={b} targets={targets} zoneLabel={zoneLabel} dp={priceDecimals(ticker)} />
+        <BandBlock key={b.kind} band={b} targets={targets} zoneLabel={zoneLabel} dp={priceDecimals(ticker)}
+          historical={isHistoricalReferenceOnly(row)} />
       ))}
-      {row && <AxisLine row={row} axes={axes} onOpenAxis={onOpenAxis} />}
+      {row && <AxisLine row={row} axes={axes} onOpenAxis={onOpenAxis} showDetails />}
       {row && <EarningsLine row={row} />}
     </>
   );
@@ -258,17 +261,16 @@ function EarningsLine({ row }: { row: TickerRow }) {
 }
 
 /**
- * An axis's head: where consensus sits on it, the tickers whose tiers it sets (定档), and
- * the tickers that only cite or check it (参照) — the consensus speaks for the first group only.
+ * An axis's head lists its priced and reference members. Each ticker's own
+ * saved result carries its historical consensus and date.
  */
 export function AxisDocHead({ axis, pool }: { axis: AxisInfo | undefined; pool: ReadonlySet<string> }) {
   if (!axis) return null;
-  const { consensus } = axis;
   const tickerLinks = (tickers: string[]) =>
     tickers.map((t) => (pool.has(t) ? <a key={t} href={docHash(t)}>{t}</a> : <span key={t}>{t}</span>));
   return (
     <div className="axis-head">
-      <p><span className="tag tag-axis">{consensusText(consensus)}</span>{consensus?.note && <span className="axis-note">{consensus.note}</span>}</p>
+      <p><span className="tag tag-axis">共识按各票记录查看</span></p>
       {axis.tickers.length > 0 && <p className="axis-mounts">定档：{tickerLinks(axis.tickers)}</p>}
       {axis.refs.length > 0 && <p className="axis-mounts">参照：{tickerLinks(axis.refs)}</p>}
     </div>
@@ -280,23 +282,24 @@ export function AxisDocHead({ axis, pool }: { axis: AxisInfo | undefined; pool: 
  * +V — the credited prices, the Outputs V_opt line and the assumption rows it cites;
  * candidate — its prices and the gate assumption's text (why it is only a candidate).
  */
-function BandBlock({ band, targets, zoneLabel, dp }: {
+function BandBlock({ band, targets, zoneLabel, dp, historical }: {
   band: ExtraBand;
   targets: LinkTargets;
   zoneLabel: (id: string) => string;
   dp: number;
+  historical: boolean;
 }) {
   const { L, M, H } = band.anchors;
   // Keyed on the catalog's own band object, which stays the same across scroll re-renders.
   const html = useMemo(() => {
     const sources = band.kind === 'option'
-      ? [band.anchors.line, ...band.anchors.rows.map((r) => `**${r.id}** ${r.text}`)]
+      ? [band.anchors.line, ...(band.anchors.rows ?? []).map((r) => `**${r.id}** ${r.text}`)]
       : [band.anchors.background];
-    return sources.filter((s) => s !== null).map((s) => renderFragment(s, targets));
+    return sources.filter((s): s is string => s != null).map((s) => renderFragment(s, targets));
   }, [band.anchors, targets]);
   return (
     <div className="doc-band">
-      <BandHead band={band} zoneLabel={zoneLabel} />
+      <BandHead band={band} zoneLabel={zoneLabel} historical={historical} />
       <details>
         <summary>{band.kind === 'option' ? '期权背景' : '候选背景'}</summary>
         <p className="doc-band-prices">

@@ -27,7 +27,7 @@ _TOOL_RULES = f"""\
 - 改 sediment-framework skill（frameworks/.claude/skills/sediment-framework/）和改框架一样，要用户明确同意；\
 同意后，每次用 edit 或 write 改都会把 diff 推到用户手机上，等用户答复。skill 只能你自己改：子 agent 改它一律被拒绝。\
 其他需要审批的调用一律拒绝。
-- 写文件只用 edit 和 write 工具，且只写 frameworks/ 下。{GIT_RULE_TAIL}"""
+- 修改框架文件只用 edit 和 write 工具，且只写 frameworks/ 下；结果库只通过上述专用命令维护，不用 shell 绕过其他文件审批。{GIT_RULE_TAIL}"""
 
 
 @dataclass(frozen=True)

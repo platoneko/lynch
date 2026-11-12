@@ -152,7 +152,7 @@ def test_tickers_json(repo, tmp_path, quotes):
     r = client(repo, tmp_path, quotes).get("/api/tickers")
     assert r.status_code == 200
     body = r.json()
-    assert set(body) == {"zones", "lynch_classes", "quote_error", "axes", "tickers"}
+    assert set(body) == {"zones", "lynch_classes", "quote_error", "axes", "axis_documents", "tickers"}
     assert body["quote_error"] is None
     assert body["tickers"][0]["ticker"] == "AAA.US"
     assert body["tickers"][0]["band"]["price"] == 25.0

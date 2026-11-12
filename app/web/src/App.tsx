@@ -28,6 +28,7 @@ import {
   parseRoute, watchHash, type Route,
 } from './route';
 import type { Catalog } from './types';
+import { documentAxisNames } from './doc/buildDoc';
 import { fetchWatch, removeWatch } from './watch/api';
 import type { WatchList } from './watch/types';
 import { WatchPage } from './watch/WatchPage';
@@ -199,7 +200,7 @@ export function App() {
   const pool = useMemo(() => new Set(catalog?.tickers.map((t) => t.ticker) ?? []), [catalog]);
   const axes = useMemo(() => new Map((catalog?.axes ?? []).map((a) => [a.name, a])), [catalog]);
   // One object per catalog, so a document is not rebuilt on every render.
-  const targets = useMemo(() => ({ pool, axes: new Set(axes.keys()) }), [pool, axes]);
+  const targets = useMemo(() => ({ pool, axes: documentAxisNames(catalog?.axis_documents, catalog?.axes ?? []) }), [pool, catalog]);
 
   if (!catalog) {
     return (

@@ -248,9 +248,9 @@ logs:
 
 # ── index ────────────────────────────────────────────────────────────────
 
-[doc('从 frameworks/*.md 题头重生 _INDEX.md')]
+[doc('从框架题头及已保存结果重生 _INDEX.md')]
 gen-index:
-    python3 scripts/gen_index.py
+    app/server/.venv/bin/python scripts/gen_index.py
 
 [doc('框架 / 轴文档目录：各节行号与大小、每条假设一行，如 just outline INTC.US 或 just outline frameworks/axes/sic.md')]
 outline doc:
