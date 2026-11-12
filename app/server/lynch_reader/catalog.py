@@ -411,7 +411,8 @@ def _price_row(row: dict[str, Any], ticker: str, meta: CatalogValuation | None,
         return
     price, session = _latest_price(q, us_close)
     try:
-        comparable = meta is not None and not meta.historical_reference_only
+        # Display saved valuation results; financial doubts remain in document metadata.
+        comparable = meta is not None
         zone = zone_of(price, meta.L, meta.M, meta.H) if comparable else None
         option_zone = zone_of(price, *meta.option_band) if comparable and meta.option_band is not None else None
         candidate_zone = zone_of(price, *meta.candidate) if comparable and meta.candidate is not None else None

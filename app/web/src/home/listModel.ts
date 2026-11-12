@@ -9,7 +9,7 @@ export function isHistoricalReferenceOnly(r: TickerRow): boolean {
 
 /** The zone a row shows, filters and sorts by. */
 export function rowZone(r: TickerRow): ZoneId | null {
-  return isHistoricalReferenceOnly(r) ? null : (r.band?.zone ?? null);
+  return r.band?.zone ?? null;
 }
 
 /** A band shown under the base band: its own bar on the card, its own head line on the doc page. */
@@ -22,14 +22,13 @@ export const EXTRA_CAPTION: Record<ExtraBand['kind'], string> = { option: '+V', 
 /** The row's extra bands in display order: +V, then candidate. Zones come only from the server. */
 export function extraBands(r: TickerRow): ExtraBand[] {
   const out: ExtraBand[] = [];
-  const historical = isHistoricalReferenceOnly(r);
   if (r.option) {
     const label = r.option.label ?? (r.option.v_opt == null ? '+V' : `+V ${fmt(r.option.v_opt, priceDecimals(r.ticker))}`);
-    out.push({ kind: 'option', label, anchors: r.option, zone: historical ? null : (r.band?.option_zone ?? null) });
+    out.push({ kind: 'option', label, anchors: r.option, zone: r.band?.option_zone ?? null });
   }
   if (r.candidate) {
     out.push({ kind: 'candidate', label: r.candidate.label, anchors: r.candidate,
-      zone: historical ? null : (r.band?.candidate_zone ?? null) });
+      zone: r.band?.candidate_zone ?? null });
   }
   return out;
 }

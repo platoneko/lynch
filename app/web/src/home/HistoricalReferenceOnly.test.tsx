@@ -39,20 +39,21 @@ describe('historical-only valuation', () => {
     expect(missingCard).not.toContain('估值基准日期待核');
   });
 
-  it('never shows stale current zones but retains the saved interval', () => {
-    expect(rowZone(row)).toBeNull();
-    expect(extraBands(row).every((band) => band.zone === null)).toBe(true);
+  it('shows saved valuation bars and current zones while keeping doubts in the document', () => {
+    expect(rowZone(row)).toBe('neutral');
+    expect(extraBands(row).every((band) => band.zone === 'neutral')).toBe(true);
     const card = renderToStaticMarkup(<TickerCard row={row} label={(id) => `分区:${id}`} axes={new Map()}
       onOpen={() => {}} onOpenAxis={() => {}} />);
     const doc = renderToStaticMarkup(<TickerDocHead ticker="FAKE.HK" row={row}
       targets={{pool: new Set(), axes: new Set()}} axes={new Map()} zoneLabel={(id) => `分区:${id}`} onOpenAxis={() => {}} />);
     for (const html of [card, doc]) {
-      expect(html).not.toContain('分区:neutral');
+      expect(html).toContain('分区:neutral');
     }
     expect(doc).toContain('旧估值存在重复计价，仅供历史对照');
     expect(card).not.toContain('旧估值存在重复计价，仅供历史对照');
-    expect(card).toContain('估值区间');
-    expect(card).toContain('10.00 / 20.00 / 30.00');
+    expect(card).toContain('class="pricebar"');
+    expect(card).toContain('10.00');
+    expect(card).toContain('30.00');
     expect(card).toContain('fictional');
     expect(card).not.toContain('估值档位不可用');
   });
@@ -66,24 +67,24 @@ describe('historical-only valuation', () => {
 
   it('labels a generic historical reference without claiming double counting', () => {
     const historical = {...row, review_flags: ['historical_reference_only']};
-    expect(rowZone(historical)).toBeNull();
+    expect(rowZone(historical)).toBe('neutral');
     const card = renderToStaticMarkup(<TickerCard row={historical} label={(id) => `分区:${id}`} axes={new Map()}
       onOpen={() => {}} onOpenAxis={() => {}} />);
     expect(card).not.toContain('旧估值仅供历史对照，不作为当前价带');
-    expect(card).toContain('估值区间');
+    expect(card).toContain('class="pricebar"');
     expect(card).not.toContain('重复计价');
-    expect(card).not.toContain('分区:neutral');
+    expect(card).toContain('分区:neutral');
   });
 
   it('respects current-record reference states without changing the stored review flags', () => {
     const generic = {...row, review_flags: [], historical_reference_only: true};
     const double = {...generic, historical_reference_double_counting: true};
     for (const item of [generic, double]) {
-      expect(rowZone(item)).toBeNull();
+      expect(rowZone(item)).toBe('neutral');
       const html = renderToStaticMarkup(<TickerCard row={item} label={(id) => `分区:${id}`} axes={new Map()}
         onOpen={() => {}} onOpenAxis={() => {}} />);
-      expect(html).toContain('估值区间');
-      expect(html).not.toContain('分区:neutral');
+      expect(html).toContain('class="pricebar"');
+      expect(html).toContain('分区:neutral');
       expect(html).not.toContain('旧估值存在重复计价，仅供历史对照');
       expect(html).not.toContain('旧估值仅供历史对照，不作为当前价带');
     }
