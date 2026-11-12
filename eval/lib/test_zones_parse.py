@@ -7,7 +7,7 @@ from datetime import date
 from pathlib import Path
 
 from eval.lib.frameworks import (
-    FRAMEWORKS_DIR, FrameworkMeta, basket_label, list_framework_paths, load_all_frameworks, load_framework,
+    FRAMEWORKS_DIR, FrameworkMeta, basket_label, list_framework_paths, load_framework,
     parse_framework_identity,
 )
 from eval.lib.inputs import parse_baskets
@@ -56,9 +56,13 @@ class ZoneTests(unittest.TestCase):
 class ParseTests(unittest.TestCase):
     @_NEEDS_CONTENT
     def test_all_frameworks_parse(self) -> None:
-        # Anchor values are research content and move with every revision; the parser already rejects any
-        # framework whose anchors fail L < M < H, so loading them all is the check.
-        self.assertTrue(load_all_frameworks())
+        # Documents supply identity; valuation anchors come from saved script results.
+        paths = list_framework_paths()
+        self.assertTrue(paths)
+        for path in paths:
+            with self.subTest(ticker=path.stem):
+                identity = parse_framework_identity(path.read_text(encoding='utf-8'), path.stem)
+                self.assertEqual(identity.ticker, path.stem)
 
     def test_paths_grouped_by_market_like_index(self) -> None:
         # Daily digest must read US → HK → A like _INDEX.md, not name-sorted
@@ -203,8 +207,9 @@ class ContentRepoLayoutTest(unittest.TestCase):
 
     @_NEEDS_CONTENT
     def test_eval_pointer_resolves_under_content_repo(self) -> None:
-        meta = load_framework(FRAMEWORKS_DIR / "GOOG.US.md")
-        self.assertEqual(meta.eval_script, FRAMEWORKS_DIR / "eval" / "GOOG.US.py")
+        path = FRAMEWORKS_DIR / "GOOG.US.md"
+        identity = parse_framework_identity(path.read_text(encoding='utf-8'), path.stem)
+        self.assertTrue((FRAMEWORKS_DIR / 'eval' / f'{identity.ticker}.py').is_file())
 
     def test_no_ticker_scripts_in_code_repo(self) -> None:
         # Per-ticker evals belong in frameworks/eval/; eval/ here holds only the library.

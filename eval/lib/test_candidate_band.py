@@ -198,7 +198,7 @@ class CandidateCrossTests(unittest.TestCase):
                 "🔴 SOFI.US 16.00 USD",
                 "「叙事溢价」 P > 13.88 · L/M/H = 7.23/13.02/13.88",
                 "「乐观」 候选(FY28·Piper单家) [15.91, 16.29] · L/M/H = 7.23/15.54/16.29",
-                "候选 「叙事溢价」 → 「乐观」",
+                "候选(FY28·Piper单家) 「叙事溢价」 → 「乐观」",
             ],
         )
 
