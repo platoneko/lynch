@@ -39,7 +39,7 @@ def discover_local(roots: list[Path], *, symbol: str | None = None, name: str | 
                     return {'items': items, 'scanned': scanned, 'partial': True, 'roots': list(map(str, normalized))}
                 visited.add(path)
                 scanned += 1
-                relative = str(path.relative_to(root))
+                relative = str(Path(root.name) / path.relative_to(root))
                 if not pattern.search(relative.casefold()):
                     continue
                 if len(items) >= limit:

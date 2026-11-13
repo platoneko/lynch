@@ -109,10 +109,36 @@ class StoreTest(unittest.TestCase):
     def test_reimport_can_add_text_without_changing_original_version(self):
         first = archive_file(self.store, self.source, metadata())
         self.assertEqual(first['text_status'], 'unavailable')
+        from eval.lib.research_text import extract_text
         second = archive_file(self.store, self.source, metadata(),
-                              text_result={'status': 'ready', 'text': 'cash 123', 'reason': None, 'page_starts': []})
+                              text_result=extract_text(self.source, media_type='application/json'))
         self.assertEqual(first['material_id'], second['material_id'])
         self.assertEqual(second['text_status'], 'ready')
+
+    def test_changed_input_cannot_bind_old_text_to_new_raw(self):
+        from eval.lib.research_text import extract_text
+        extracted = extract_text(self.source, media_type='application/json')
+        self.source.write_text('new cash flow')
+        with self.assertRaises(ResearchError):
+            archive_file(self.store, self.source, metadata(), text_result=extracted)
+
+    def test_reimport_exposes_all_associations_and_fills_missing_source_date(self):
+        archive_file(self.store, self.source, metadata())
+        revised = metadata()
+        revised.update(symbols=['BETA.US'], report_periods=['FY2024'], published_at='2026-11-13T08:00:00Z')
+        archive_file(self.store, self.source, revised)
+        found = find_materials(self.store, {'symbol': ['BETA.US'], 'period': ['FY2024']})[0]
+        self.assertIn('BETA.US', found['symbols'])
+        self.assertIn('FY2024', found['report_periods'])
+        self.assertEqual(found['published_at'], '2026-11-13T08:00:00Z')
+
+    def test_publication_day_is_inclusive_and_timestamp_offsets_compare_by_instant(self):
+        value = metadata()
+        value['published_at'] = '2026-11-13T10:00:00+08:00'
+        archive_file(self.store, self.source, value)
+        self.assertEqual(len(find_materials(self.store, {'published_to': '2026-11-13'})), 1)
+        self.assertEqual(len(find_materials(self.store, {'published_from': '2026-11-13T01:00:00Z'})), 1)
+        self.assertEqual(find_materials(self.store, {'published_to': '2026-11-13T01:00:00Z'}), [])
 
 
 if __name__ == '__main__':

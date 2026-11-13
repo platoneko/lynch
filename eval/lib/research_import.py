@@ -10,6 +10,27 @@ from eval.lib.research_store import ResearchError, sensitive
 _MAX_LINE = 16 * 1024 * 1024
 
 
+def _check_native_completion(output, payload):
+    if payload.get('is_error') or payload.get('status') in ('failed', 'error', 'running', 'inProgress', 'interrupted', 'cancelled'):
+        raise ResearchError('tool_failed', '工具结果失败或尚未完成，不能归档为成功资料')
+    blocks = output if isinstance(output, list) else [output]
+    for block in blocks:
+        text = block.get('text', '') if isinstance(block, dict) and 'type' in block else block
+        envelope = text
+        if isinstance(text, str):
+            exits = re.findall(r'(?i)(?:process exited with code|exit code:)\s*(-?\d+)', text)
+            if any(int(code) != 0 for code in exits) or re.search(r'(?i)(script running with cell ID|process running with session ID)', text):
+                raise ResearchError('tool_failed', '命令失败或仍在运行，不能归档未完成的资料')
+            try:
+                envelope = json.loads(text)
+            except ValueError:
+                continue
+        if isinstance(envelope, dict) and (envelope.get('isError') or envelope.get('is_error') or
+                envelope.get('exit_code', 0) not in (None, 0) or
+                (envelope.get('session_id') is not None and envelope.get('exit_code') is None)):
+            raise ResearchError('tool_failed', '工具返回失败或运行中的结果，不能归档')
+
+
 def _select_content(content, content_index):
     if isinstance(content, str):
         if content_index not in (None, 0):
@@ -70,6 +91,8 @@ def extract_tool_result(transcript: Path, *, format: str, call_id: str, thread_i
                     if payload.get('type') in ('function_call', 'custom_tool_call'):
                         calls.add(owner)
                     elif payload.get('type') in ('function_call_output', 'custom_tool_call_output'):
+                        if thread_id is None or owner == thread_id:
+                            _check_native_completion(payload.get('output'), payload)
                         results.append((owner, number, payload.get('output'), False))
                 else:
                     message = entry.get('message') or {}

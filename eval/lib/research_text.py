@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from html.parser import HTMLParser
+import hashlib
 from pathlib import Path
 import subprocess
 
@@ -33,16 +34,17 @@ class _HTMLText(HTMLParser):
 def extract_text(source: Path, *, media_type: str) -> dict:
     unavailable = {'status': 'unavailable', 'text': None, 'page_starts': []}
     try:
+        original = source.read_bytes()
         if media_type == 'application/pdf':
             try:
-                proc = subprocess.run(['pdftotext', '-layout', str(source), '-'], capture_output=True, timeout=60)
+                proc = subprocess.run(['pdftotext', '-layout', '-', '-'], input=original, capture_output=True, timeout=60)
             except FileNotFoundError:
                 return {**unavailable, 'reason': 'pdftotext_missing'}
             if proc.returncode:
                 return {**unavailable, 'reason': 'pdf_extraction_failed'}
             text = proc.stdout.decode('utf-8')
         elif media_type.startswith('text/') or media_type in ('application/json', 'application/xml'):
-            text = source.read_bytes().decode('utf-8')
+            text = original.decode('utf-8')
         else:
             return {**unavailable, 'reason': 'unsupported_media_type'}
         if media_type == 'text/html':
@@ -59,7 +61,8 @@ def extract_text(source: Path, *, media_type: str) -> dict:
             starts.append(len(lines) + 1)
             lines.extend(page.split('\n'))
         return {'status': 'ready', 'reason': None, 'text': '\n'.join(lines),
-                'page_starts': starts if media_type == 'application/pdf' else []}
+                'page_starts': starts if media_type == 'application/pdf' else [],
+                'source_sha256': hashlib.sha256(original).hexdigest()}
     except (UnicodeError, OSError, subprocess.TimeoutExpired):
         return {**unavailable, 'reason': 'text_extraction_failed'}
 

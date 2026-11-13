@@ -29,7 +29,7 @@ def resolve_store(value: str | None, environ: Mapping[str, str]) -> Path:
 
 def sensitive(value: str) -> bool:
     """Reject known credential shapes, without claiming general secret detection."""
-    return bool(re.search(r'(?i)(authorization\s*[:=]|bearer\s+\S+|(?:api[_-]?key|access[_-]?token|password|cookie)\s*[:=]\s*\S+)', value))
+    return bool(re.search(r'''(?i)(authorization["']?\s*[:=]|bearer\s+\S+|(?:api[_-]?key|access[_-]?token|password|cookie)["']?\s*[:=]\s*\S+)''', value))
 
 
 def _json(value):
@@ -157,6 +157,8 @@ def archive_file(store: Path, source: Path, metadata: dict, *, text_result: dict
             raise ResearchError('empty', '没有可保存的原始资料')
         connection = _connect(store, write=True)
         digest = hashlib.sha256(content).hexdigest()
+        if text_result and text_result.get('status') == 'ready' and text_result.get('source_sha256') != digest:
+            raise ResearchError('source_changed', '原文件在提取文本后发生变化，请从完整原件重新归档')
         reused_content = _object_path(store, digest, 'raw').exists()
         _publish(store, content, 'raw')
         extraction = dict(text_result or {'status': 'unavailable', 'reason': 'not_extracted', 'page_starts': []})
@@ -170,9 +172,14 @@ def archive_file(store: Path, source: Path, metadata: dict, *, text_result: dict
             connection.execute('INSERT OR IGNORE INTO objects VALUES (?, ?)', (digest, len(content)))
             connection.execute('INSERT OR IGNORE INTO materials VALUES (?,?,?,?,?,?,?,?)',
                                (material_id, meta['provider'], meta['source_ref'], digest, _json(meta), now, text_hash, _json(extraction),))
-            row = connection.execute('SELECT id FROM materials WHERE provider=? AND source_ref=? AND hash=?',
+            row = connection.execute('SELECT id,metadata FROM materials WHERE provider=? AND source_ref=? AND hash=?',
                                      (meta['provider'], meta['source_ref'], digest)).fetchone()
             material_id = row['id']
+            retained = json.loads(row['metadata'])
+            for key in ('published_at', 'fetched_at', 'currency', 'frequency', 'media_type'):
+                if retained.get(key) is None and meta.get(key) is not None:
+                    retained[key] = meta[key]
+            connection.execute('UPDATE materials SET metadata=? WHERE id=?', (_json(retained), material_id))
             if text_hash:
                 connection.execute('UPDATE materials SET text_hash=?,extraction=? WHERE id=? AND text_hash IS NULL',
                                    (text_hash, _json(extraction), material_id))
@@ -191,13 +198,15 @@ def archive_file(store: Path, source: Path, metadata: dict, *, text_result: dict
             connection.close()
 
 
-def _public(store, row):
+def _public(store, row, connection):
     result = json.loads(row['metadata'])
     result.update(material_id=row['id'], content_sha256=row['hash'], archived_at=row['archived_at'],
                   representation=result.get('representation', 'source_file'),
                   raw_path=str(_object_path(store, row['hash'], 'raw')),
                   text_path=str(_object_path(store, row['text_hash'], 'text.txt')) if row['text_hash'] else None)
     result.update({f'text_{k}' if k in ('status', 'reason') else k: v for k, v in json.loads(row['extraction']).items()})
+    for key in ('symbols', 'topics', 'report_periods', 'assumption_refs'):
+        result[key] = [r[0] for r in connection.execute('SELECT value FROM associations WHERE material_id=? AND kind=? ORDER BY value', (row['id'], key))]
     return result
 
 
@@ -207,7 +216,7 @@ def get_material(store: Path, material_id: str) -> dict:
         row = connection.execute('SELECT * FROM materials WHERE id=?', (material_id,)).fetchone()
         if row is None:
             raise ResearchError('missing', '指定资料不存在')
-        result = _public(store, row)
+        result = _public(store, row, connection)
         for key, digest in (('raw_path', row['hash']), ('text_path', row['text_hash'])):
             if result[key] and hashlib.sha256(Path(result[key]).read_bytes()).hexdigest() != digest:
                 raise ResearchError('integrity', '资料文件内容与登记摘要不符')
@@ -239,7 +248,13 @@ def find_materials(store: Path, filters: dict, *, limit: int = 20, offset: int =
             where.append(f"json_extract(m.metadata, '$.kind') IN ({placeholders})")
             values.extend(selected)
         elif key in ('published_from', 'published_to'):
-            where.append("json_extract(m.metadata, '$.published_at') " + ('>=' if key.endswith('from') else '<=') + ' ?')
+            try:
+                datetime.fromisoformat(selected[0])
+            except (TypeError, ValueError):
+                raise ResearchError('input', '日期筛选需要 ISO 8601 日期或时刻') from None
+            upper_day = key == 'published_to' and re.fullmatch(r'\d{4}-\d{2}-\d{2}', selected[0])
+            operator = '<' if upper_day else '>=' if key == 'published_from' else '<='
+            where.append("julianday(json_extract(m.metadata, '$.published_at')) " + operator + ' julianday(?)' + (' + 1' if upper_day else ''))
             values.append(selected[0])
         else:
             raise ResearchError('input', '不支持的资料筛选条件')
@@ -247,7 +262,7 @@ def find_materials(store: Path, filters: dict, *, limit: int = 20, offset: int =
     try:
         query = 'SELECT m.* FROM materials m' + (' WHERE ' + ' AND '.join(where) if where else '')
         rows = connection.execute(query + ' ORDER BY m.archived_at,m.id LIMIT ? OFFSET ?', [*values, limit, offset]).fetchall()
-        return [_public(store, row) for row in rows]
+        return [_public(store, row, connection) for row in rows]
     except sqlite3.Error:
         raise ResearchError('database', '资料目录查询失败') from None
     finally:

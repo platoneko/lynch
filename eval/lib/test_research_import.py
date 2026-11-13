@@ -50,7 +50,10 @@ class ImportTest(unittest.TestCase):
 
     def test_failure_missing_ambiguous_and_sensitive_results_rejected(self):
         variants = [[self.call()], [self.call(), self.result(), self.result('different')],
-                    [self.call(), self.result('Authorization: Bearer private')]]
+                    [self.call(), self.result('Authorization: Bearer private')],
+                    [self.call(), self.result('{"api_key":"synthetic-test-value"}')],
+                    [self.call(), self.result('{"access_token":"synthetic-test-value"}')],
+                    [self.call(), self.result('{"cookie":"synthetic-test-value"}')]]
         failed = self.result()
         failed['message']['content'][0]['is_error'] = True
         variants.append([self.call(), failed])
@@ -65,6 +68,14 @@ class ImportTest(unittest.TestCase):
         self.write([self.call(), self.result('')])
         with self.assertRaises(ResearchError):
             extract_tool_result(self.path, format='claude-jsonl', call_id='call-1')
+
+    def test_native_failed_and_running_envelopes_are_not_successful_sources(self):
+        for output in ('Process exited with code 1\nfailed body', 'Script running with cell ID 42',
+                       '{"exit_code":1,"output":"failed body"}', '{"session_id":42,"exit_code":null,"output":"running"}'):
+            self.write([{'type': 'response_item', 'payload': {'type': 'function_call', 'call_id': 'a', 'name': 'exec_command'}},
+                        {'type': 'response_item', 'payload': {'type': 'function_call_output', 'call_id': 'a', 'output': output}}])
+            with self.subTest(output=output), self.assertRaises(ResearchError):
+                extract_tool_result(self.path, format='codex-jsonl', call_id='a')
 
 
 if __name__ == '__main__':

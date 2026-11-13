@@ -104,6 +104,7 @@ def test_model_reuses_local_annual_cashflow_and_only_fetches_missing_quarter(tmp
             from eval.lib.research_store import find_materials
             saved = find_materials(store, {'symbol': ['ALPHA.US']})
             assert any('FY2025' in m.get('report_periods', []) for m in saved), saved
+            assert any('Q32026' in [re.sub(r'[^A-Z0-9]', '', p.upper()) for p in m.get('report_periods', [])] for m in saved), saved
             assert any(m['material_id'] in ''.join(rec.deltas) for m in saved), ''.join(rec.deltas)
             tool_commands = [b['input'].get('command', '') for e in rec.entries for b in e['message']['content']
                              if isinstance(b, dict) and b.get('type') == 'tool_use' and b.get('name') == 'Bash']

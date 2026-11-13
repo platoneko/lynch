@@ -31,6 +31,12 @@ class DiscoveryTest(unittest.TestCase):
         self.assertLessEqual(found['scanned'], 2)
         self.assertEqual(len(discover_local([self.root], name='absent')['items']), 0)
 
+    def test_explicit_company_root_is_part_of_the_match(self):
+        root = self.root / 'ALPHA.US'
+        (root / 'raw').mkdir(parents=True)
+        (root / 'raw/lb_CF.json').write_text('{}')
+        self.assertEqual(len(discover_local([root], symbol='ALPHA.US')['items']), 1)
+
 
 if __name__ == '__main__':
     unittest.main()

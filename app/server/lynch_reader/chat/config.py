@@ -75,7 +75,9 @@ RESEARCH_MATERIAL_RULES = """\
 `discover --root <明确绝对目录> --symbol <本次标的>` 不需要资料库配置。\
 候选只代表存在文件，读取真实结构后核对报告期、年度/季度、币种和字段口径。\
 已有历史期间直接复用，只补缺少时期；需要核实最新修订时说明目的再取数。不扫描整个用户目录。
-- 取得成功且有价值的相关原始资料后及时归档，包括最终未引用及反驳当前判断的证据。\
+- 取数时先把完整原始返回保存到当前允许的临时研究目录，再读取、筛选和归档；\
+查询缺少的季度/年份也必须保存该次原始返回，不能只登记此前的历史文件。\
+取得成功且有价值的相关原始资料后及时归档，包括最终未引用及反驳当前判断的证据。\
 用 `put --file <原文件> --metadata <描述JSON>`；描述必填 title/provider/source_ref/kind/completeness/relevance，\
 并提供 symbols 或 topics 字符串列表；report_periods、currency、fetched_at 等已知才填，\
 kind 取 filing/report/transcript/webpage/financial_data/search_result，\
