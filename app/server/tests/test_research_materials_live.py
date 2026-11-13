@@ -6,6 +6,7 @@ from dataclasses import asdict
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import sys
 from types import SimpleNamespace
@@ -37,7 +38,7 @@ def test_model_reuses_local_annual_cashflow_and_only_fetches_missing_quarter(tmp
         fake.write_text(f'#!{sys.executable}\n' +
                         'import json,sys\nfrom pathlib import Path\n' +
                         f'p=Path({str(counts)!r})\n' +
-                        'if "--help" in sys.argv:\n print("financial-statement SYMBOL --kind CF --report af|qf --format json"); sys.exit(0)\n' +
+                        'if "--help" in sys.argv or "help" in sys.argv:\n print("financial-statement SYMBOL --kind CF --report af|qf --format json"); sys.exit(0)\n' +
                         'period=sys.argv[sys.argv.index("--report")+1] if "--report" in sys.argv else "unknown"\n' +
                         'with p.open("a") as f: f.write(json.dumps({"period":period,"args":sys.argv[1:]})+"\\n")\n' +
                         'print(json.dumps({"symbol":"ALPHA.US","provider":"synthetic","currency":"USD",'
@@ -76,7 +77,8 @@ def test_model_reuses_local_annual_cashflow_and_only_fetches_missing_quarter(tmp
                 text = ' '.join(command) if isinstance(command, list) else command
                 denied = any(word in text for word in ('curl ', 'wget ', 'httpx', 'requests.', 'urllib.', 'printenv', 'env |'))
                 # Absolute fake path is required; never accept a request to the real CLI.
-                if ('longbridge' in text and str(fake) not in text) or denied or not command_allowed(command):
+                invoking_longbridge = re.search(r'''(?:^|[\s'"/])longbridge(?:[\s'"]|$)''', text)
+                if (invoking_longbridge and str(fake) not in text) or denied or not command_allowed(command):
                     link._rpc.reply(rpc_id, {'decision': 'decline'})
                     return
             return original_request(rpc_id, method, params)
