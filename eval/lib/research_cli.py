@@ -7,6 +7,7 @@ import mimetypes
 import os
 from pathlib import Path
 import sys
+import tempfile
 
 from eval.lib.research_discovery import discover_local
 from eval.lib.research_store import ResearchError, archive_file, find_materials, get_material, resolve_store
@@ -23,7 +24,13 @@ def _parser():
     parser.add_argument('--store')
     commands = parser.add_subparsers(dest='action', required=True)
     put = commands.add_parser('put', help='登记已取得的原始资料')
-    put.add_argument('--file', required=True, type=Path)
+    inputs = put.add_mutually_exclusive_group(required=True)
+    inputs.add_argument('--file', type=Path)
+    inputs.add_argument('--transcript', type=Path)
+    put.add_argument('--format', choices=('claude-jsonl', 'codex-jsonl'))
+    put.add_argument('--call-id')
+    put.add_argument('--thread-id')
+    put.add_argument('--content-index', type=int)
     put.add_argument('--metadata', required=True, type=Path)
     find = commands.add_parser('find', help='按来源、覆盖范围和关键词查找')
     for flag in ('source-ref', 'symbol', 'topic', 'period', 'kind'):
@@ -94,6 +101,28 @@ def _run(args):
             metadata = json.loads(args.metadata.read_text(encoding='utf-8'))
         except (ValueError, UnicodeError):
             raise ResearchError('input', '资料描述需要有效的 UTF-8 JSON 对象') from None
+        if not isinstance(metadata, dict):
+            raise ResearchError('input', '资料描述需要 JSON 对象')
+        if args.transcript:
+            from eval.lib.research_import import extract_tool_result
+            if not args.format or not args.call_id:
+                raise ResearchError('input', '会话导入需要 --format 和 --call-id')
+            response = extract_tool_result(args.transcript, format=args.format, call_id=args.call_id,
+                                           thread_id=args.thread_id, content_index=args.content_index)
+            metadata.update(representation='tool_response', import_provenance=response['provenance'],
+                            completeness=response['completeness'], media_type=response['media_type'])
+            # Scratch stays inside the explicitly configured store, never /tmp.
+            staging_root = store / 'staging'
+            if staging_root.is_symlink():
+                raise ResearchError('path', '资料暂存目录不能是符号链接')
+            staging_root.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(prefix='import-', dir=staging_root) as staging:
+                source = Path(staging) / 'response.txt'
+                source.write_bytes(response['bytes'])
+                return archive_file(store, source, metadata, text_result=extract_text(source, media_type=response['media_type']))
+        if any(value is not None for value in (args.format, args.call_id, args.thread_id, args.content_index)):
+            raise ResearchError('input', '工具调用参数只能与 --transcript 使用')
+        metadata['representation'] = 'source_file'
         media_type = metadata.get('media_type') if isinstance(metadata, dict) else None
         media_type = media_type or mimetypes.guess_type(args.file.name)[0] or 'application/octet-stream'
         extracted = extract_text(args.file, media_type=media_type)

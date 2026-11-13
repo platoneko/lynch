@@ -106,6 +106,14 @@ class StoreTest(unittest.TestCase):
         with self.assertRaises(ResearchError):
             get_material(self.store, saved['material_id'])
 
+    def test_reimport_can_add_text_without_changing_original_version(self):
+        first = archive_file(self.store, self.source, metadata())
+        self.assertEqual(first['text_status'], 'unavailable')
+        second = archive_file(self.store, self.source, metadata(),
+                              text_result={'status': 'ready', 'text': 'cash 123', 'reason': None, 'page_starts': []})
+        self.assertEqual(first['material_id'], second['material_id'])
+        self.assertEqual(second['text_status'], 'ready')
+
 
 if __name__ == '__main__':
     unittest.main()

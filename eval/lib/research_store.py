@@ -173,6 +173,9 @@ def archive_file(store: Path, source: Path, metadata: dict, *, text_result: dict
             row = connection.execute('SELECT id FROM materials WHERE provider=? AND source_ref=? AND hash=?',
                                      (meta['provider'], meta['source_ref'], digest)).fetchone()
             material_id = row['id']
+            if text_hash:
+                connection.execute('UPDATE materials SET text_hash=?,extraction=? WHERE id=? AND text_hash IS NULL',
+                                   (text_hash, _json(extraction), material_id))
             connection.execute('INSERT OR IGNORE INTO acquisitions VALUES (?,?,?)',
                                (material_id, hashlib.sha256(_json(meta).encode()).hexdigest(), _json(meta)))
             for kind in ('symbols', 'topics', 'report_periods', 'assumption_refs'):

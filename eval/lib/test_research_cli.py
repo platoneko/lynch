@@ -85,6 +85,19 @@ class CLITest(unittest.TestCase):
         self.meta.write_text('{broken')
         self.assertEqual(self.cli('put', '--file', self.source, '--metadata', self.meta)[0], 2)
 
+    def test_transcript_import_preserves_result_and_never_claims_full_document(self):
+        transcript = self.root / 'session.jsonl'
+        entries = [
+            {'type': 'assistant', 'message': {'content': [{'type': 'tool_use', 'id': 'a', 'name': 'WebFetch'}]}},
+            {'type': 'user', 'message': {'content': [{'type': 'tool_result', 'tool_use_id': 'a', 'content': '现金流原始返回', 'is_error': False}]}},
+        ]
+        transcript.write_text('\n'.join(map(json.dumps, entries)) + '\n')
+        code, saved = self.cli('put', '--transcript', transcript, '--format', 'claude-jsonl', '--call-id', 'a', '--metadata', self.meta)
+        self.assertEqual(code, 0, saved)
+        self.assertEqual(saved['completeness'], 'unknown')
+        self.assertEqual(saved['representation'], 'tool_response')
+        self.assertEqual(Path(saved['raw_path']).read_text(), '现金流原始返回')
+
 
 if __name__ == '__main__':
     unittest.main()
