@@ -51,6 +51,41 @@ Codex 在每次启动或恢复对话进程时，从仓库 `.mcp.json` 接入 `wi
 
 运行 app 服务的环境需要能找到 `codex`；模型清单不可用时，页面会提示原因。若提示需要登录，在终端执行 `codex login`。安装 Codex 或修改 PATH 后，重新运行 `just app-install` 更新服务环境；代码更新后先运行 `(cd app/server && uv sync --locked)` 安装锁定依赖，再运行 `just app-web`、`just app-start`。Codex 对话可在 ⋯ 菜单手动压缩上下文，并指定摘要要保留的内容；压缩后继续原对话。编辑使用原生分叉保留旧线程，自动标题不会插入研究对话。
 
+## 研究原始资料的归档与复用
+
+研究会话在出网前先查本地，按报告期、币种和字段口径复用已取得的资料，只补缺少的部分。
+这套能力用于模型研究和引用，不增加手机资料页，也不改变估值结果库。它不自动拦截全部取数工具，
+不保证模型没有漏登记；多 agent 同时联网仍可能重复，但资料正文会去重保存。
+
+在当前项目约定的环境中设置 `LYNCH_RESEARCH_DIR` 为同一份资料库的绝对路径；也可逐条传 `--store`。
+手机和终端共用该配置，隔离 worktree 不自行创建另一份库。推荐运行数据位于主工作区的
+`output/research/`，但程序不内置本机路径。首次 `put` 初始化，`find`/`read` 不创建空库；
+未配置与真正零命中分别报错/返回。`app-install` 已保存 `LYNCH_*` 环境；环境变更需按现有流程更新服务环境，
+新提示在研究进程新建或恢复后生效，部署时避免中断正在运行的会话。
+
+```bash
+python3 -m eval.lib.research_cli find --symbol ALPHA.US --period FY2025
+python3 -m eval.lib.research_cli put --file /absolute/report.json --metadata /absolute/report-metadata.json
+python3 -m eval.lib.research_cli read MATERIAL_ID --from-line 1 --to-line 30
+python3 -m eval.lib.research_cli read MATERIAL_ID --raw-path
+python3 -m eval.lib.research_cli discover --root /absolute/existing-research --symbol ALPHA.US
+```
+
+元数据 JSON 例：`{"title":"年度现金流","provider":"披露来源","source_ref":"公开地址或文档编号",
+"kind":"financial_data","completeness":"full","relevance":"核对资本开支","symbols":["ALPHA.US"],
+"report_periods":["FY2025"],"currency":"USD"}`。未知获取时间留空；归档时间不能冒充原来取数时间。
+支持纯行业资料：提供 `topics` 列表即可，不强制标的。最终没引用的相关原始证据也保存，入库不代表采纳。
+
+无文件的工具返回可用 `put --transcript /absolute/session.jsonl --format claude-jsonl --call-id CALL_ID --metadata /absolute/metadata.json`。
+Claude 原生与 app 四类研究模型的统一记录用 `claude-jsonl`，Codex 原生记录用 `codex-jsonl`。
+需要时用 `--thread-id` 指明子线程，`--content-index` 选择具体文本块。未核实的 Grok/OpenCode 终端私有格式不支持消息导入，
+可先导出文件。程序保存选中响应原样，不能将工具节选当作报告全文，不能由模型重抄原文。
+
+系统保留原文件及来源版本，中文/英文关键词按字面值查找。`find --query` 返回片段与继续位置，
+`partial` 表示本轮尚未检索完；PDF 文本需系统已有 `pdftotext`，扫描件第一版不做 OCR，提取失败时原文保留并显示不可全文搜索。
+发现旧文件不批量迁移：模型在当前研究需要时核对并登记。相同结果再次过滤/排版应处理本地文件，不重复联网。
+最新预测与新财报仍需核实更新，历史来源不能仅因本地命中就被当成最新。
+
 ## 林奇六类
 
 `slow_grower` · `stalwart` · `fast_grower` · `cyclical` · `turnaround` · `asset_play`  

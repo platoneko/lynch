@@ -65,6 +65,34 @@ API_BILLING_ENV: tuple[str, ...] = (
     "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
 )
 
+RESEARCH_MATERIAL_RULES = """\
+- 出网调研前先查本地原始资料，不只搜索估值文档。命令为 `python3 -m eval.lib.research_cli`；\
+资料库由环境 LYNCH_RESEARCH_DIR 指定绝对路径，不自行选择默认库，不打印完整环境。\
+用 `find --symbol <本次标的>`，需要时加 `--period`、`--source-ref` 或 `--query`；\
+命中后用 `read <material_id>` 按行/页读取，`read <material_id> --raw-path` 取得已保存文件位置。\
+未配置、未初始化、无法检索和真正零命中要分别说明，不能说已查过一个不存在的库。
+- 查库未命中时，先依据框架引用和已知研究目录做一次有界的本地文件发现：\
+`discover --root <明确绝对目录> --symbol <本次标的>` 不需要资料库配置。\
+候选只代表存在文件，读取真实结构后核对报告期、年度/季度、币种和字段口径。\
+已有历史期间直接复用，只补缺少时期；需要核实最新修订时说明目的再取数。不扫描整个用户目录。
+- 取数时先把完整原始返回保存到当前允许的临时研究目录，再读取、筛选和归档；\
+查询缺少的季度/年份也必须保存该次原始返回，不能只登记此前的历史文件。\
+取得成功且有价值的相关原始资料后及时归档，包括最终未引用及反驳当前判断的证据。\
+用 `put --file <原文件> --metadata <描述JSON>`；描述必填 title/provider/source_ref/kind/completeness/relevance，\
+并提供 symbols 或 topics 字符串列表；report_periods、currency、fetched_at 等已知才填，\
+kind 取 filing/report/transcript/webpage/financial_data/search_result，\
+completeness 取 full/excerpt/search_snippet/unknown。归档不等于框架采纳。\
+同一份结果改筛选、排序或展示时直接处理本地文件，不再发相同外部请求。
+- 只有工具消息时按指定记录导入：`put --transcript <记录文件> --format claude-jsonl --call-id <精确编号> --metadata <描述JSON>`；\
+app 统一记录及 Claude 原生用 claude-jsonl，Codex 原生用 codex-jsonl；\
+子线程需明确 --thread-id，多个文本块需 --content-index。不扫描全局会话猜当前记录，\
+不让模型誊写正文冒充原文，不把摘要/节选当全文。保存失败要说明，不能声称资料已归档。
+- 主 agent 派工时给子 agent 资料库位置、已知资料编号/路径、覆盖时期、已做查询和仍缺的证据；\
+子 agent 先复用再补缺，归档后返回资料编号。引用给原文来源、日期与页/行位置，保留版本；\
+找不到原引用时区分替代证据。研究资料只通过专用命令归档，不改正式框架、结果库或放宽文件审批。\
+原始取数仍使用当前项目环境的现有工具，不切换账号或保存凭据。
+"""
+
 # The rules every app chat gets, whichever agent runs it; each agent appends the lines naming its own tools
 # (CLAUDE_TOOL_RULES here, chat/opencode.py for opencode).
 SHARED_RULES = """\
@@ -81,7 +109,8 @@ SHARED_RULES = """\
 - 落盘改动之后跑 `cd frameworks && just check`。通过后只 stage 本次对话改过的文件并提交。
 - 仅在用户明确授权框架落盘后，按 sediment-framework 的结果保存步骤，用专用结果写入命令记录本次正式采纳的脚本输出；\
 不是把试算自动发布，也不要求用户另行导入或点击确认。命令记录本次对话引用和用户授权原话，不声称机器验证了原话语义。
-- 工具调用被拒绝时，不要换个命令绕过去；告诉用户什么被拦了。"""
+- 工具调用被拒绝时，不要换个命令绕过去；告诉用户什么被拦了。
+""" + RESEARCH_MATERIAL_RULES
 GIT_RULE_TAIL = ("对 frameworks/ 跑 git 用 `git -C frameworks …`；"
                  "push、reset、checkout、restore、switch、stash、rebase、clean 会被拒绝。")
 CLAUDE_TOOL_RULES = f"""\
