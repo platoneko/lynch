@@ -1,1 +1,1 @@
-"""Shared helpers for lynch eval and daily bands cron."""
+"""Shared helpers for lynch eval."""

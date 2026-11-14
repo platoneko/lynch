@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from eval.lib.frameworks import FrameworkIdentity
-from scripts import daily_bands, gen_index
+from scripts import gen_index
 from eval.lib.result_view import map_result
 
 
@@ -65,10 +65,6 @@ class ResultViewTest(unittest.TestCase):
         status, result = map_result('FAKE.US', value)
         self.assertEqual(status, 'confirmed')
         self.assertEqual(result.option_label, '新产线')
-        rows, errors = daily_bands.build_rows_from_results([identity()], Provider({'FAKE.US': value}),
-                                                           {'FAKE.US': 20}, {}, archived=set())
-        self.assertEqual(errors, [])
-        self.assertTrue(any('新产线' in line for line in daily_bands.format_pool_lines(rows[0])))
 
     def test_shared_view_exposes_old_candidate_only_as_historical_reference(self):
         value = record(status='legacy_accepted')
@@ -172,7 +168,7 @@ class ResultViewTest(unittest.TestCase):
         output["rate_sensitivity"] = {"inputs": {"delta_cons": .0075, "rf_cap": .005}}
         self.assertTrue(map_result("FAKE.HK", value)[1].rate_error)
 
-    def test_home_and_daily_use_the_same_mapper(self):
+    def test_home_uses_shared_mapper(self):
         app = str(Path(__file__).resolve().parents[2] / "app/server")
         sys.path.insert(0, app)
         try:
@@ -265,234 +261,6 @@ class ResultViewTest(unittest.TestCase):
         self.assertIsNone(result.baskets)
         self.assertTrue(result.basket_error)
 
-
-class DigestTest(unittest.TestCase):
-    def rows(self, price, previous=None, item=None):
-        provider = Provider({"FAKE.US": item or record()})
-        return daily_bands.build_rows_from_results([identity()], provider, {"FAKE.US": price},
-                                                   previous or {}, archived=set())
-
-    def test_boundaries_match_existing_five_tier_semantics(self):
-        for price, expected in ((9, "deep_discount"), (10, "conservative"), (15, "neutral"),
-                                (25, "optimistic"), (30, "optimistic"), (31, "stretched")):
-            with self.subTest(price=price):
-                rows, errors = self.rows(price)
-                self.assertEqual(errors, [])
-                self.assertEqual(rows[0].zone, expected)
-
-    def test_all_bands_cross_independently_and_rates_never_trigger_cross(self):
-        rows, errors = self.rows(32, {"FAKE.US": {"zone": "neutral", "option_zone": "neutral",
-                                                     "candidate_zone": "neutral"}})
-        row = rows[0]
-        self.assertEqual(errors, [])
-        self.assertTrue(row.crossed)
-        self.assertTrue(row.option_crossed)
-        self.assertTrue(row.candidate_crossed)
-        lines = daily_bands.format_pool_lines(row)
-        self.assertTrue(any("候选(扩产)" in line for line in lines))
-        self.assertTrue(any("利率·共识" in line for line in lines))
-        self.assertTrue(any("利率·压力" in line for line in lines))
-        self.assertTrue(any("待核" in line for line in lines))
-        rows, _ = self.rows(20, {"FAKE.US": {"zone": "neutral", "option_zone": "neutral",
-                                                  "candidate_zone": "neutral"}})
-        self.assertFalse(rows[0].any_crossed)
-
-    def test_cross_messages_keep_short_labels_for_both_extra_bands(self):
-        value = record()
-        value['output']['option']['label'] = '新产线'
-        rows, _ = self.rows(32, {'FAKE.US': {'zone': 'neutral', 'option_zone': 'neutral',
-                                              'candidate_zone': 'neutral'}}, value)
-        _, lines = daily_bands.build_cross_post(rows, as_of_local='2040-01-01')
-        self.assertTrue(any('新产线 「' in line for line in lines))
-        self.assertTrue(any('候选(扩产) 「' in line for line in lines))
-
-    def test_missing_option_amount_still_shows_confirmed_option_band_without_guessing_amount(self):
-        value = record()
-        value["output"]["option"]["value_unit"] = "USD_MILLION"
-        rows, _ = self.rows(20, item=value)
-        lines = daily_bands.format_pool_lines(rows[0])
-        self.assertTrue(any("新业务" in line for line in lines))
-        self.assertFalse(any("+V(5)" in line for line in lines))
-        rows, _ = self.rows(32, {"FAKE.US": {"zone": "neutral", "option_zone": "neutral"}}, value)
-        _, cross = daily_bands.build_cross_post(rows, as_of_local="2026-01-01")
-        self.assertTrue(any("新业务 「中性」 → 「乐观」" in line for line in cross))
-
-    def test_missing_results_quotes_and_archives_are_explicit_and_no_fallback_occurs(self):
-        provider = Provider({"FAKE.US": {"status": "missing"}, "BAD.US": RuntimeError("offline"),
-                             "ARCH.US": {"status": "missing"}})
-        rows, errors = daily_bands.build_rows_from_results(
-            [identity(), identity("BAD.US"), identity("ARCH.US")], provider,
-            {"FAKE.US": 20, "BAD.US": 20, "ARCH.US": 20}, {}, archived={"ARCH.US"})
-        self.assertEqual(len(rows), 1)
-        self.assertIn("已归档，未迁移估值", " ".join(daily_bands.format_pool_lines(rows[0])))
-        self.assertIn("20", " ".join(daily_bands.format_pool_lines(rows[0])))
-        self.assertEqual(len(errors), 2)
-        self.assertTrue(any("FAKE.US" in e for e in errors))
-        self.assertTrue(any("BAD.US" in e for e in errors))
-        self.assertIn("ARCH.US", provider.calls)
-
-    def test_archived_missing_quote_remains_visible_and_never_crosses(self):
-        provider = Provider({"ARCH.US": {"status": "missing"}})
-        rows, errors = daily_bands.build_rows_from_results([identity("ARCH.US")], provider, {}, {}, archived={"ARCH.US"})
-        self.assertEqual(errors, [])
-        self.assertFalse(rows[0].any_crossed)
-        self.assertIn("暂无报价", " ".join(daily_bands.format_pool_lines(rows[0])))
-        self.assertEqual(provider.calls, ["ARCH.US"])
-
-    def test_archived_with_existing_result_keeps_band_and_cross_without_recalculation(self):
-        provider = Provider({"FAKE.US": record()})
-        rows, errors = daily_bands.build_rows_from_results(
-            [identity()], provider, {"FAKE.US": 32},
-            {"FAKE.US": {"zone": "neutral", "option_zone": "neutral", "candidate_zone": "neutral"}},
-            archived={"FAKE.US"})
-        self.assertEqual(errors, [])
-        self.assertTrue(rows[0].any_crossed)
-        text = " ".join(daily_bands.format_pool_lines(rows[0]))
-        self.assertIn("已归档", text)
-        self.assertNotIn("未迁移估值", text)
-        self.assertIn("10/20/30", text)
-        self.assertIn("候选(扩产)", text)
-        self.assertEqual(provider.calls, ["FAKE.US"])
-
-    def test_archived_with_existing_result_but_no_quote_keeps_all_result_bands(self):
-        provider = Provider({"FAKE.US": record()})
-        rows, errors = daily_bands.build_rows_from_results([identity()], provider, {}, {}, archived={"FAKE.US"})
-        self.assertEqual(errors, [])
-        text = " ".join(daily_bands.format_pool_lines(rows[0]))
-        self.assertIn("暂无报价", text)
-        self.assertIn("10/20/30", text)
-        self.assertIn("候选(扩产)", text)
-        self.assertIn("11/22/35", text)
-        self.assertIn("利率·共识", text)
-        self.assertFalse(rows[0].any_crossed)
-
-    def test_archived_stale_or_unreadable_does_not_claim_never_migrated(self):
-        for value, message in (({"status": "stale"}, "估值依据已变化"),
-                               (RuntimeError("offline"), "估值结果暂不可读取")):
-            with self.subTest(value=value):
-                provider = Provider({"FAKE.US": value})
-                rows, errors = daily_bands.build_rows_from_results([identity()], provider, {"FAKE.US": 20}, {}, archived={"FAKE.US"})
-                self.assertEqual(errors, [])
-                text = " ".join(daily_bands.format_pool_lines(rows[0]))
-                self.assertIn("已归档", text)
-                self.assertIn(message, text)
-                self.assertNotIn("未迁移估值", text)
-
-    def test_restoring_an_archived_existing_result_preserves_its_band(self):
-        provider = Provider({"FAKE.US": record()})
-        archived, errors = daily_bands.build_rows_from_results([identity()], provider, {"FAKE.US": 20}, {}, archived={"FAKE.US"})
-        restored, restored_errors = daily_bands.build_rows_from_results([identity()], provider, {"FAKE.US": 20}, {}, archived=set())
-        self.assertEqual(errors + restored_errors, [])
-        self.assertEqual(archived[0].record["anchors"], restored[0].record["anchors"])
-        self.assertIn("已归档", daily_bands.format_pool_lines(archived[0]))
-        self.assertNotIn("已归档", daily_bands.format_pool_lines(restored[0]))
-        self.assertEqual(provider.calls, ["FAKE.US", "FAKE.US"])
-
-    def test_real_archive_store_and_restore_use_only_private_fixture(self):
-        app = str(Path(__file__).resolve().parents[2] / "app/server")
-        sys.path.insert(0, app)
-        try:
-            from lynch_reader.archive import FrameworkArchive
-            with tempfile.TemporaryDirectory() as temp:
-                archive = FrameworkArchive(Path(temp) / "archive.json")
-                archive.archive("ARCH.US")
-                provider = Provider({"ARCH.US": {"status": "missing"}})
-                rows, errors = daily_bands.build_rows_from_results([identity("ARCH.US")], provider,
-                                                                    {"ARCH.US": 20}, {}, archived=archive.tickers())
-                self.assertEqual(errors, [])
-                self.assertIn("已归档，未迁移估值", " ".join(daily_bands.format_pool_lines(rows[0])))
-                self.assertEqual(provider.calls, ["ARCH.US"])
-                archive.restore("ARCH.US")
-                rows, errors = daily_bands.build_rows_from_results([identity("ARCH.US")], provider,
-                                                                    {"ARCH.US": 20}, {}, archived=archive.tickers())
-                self.assertEqual(rows, [])
-                self.assertTrue(any("待迁移" in error for error in errors))
-        finally:
-            sys.path.remove(app)
-
-    def test_history_uncertainty_and_unavailable_option_are_visible_without_false_cross(self):
-        value = record(status="legacy_accepted")
-        value["historical_comparison"] = {"candidate": {"state": "unknown"}, "option": {"state": "unknown"}}
-        value["output"]["candidate"]["status"] = "unavailable"
-        value["output"]["option"]["status"] = "unavailable"
-        del value["output"]["candidate"]["anchors"]
-        del value["output"]["option"]["anchors"]
-        rows, errors = self.rows(32, {"FAKE.US": {"zone": "neutral", "candidate_zone": "neutral", "option_zone": "neutral"}}, value)
-        self.assertEqual(errors, [])
-        row = rows[0]
-        lines = " ".join(daily_bands.format_pool_lines(row))
-        self.assertIn("历史框架沿用", lines)
-        self.assertIn("候选价带是否完整仍待核对", lines)
-        self.assertIn("新业务价带是否完整仍待核对", lines)
-        self.assertIn("候选价带暂不可用", lines)
-        self.assertIn("新业务估值暂不可用", lines)
-        self.assertFalse(row.option_crossed)
-        self.assertFalse(row.candidate_crossed)
-
-    def test_historical_differences_and_fund_status_are_not_lost_in_digest(self):
-        value = record(status="legacy_accepted")
-        value["historical_comparison"].update({"review_flags": {"state": "known", "values": ["old_issue"]},
-                                                  "option_status": {"state": "known", "value": "unavailable"},
-                                                  "fund_reference_status": {"historical": "stale"}})
-        value["historical_evidence_differences"] = [{"field": "anchors.M", "kind": "changed",
-                                                      "historical": 19, "current": 20}]
-        value["output"]["review_flags"] = []
-        value["output"]["fund_reference_status"] = "unavailable"
-        rows, errors = self.rows(20, item=value)
-        self.assertEqual(errors, [])
-        text = " ".join(daily_bands.format_pool_lines(rows[0]))
-        self.assertIn("历史材料与当前估值结果有差异", text)
-        self.assertIn("估值假设有待核对事项", text)
-        self.assertIn("旧材料的新业务估值状态仍需核对", text)
-        self.assertIn("基金穿透对照存在待核对事项", text)
-
-    def test_known_double_counting_is_explicit_in_digest(self):
-        value = record(status="legacy_accepted")
-        value["output"]["review_flags"] = ["historical_double_counting"]
-        rows, errors = self.rows(20, item=value)
-        self.assertEqual(errors, [])
-        text = " ".join(daily_bands.format_pool_lines(rows[0]))
-        self.assertIn("旧估值存在重复计价，仅供历史对照", text)
-        self.assertIn("L/M/H = 10/20/30", text)
-        self.assertIsNone(rows[0].record['zone'])
-        self.assertNotIn('anchors', rows[0].record)
-        self.assertFalse(rows[0].any_crossed)
-
-    def test_rate_errors_are_reported_without_hiding_main_band(self):
-        value = record()
-        value["output"]["rate_sensitivity"]["price_currency"] = "CNY"
-        rows, errors = self.rows(20, item=value)
-        self.assertEqual(rows[0].zone, "neutral")
-        self.assertIsNone(rows[0].rf)
-        self.assertTrue(any("利率情景结果无效" in e for e in errors))
-
-    def test_bad_quotes_preserve_bands_without_fabricating_a_zone(self):
-        for price in (None, True, float("inf"), float("nan"), -1, 0, 10 ** 1000):
-            with self.subTest(price=str(price)[:12]):
-                rows, errors = self.rows(price)
-                self.assertTrue(any('FAKE.US' in error and '报价' in error for error in errors))
-                self.assertEqual(rows[0].meta.M, 20)
-                self.assertIsNone(rows[0].price)
-                text = ' '.join(daily_bands.format_pool_lines(rows[0]))
-                self.assertIn('暂无报价', text)
-                self.assertNotIn('已归档', text)
-
-    def test_pure_path_never_calls_quotes_network_writes_or_old_price_readers(self):
-        with patch.object(daily_bands, "fetch_quotes", side_effect=AssertionError("network")), \
-             patch.object(daily_bands, "send_post", side_effect=AssertionError("message")), \
-             patch.object(daily_bands, "write_bands", side_effect=AssertionError("write")), \
-             patch.object(daily_bands, "read_rf_readings", side_effect=AssertionError("old rate file"), create=True), \
-             patch.object(daily_bands, "load_all_frameworks", side_effect=AssertionError("old document prices"), create=True):
-            rows, errors = self.rows(20)
-        self.assertEqual(errors, [])
-        self.assertEqual(rows[0].record["inputs_used"]["valuation_ref"], "review-1")
-
-    def test_existing_quote_object_status_is_preserved(self):
-        quote = SimpleNamespace(last=20, status="NORMAL")
-        rows, errors = self.rows(quote)
-        self.assertEqual(errors, [])
-        self.assertEqual(rows[0].price, 20)
-        self.assertEqual(rows[0].record["inputs_used"]["quote_status"], "NORMAL")
 
 
 class IndexTest(unittest.TestCase):
