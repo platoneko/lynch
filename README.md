@@ -13,7 +13,7 @@
 Agent 应加载 skill **`sediment-framework`**：**先持续对话**对齐分类 / thesis / 主尺 / 假设 / 价带公式；你明确说「可以落盘」后，才按模板写入：
 
 - `frameworks/<TICKER>.md` — 人读解释（题头含林奇类 + 主尺一行）
-- `frameworks/eval/<TICKER>.py` — 量化输入与计算来源；采纳结果另行保存供首页和日报读取
+- `frameworks/eval/<TICKER>.py` — 量化输入与计算来源；采纳结果另行保存供首页和索引读取
 
 模板：`frameworks/_TEMPLATE.md`。协作硬约束：`frameworks/AGENTS.md`（框架）· `AGENTS.md`（开发）。  
 标的池 = 扫 `frameworks/*.md`（排除 `_` 前缀与 `AGENTS.md` / `README.md`）；**不**维护 `universe.yaml`。
@@ -28,7 +28,7 @@ Agent 应加载 skill **`sediment-framework`**：**先持续对话**对齐分类
 | `.agents/skills` | 项目自有技能入口 |
 | `.claude/skills`、`.grok/skills` | → `.agents/skills`（软链）；sediment-framework 仍来自内容仓库 |
 | `eval/lib/` | 估值 / 解析 / zone 规则库 |
-| `scripts/` | 日报、财报提醒、索引生成、跨票体检 |
+| `scripts/` | 索引生成、跨票体检 |
 | `app/` | 手机阅读 app（服务端 + 前端 + 安卓壳） |
 | `.mcp.json` | Wisburg MCP（本地，gitignore） |
 | `_local/` | 个人草稿，不入库 |
@@ -105,33 +105,3 @@ Claude 原生与 app 四类研究模型的统一记录用 `claude-jsonl`，Codex
 | `stretched` | 叙事溢价 | \(P > H\) |
 
 细则与语义见 `frameworks/AGENTS.md`。单票如何得到 L/M/H 写在各自 `frameworks/*.md`（如 `INTC.US` 为不对称 SOTP）。
-
-## 日报价带 + 飞书
-
-每天读取已保存结果中的 \(L/M/H\)，用 Longbridge 常规 `last` 归 zone，写入 `output/bands/<TICKER>.json`（gitignore），并飞书推送。结果库路径由 `LYNCH_VALUATION_DB` 指定；详情见 [框架检查说明](frameworks/README.md)：
-
-- **每天**：一条飞书 **post 富文本**全池日报，每票 2–3 行，形如  
-  `🟡 603993.SH 洛阳钼业 19.01 CNY`  
-  `「中性」 L/M/H = 13.51/19.63/23.24`  
-  有 \(V_{opt}>0\) 时再加一行修正带：`「乐观」 +V(66.6) L/M/H = 27.2/71.17/113`
-- **跨带**（相对上次 bands 的底牌 `zone` **或** `option_zone` 变化，且两侧都已有上次读数）：另发一条 post，带 `@所有人`；底牌跨带写 `「中性」 → 「乐观」`，期权跨带写 `+V 「中性」 → 「乐观」`（可同时出现）
-
-```bash
-# dry-run：不写盘、不 POST
-app/server/.venv/bin/python scripts/daily_bands.py --dry-run
-
-# 实跑：默认复用 ../invest 的飞书 webhook（policies.toml [alerts].feishu_webhook）
-# 也可设 FEISHU_ALERT_WEBHOOK，或在 config/daily.toml 覆盖（见 example）
-app/server/.venv/bin/python scripts/daily_bands.py
-
-# 只算价带、不推飞书
-app/server/.venv/bin/python scripts/daily_bands.py --no-notify
-```
-
-安装工作日 cron（`Asia/Shanghai`：`09:03` 早盘 + `16:13` 午后；脚本内 as_of 同此时区）：
-
-```bash
-bash scripts/install-daily-cron.sh
-```
-
-**MUST NOT** 让日报改写 `frameworks/*.md`。单票计算与规则检查通过框架仓的统一检查入口执行。

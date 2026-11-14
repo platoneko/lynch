@@ -59,7 +59,7 @@ QUOTE_POLL_S = 300.0
 QUOTE_TIMEOUT_S = 15
 NO_QUOTE = "无报价（停牌或代码变更）"
 WAITING_QUOTE = "等待下一次取价"
-# Same timestamp form as the daily digest's `_as_of_iso` (scripts/daily_bands.py).
+# ISO timestamp including the local UTC offset.
 TZ = ZoneInfo("Asia/Shanghai")
 
 @dataclass(frozen=True)
