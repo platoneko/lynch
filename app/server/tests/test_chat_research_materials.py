@@ -14,6 +14,9 @@ def test_every_research_agent_has_the_same_local_reuse_protocol(prompt):
     assert 'discover' in text and 'find' in text and 'put' in text
     assert '报告期' in text and '子 agent' in text
     assert '同一份结果' in text
+    assert '--metadata <描述JSON文件路径>' in text
+    assert 'frameworks/_local/tmp/' in text
+    assert '不要直接传 JSON 正文' in text
 
 
 @pytest.mark.parametrize('make_env', [config.launch_env, codex.codex_env, grok.research_env])

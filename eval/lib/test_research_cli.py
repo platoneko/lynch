@@ -1,3 +1,4 @@
+import errno
 import json
 import os
 from pathlib import Path
@@ -5,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from eval.lib.test_research_store import metadata
 
@@ -84,6 +86,49 @@ class CLITest(unittest.TestCase):
         self.assertEqual(result['status'], 'error')
         self.meta.write_text('{broken')
         self.assertEqual(self.cli('put', '--file', self.source, '--metadata', self.meta)[0], 2)
+
+    def test_metadata_requires_a_file_path_instead_of_inline_json(self):
+        for value in (json.dumps(metadata()), '{broken', '[1, 2]'):
+            with self.subTest(value=value):
+                code, result = self.cli('put', '--file', self.source, '--metadata', value)
+                self.assertEqual(code, 2, result)
+                self.assertEqual(result['code'], 'input')
+                self.assertIn('--metadata', result['message'])
+                self.assertIn('JSON 文件路径', result['message'])
+                self.assertNotIn(value, result['message'])
+        self.assertFalse(self.store.exists())
+
+    def test_missing_metadata_file_is_an_input_error(self):
+        code, result = self.cli('put', '--file', self.source, '--metadata', self.root / 'missing.json')
+        self.assertEqual(code, 2, result)
+        self.assertEqual(result['code'], 'input')
+        self.assertIn('描述文件不存在', result['message'])
+        self.assertIn('--metadata', result['message'])
+        self.assertFalse(self.store.exists())
+
+    def test_metadata_file_name_can_start_with_a_json_delimiter(self):
+        self.meta = self.root / '[description].json'
+        self.meta.write_text(json.dumps(metadata()))
+        self.put()
+
+    def test_unreadable_metadata_is_identified_before_accessing_the_store(self):
+        code, result = self.cli('put', '--file', self.source, '--metadata', self.root)
+        self.assertEqual(code, 1, result)
+        self.assertEqual(result['code'], 'io')
+        self.assertIn('描述文件无法读取', result['message'])
+        self.assertFalse(self.store.exists())
+
+    def test_json_like_metadata_path_preserves_permission_and_resource_errors(self):
+        from eval.lib.research_cli import _read_metadata
+        from eval.lib.research_store import ResearchError
+        for name in ('[description].json', '{description}.json'):
+            for number in (errno.EACCES, errno.EMFILE, errno.EISDIR):
+                with self.subTest(name=name, number=number):
+                    with patch.object(Path, 'read_text', side_effect=OSError(number, 'unavailable')):
+                        with self.assertRaises(ResearchError) as raised:
+                            _read_metadata(Path(name))
+                    self.assertEqual(raised.exception.code, 'io')
+                    self.assertIn('描述文件无法读取', str(raised.exception))
 
     def test_transcript_import_preserves_result_and_never_claims_full_document(self):
         transcript = self.root / 'session.jsonl'

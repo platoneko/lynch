@@ -78,12 +78,15 @@ RESEARCH_MATERIAL_RULES = """\
 - 取数时先把完整原始返回保存到当前允许的临时研究目录，再读取、筛选和归档；\
 查询缺少的季度/年份也必须保存该次原始返回，不能只登记此前的历史文件。\
 取得成功且有价值的相关原始资料后及时归档，包括最终未引用及反驳当前判断的证据。\
-用 `put --file <原文件> --metadata <描述JSON>`；描述必填 title/provider/source_ref/kind/completeness/relevance，\
+先在 frameworks/_local/tmp/ 下保存描述 JSON 文件，再用 \
+`put --file <原文件> --metadata <描述JSON文件路径>`；--metadata 只接受文件路径，不要直接传 JSON 正文。\
+例如 `python3 -m eval.lib.research_cli put --file frameworks/_local/tmp/source.pdf --metadata frameworks/_local/tmp/source.metadata.json`。\
+描述必填 title/provider/source_ref/kind/completeness/relevance，\
 并提供 symbols 或 topics 字符串列表；report_periods、currency、fetched_at 等已知才填，\
 kind 取 filing/report/transcript/webpage/financial_data/search_result，\
 completeness 取 full/excerpt/search_snippet/unknown。归档不等于框架采纳。\
 同一份结果改筛选、排序或展示时直接处理本地文件，不再发相同外部请求。
-- 只有工具消息时按指定记录导入：`put --transcript <记录文件> --format claude-jsonl --call-id <精确编号> --metadata <描述JSON>`；\
+- 只有工具消息时按指定记录导入：`put --transcript <记录文件> --format claude-jsonl --call-id <精确编号> --metadata <描述JSON文件路径>`；\
 app 统一记录及 Claude 原生用 claude-jsonl，Codex 原生用 codex-jsonl；\
 子线程需明确 --thread-id，多个文本块需 --content-index。不扫描全局会话猜当前记录，\
 不让模型誊写正文冒充原文，不把摘要/节选当全文。保存失败要说明，不能声称资料已归档。
