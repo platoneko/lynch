@@ -31,7 +31,8 @@ def _parser():
     put.add_argument('--call-id')
     put.add_argument('--thread-id')
     put.add_argument('--content-index', type=int)
-    put.add_argument('--metadata', required=True, type=Path)
+    put.add_argument('--metadata', required=True, type=Path,
+                     help='描述 JSON 文件路径；先保存文件，不要直接传 JSON 正文')
     find = commands.add_parser('find', help='按来源、覆盖范围和关键词查找')
     for flag in ('source-ref', 'symbol', 'topic', 'period', 'kind'):
         find.add_argument('--' + flag, action='append')
@@ -91,18 +92,29 @@ def _find(store, args):
             'partial': has_more, 'next_offset': offset if has_more else None}
 
 
+def _read_metadata(path: Path) -> dict:
+    try:
+        metadata = json.loads(path.read_text(encoding='utf-8'))
+    except OSError as error:
+        if str(path).lstrip().startswith(('{', '[')):
+            raise ResearchError('input', '--metadata 需要 JSON 文件路径；先保存描述文件，不要直接传 JSON 正文') from None
+        if isinstance(error, FileNotFoundError):
+            raise ResearchError('input', '资料描述文件不存在；--metadata 需要 JSON 文件路径') from None
+        raise ResearchError('io', '资料描述文件无法读取；请检查 --metadata 指定的文件及其权限') from None
+    except (ValueError, UnicodeError):
+        raise ResearchError('input', '资料描述需要有效的 UTF-8 JSON 对象') from None
+    if not isinstance(metadata, dict):
+        raise ResearchError('input', '资料描述需要 JSON 对象')
+    return metadata
+
+
 def _run(args):
     if args.action == 'discover':
         return discover_local(args.root, symbol=args.symbol, name=args.name,
                               max_files=args.max_files, max_depth=args.max_depth, limit=args.limit)
     store = resolve_store(args.store, os.environ)
     if args.action == 'put':
-        try:
-            metadata = json.loads(args.metadata.read_text(encoding='utf-8'))
-        except (ValueError, UnicodeError):
-            raise ResearchError('input', '资料描述需要有效的 UTF-8 JSON 对象') from None
-        if not isinstance(metadata, dict):
-            raise ResearchError('input', '资料描述需要 JSON 对象')
+        metadata = _read_metadata(args.metadata)
         if args.transcript:
             from eval.lib.research_import import extract_tool_result
             if not args.format or not args.call_id:
