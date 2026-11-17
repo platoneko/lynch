@@ -1,3 +1,4 @@
+import errno
 import json
 import os
 from pathlib import Path
@@ -5,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from eval.lib.test_research_store import metadata
 
@@ -115,6 +117,18 @@ class CLITest(unittest.TestCase):
         self.assertEqual(result['code'], 'io')
         self.assertIn('描述文件无法读取', result['message'])
         self.assertFalse(self.store.exists())
+
+    def test_json_like_metadata_path_preserves_permission_and_resource_errors(self):
+        from eval.lib.research_cli import _read_metadata
+        from eval.lib.research_store import ResearchError
+        for name in ('[description].json', '{description}.json'):
+            for number in (errno.EACCES, errno.EMFILE, errno.EISDIR):
+                with self.subTest(name=name, number=number):
+                    with patch.object(Path, 'read_text', side_effect=OSError(number, 'unavailable')):
+                        with self.assertRaises(ResearchError) as raised:
+                            _read_metadata(Path(name))
+                    self.assertEqual(raised.exception.code, 'io')
+                    self.assertIn('描述文件无法读取', str(raised.exception))
 
     def test_transcript_import_preserves_result_and_never_claims_full_document(self):
         transcript = self.root / 'session.jsonl'

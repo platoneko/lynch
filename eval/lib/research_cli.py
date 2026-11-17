@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import mimetypes
 import os
@@ -96,7 +97,7 @@ def _read_metadata(path: Path) -> dict:
     try:
         metadata = json.loads(path.read_text(encoding='utf-8'))
     except OSError as error:
-        if str(path).lstrip().startswith(('{', '[')):
+        if error.errno in (errno.ENOENT, errno.ENAMETOOLONG) and str(path).lstrip().startswith(('{', '[')):
             raise ResearchError('input', '--metadata 需要 JSON 文件路径；先保存描述文件，不要直接传 JSON 正文') from None
         if isinstance(error, FileNotFoundError):
             raise ResearchError('input', '资料描述文件不存在；--metadata 需要 JSON 文件路径') from None
