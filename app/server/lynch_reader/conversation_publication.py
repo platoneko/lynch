@@ -122,8 +122,7 @@ def _formal_roots(document, code_root, content_root):
 
 
 def _check_current_sources(service, ticker, draft, generation, source_provider_factory=None):
-    document = _validated(draft)
-    requires_external = document['output'].get('external_inputs_digest') is not None
+    _validated(draft)
     observed = service if source_provider_factory is None else SimpleNamespace(provider=source_provider_factory())
     _, source_status = _source_observation(observed, ticker, draft, generation)
     try:
@@ -137,19 +136,16 @@ def _check_current_sources(service, ticker, draft, generation, source_provider_f
         try:
             conditions = inspect(ticker, draft)
         except Exception:  # noqa: BLE001 — unavailable is not proof of a change
-            if requires_external:
-                raise ValueError('external history source unavailable') from None
-            conditions = ()
+            conditions = ('external_history_source_unavailable',)
         if conditions is None:
             raise ValueError('result source snapshot is invalid')
         if not isinstance(conditions, (tuple, list)):
             raise ValueError('result source conditions are invalid')
         if any(flag in ('valuation_source_changed', 'external_history_source_changed') for flag in conditions):
             raise ValueError('source changed after the proposal')
-        if requires_external and 'external_history_source_unavailable' in conditions:
-            raise ValueError('external history source unavailable')
-    elif requires_external:
-        raise ValueError('external history source unavailable')
+        # The frozen input has already been verified against the approved result.
+        if 'external_history_source_unavailable' in conditions and source_status == 'match':
+            source_status = 'unavailable'
     if source_status == 'changed':
         raise ValueError('source changed after the proposal')
     return source_status

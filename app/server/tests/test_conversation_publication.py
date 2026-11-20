@@ -214,8 +214,9 @@ class ConversationPublicationTest(unittest.TestCase):
             self.publish_it(Draft(_json_bytes(broken)), receipt)
         self.assertEqual(self.service.current('FAKE.US')['output']['anchors']['M'], 2)
 
-    def test_agent_entry_publishes_only_after_explicit_authorization(self):
+    def test_agent_entry_publishes_authorized_snapshot_without_configured_sources(self):
         env = self.cli_deployment()
+        env.pop("LYNCH_VALUATION_SOURCES", None)
         result_file = self.root / 'runner-result.json'
         result_file.write_bytes(_json_bytes(self.output))
         archive_file = self.archive_file
@@ -236,7 +237,9 @@ class ConversationPublicationTest(unittest.TestCase):
         published = subprocess.run(command + args + ['--authorization', '可以落盘'], capture_output=True, text=True, env=env, cwd=self.code)
         self.assertEqual(published.returncode, 0, published.stderr)
         self.assertEqual(json.loads(published.stdout)['status'], 'local_accepted')
-        self.assertEqual(self.service.current('FAKE.US')['output']['anchors']['M'], 2)
+        current = self.service.current('FAKE.US')
+        self.assertEqual(current['output']['anchors']['M'], 2)
+        self.assertEqual(current['source_observations'][-1]['status'], 'unavailable')
 
     def test_cli_rejects_wrong_archive_without_modifying_any_store(self):
         env = self.cli_deployment()
