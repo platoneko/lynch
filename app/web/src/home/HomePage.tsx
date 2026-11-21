@@ -142,6 +142,11 @@ export function HomePage({ catalog, filter, onFilter, onOpen, onOpenAxis,
                 {m.label}
               </button>
             ))}
+            <button className={`chip ${filter.etfOnly ? 'chip-on' : ''}`}
+              aria-pressed={filter.etfOnly}
+              onClick={() => onFilter({ ...filter, etfOnly: !filter.etfOnly })}>
+              ETF
+            </button>
             <button className={`chip ${filter.staleOnly ? 'chip-on' : ''}`}
               onClick={() => onFilter({ ...filter, staleOnly: !filter.staleOnly })}>
               财报后未更新{staleCount > 0 ? `（${staleCount}）` : ''}

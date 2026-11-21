@@ -35,6 +35,9 @@ export function extraBands(r: TickerRow): ExtraBand[] {
 
 export type SortKey = 'zone' | 'market' | 'ticker';
 
+// Fund names can attach ETF directly to digits (100ETF) or Chinese characters.
+const ETF_NAME = /(?:^|[^a-z])ETF(?![a-z])/i;
+
 export interface HomeFilter {
   query: string;
   zones: string[];
@@ -43,18 +46,21 @@ export interface HomeFilter {
   axes: string[];
   sort: SortKey;
   showArchived: boolean;
+  etfOnly: boolean;
   staleOnly: boolean; // 财报后未更新
 }
 
 export const DEFAULT_FILTER: HomeFilter = {
-  query: '', zones: [], classes: [], markets: [], axes: [], sort: 'zone', showArchived: false, staleOnly: false,
+  query: '', zones: [], classes: [], markets: [], axes: [], sort: 'zone',
+  showArchived: false, etfOnly: false, staleOnly: false,
 };
 
 export function applyFilter(rows: TickerRow[], f: HomeFilter, zoneOrder: string[]): TickerRow[] {
   const serverOrder = new Map(rows.map((r, i) => [r.ticker, i]));
   const kept = rows.filter(
     (r) => inArchiveScope(r, f) && matchesQuery(r, f.query) && matchesZones(r, f.zones) && matchesClasses(r, f.classes)
-      && matchesMarkets(r, f.markets) && matchesAxes(r, f.axes) && (!f.staleOnly || r.stale_after_earnings),
+      && matchesMarkets(r, f.markets) && matchesAxes(r, f.axes)
+      && (!f.etfOnly || ETF_NAME.test(r.name ?? '')) && (!f.staleOnly || r.stale_after_earnings),
   );
   return kept.sort(comparator(f.sort, zoneOrder, serverOrder));
 }

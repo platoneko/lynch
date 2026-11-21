@@ -40,6 +40,27 @@ describe('search', () => {
 });
 
 describe('filters', () => {
+  it('keeps only ETF names when ETF is selected', () => {
+    const rows = [
+      row('159307.SZ', { name: '博时中证红利低波100ETF', market: 'A' }),
+      row('QQQM.US', { name: 'Invesco NASDAQ 100 ETF' }),
+      row('STOCK.US', { name: 'Netfox Holdings' }),
+      row('UNKNOWN.US', { name: null }),
+    ];
+    expect(tickers(applyFilter(rows, { ...DEFAULT_FILTER, etfOnly: true }, ZONES))).toEqual(['159307.SZ', 'QQQM.US']);
+    expect(tickers(applyFilter(rows, DEFAULT_FILTER, ZONES))).toEqual(['159307.SZ', 'QQQM.US', 'STOCK.US', 'UNKNOWN.US']);
+  });
+  it('combines the ETF filter with market and archive filters', () => {
+    const rows = [
+      row('513530.SH', { name: '港股通高股息投资 ETF（QDII）', market: 'A' }),
+      row('QQQM.US', { name: 'Invesco NASDAQ 100 ETF' }),
+      row('OLD.US', { name: 'Archived ETF', archived: true }),
+      row('STOCK.US'),
+    ];
+    const f = { ...DEFAULT_FILTER, etfOnly: true, markets: ['US'] };
+    expect(tickers(applyFilter(rows, f, ZONES))).toEqual(['QQQM.US']);
+    expect(tickers(applyFilter(rows, { ...f, showArchived: true }, ZONES))).toEqual(['OLD.US', 'QQQM.US']);
+  });
   it('财报后未更新 keeps only frameworks unrevised since their last release', () => {
     const rows = [row('A.US', { stale_after_earnings: true }), row('B.US'), row('C.US', { stale_after_earnings: true, archived: true })];
     expect(tickers(applyFilter(rows, { ...DEFAULT_FILTER, staleOnly: true }, ZONES))).toEqual(['A.US']);
