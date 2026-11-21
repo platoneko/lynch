@@ -8,6 +8,7 @@ import pytest
 from lynch_reader.rotation_inputs import (
     AdjustedHistory,
     AdjustmentFeed,
+    CashAction,
     EtfHistory,
     IndexHistory,
     TradingCalendar,
@@ -19,6 +20,11 @@ from lynch_reader.rotation_inputs import (
 
 def day(value):
     return date.fromisoformat(value)
+
+
+def test_cash_reference_is_rounded_to_the_exchange_tick():
+    action = CashAction(day("2026-09-14"), .0126)
+    assert action.price_factor(1.0) == .987
 
 
 def test_splice_preserves_first_etf_close_and_prior_index_returns():

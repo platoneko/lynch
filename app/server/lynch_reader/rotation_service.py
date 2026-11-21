@@ -111,8 +111,14 @@ class RotationService:
             recommendation = {**recommendation, "execution_passed": passed}
         waiting = self._waiting
         next_session = data.get("next_session")
+        calendar_through = data.get("calendar_through")
+        if next_session is not None and next_session < today and calendar_through and calendar_through < today:
+            waiting = "calendar"
+        final_open_check_due = local.time() >= FINAL_OPEN_CHECK
         if (next_session is not None and next_session <= today and today in data["sessions"]
-                and local.time() >= CHECK_ACTIONS_AT and data.get("actions_checked") != today):
+                and local.time() >= CHECK_ACTIONS_AT
+                and (data.get("actions_checked") != today
+                     or final_open_check_due and data.get("actions_finalized") != today)):
             waiting = "adjustment"
         if waiting is None and next_session is not None and (
             next_session < today or (next_session == today and local.time() >= CHECK_ACTIONS_AT)
@@ -125,7 +131,7 @@ class RotationService:
             "status": "empty" if recommendation is None else "waiting" if waiting else "ready",
             "recommendation": recommendation,
             "waiting_reason": waiting,
-            "current_bands": None if waiting == "adjustment" else data.get("current_bands"),
+            "current_bands": None if waiting in ("adjustment", "calendar") else data.get("current_bands"),
             "backtests": data.get("backtests", []),
         }
 
@@ -143,6 +149,7 @@ class RotationService:
             calendar = SessionList(map(date.fromisoformat, source["sessions"]))
             if not calendar.days:
                 raise ValueError("rotation needs a dated trading calendar")
+            coverage = date.fromisoformat(source.get("calendar_through", calendar.days[-1].isoformat()))
         except (OSError, ValueError, KeyError, TypeError) as exc:
             log.warning("rotation history unavailable: %s", exc)
             self._waiting = "history"
@@ -152,11 +159,12 @@ class RotationService:
         need_after = max(today, last_available)
         if calendar.days[-1] <= need_after:
             try:
-                first = calendar.days[-1] + timedelta(days=1)
+                first = coverage + timedelta(days=1)
                 deadline = need_after + timedelta(days=20)
                 while calendar.days[-1] <= need_after and first <= deadline:
                     end = date(first.year, 12, 31)
                     calendar = SessionList((*calendar.days, *self.market.sessions(first, end)))
+                    coverage = end
                     first = end + timedelta(days=1)
                 if calendar.days[-1] <= need_after:
                     raise ValueError("no confirmed next trading session")
@@ -169,6 +177,11 @@ class RotationService:
             data = self._replay(source, growth, dividend, calendar, local)
             if not data:
                 return
+            data["calendar_through"] = coverage.isoformat()
+            self._commit(data)
+        elif data.get("calendar_through") != coverage.isoformat():
+            data = {**data, "calendar_through": coverage.isoformat(),
+                    "sessions": [day.isoformat() for day in calendar.days]}
             self._commit(data)
 
         while True:
@@ -177,7 +190,7 @@ class RotationService:
                 self._waiting = None
                 return
             final_check = day < today or local.time() >= FINAL_OPEN_CHECK
-            if (data.get("actions_checked") != day.isoformat()
+            if (day < today or data.get("actions_checked") != day.isoformat()
                     or final_check and data.get("actions_finalized") != day.isoformat()):
                 data = self._open(data, day, final_check=final_check)
                 if data is None:
@@ -234,11 +247,12 @@ class RotationService:
             log.warning("rotation opening adjustment unavailable: %s", exc)
             self._waiting = "adjustment"
             return None
-        data = {**data, "actions_checked": day.isoformat(), "opening_reference": opening,
-                "actions_finalized": day.isoformat() if final_check else None,
-                "current_bands": bands, "basis_date": bands["basis_date"]}
-        self._commit(data)
-        return data
+        updated = {**data, "actions_checked": day.isoformat(), "opening_reference": opening,
+                   "actions_finalized": day.isoformat() if final_check else None,
+                   "current_bands": bands, "basis_date": bands["basis_date"]}
+        if updated != data:
+            self._commit(updated)
+        return updated
 
     def _close(self, data, day, growth, dividend, calendar, *, current):
         previous = date.fromisoformat(data["recommendation"]["signal_date"])
@@ -265,7 +279,8 @@ class RotationService:
             for history, close, reference in zip((growth, dividend), closes, data["opening_reference"], strict=True):
                 # The previous close on this session's ex-price basis is its point-in-time
                 # forward-adjusted close; today's provider archive may include later payouts.
-                history[day] = history[previous] * (close.price / reference)
+                ratio = close.adjusted / close.previous_adjusted if current else close.price / reference
+                history[day] = history[previous] * ratio
             execution = calendar.days[i + 1]
             month = self._inputs(execution, growth, dividend, calendar)
             basis = data.get("basis_date") if data["current_bands"]["anchor_date"] == month.anchor_date.isoformat() else None

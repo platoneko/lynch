@@ -61,7 +61,7 @@ def test_ex_date_open_rebases_bands_before_creating_close_signal(tmp_path):
     original = service.snapshot(at(FRIDAY, 16))
     assert original["current_bands"]["dividend"]["middle"] == 100
     market.ex_date = True
-    service.refresh(at(MONDAY, 9, 10))
+    service.refresh(at(MONDAY, 9, 14))
     mid = service.snapshot(at(MONDAY, 11))
     assert mid["current_bands"]["dividend"]["middle"] == 98
     assert mid["recommendation"] == original["recommendation"]
@@ -110,6 +110,7 @@ def test_opening_recheck_uses_new_notice_and_hides_unknown_basis_on_later_day(tm
     service = seeded(tmp_path, market)
     service.refresh(at(FRIDAY, 16))
     service.refresh(at(MONDAY, 9))
+    assert service.snapshot(at(MONDAY, 9, 15))["current_bands"] is None
     market.ex_date = True
     service.refresh(at(MONDAY, 9, 14))
     assert service.snapshot(at(MONDAY, 10))["current_bands"]["dividend"]["middle"] == 98
@@ -129,6 +130,19 @@ def test_backfill_uses_that_days_reference_before_later_dividends(tmp_path):
     assert result["growth_close"] == 110
     persisted = (tmp_path / "rotation.json").read_text()
     assert '"2026-11-23": 110' in persisted
+
+
+def test_overdue_close_rechecks_notice_finalized_before_action_was_available(tmp_path):
+    market = Market()
+    service = seeded(tmp_path, market)
+    service.refresh(at(MONDAY, 15, 40))
+    market.ex_date = True
+    market.prices[MONDAY] = (ClosingReturn(100, 100, 100), ClosingReturn(98, 98, 98))
+    service.refresh(at(TUESDAY, 11))
+    result = service.snapshot(at(TUESDAY, 11))
+    assert result["recommendation"]["signal_date"] == MONDAY.isoformat()
+    assert result["recommendation"]["bands"]["basis_date"] == MONDAY.isoformat()
+    assert result["recommendation"]["action"] == "hold"
 
 
 def test_failed_month_end_publication_refits_corrected_close(tmp_path, monkeypatch):

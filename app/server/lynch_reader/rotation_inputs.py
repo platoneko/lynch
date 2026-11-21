@@ -6,6 +6,7 @@ import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from decimal import Decimal, ROUND_HALF_UP
 from html.parser import HTMLParser
 from io import BytesIO
 from math import isfinite
@@ -310,9 +311,12 @@ class CashAction:
     split_ratio: float = 1
 
     def price_factor(self, previous_raw_close: float) -> float:
-        close = _price(previous_raw_close)
-        factor = (close - self.cash_per_share) / close / _price(self.split_ratio)
-        return _price(factor)
+        close = Decimal(str(_price(previous_raw_close)))
+        split = Decimal(str(_price(self.split_ratio)))
+        reference = (close - Decimal(str(self.cash_per_share))) / split
+        # Shenzhen ETF prices and the exchange's ex-rights reference use CNY 0.001 ticks.
+        rounded = reference.quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
+        return _price(rounded / close)
 
 
 _CASH = re.compile(r"每(\d+)份派现金([\d.]+)元")

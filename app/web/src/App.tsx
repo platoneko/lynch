@@ -150,7 +150,7 @@ export function App() {
   useEffect(() => {
     if (route.page !== 'strategies') return;
     loadStrategy(true);
-    const timer = window.setInterval(() => loadStrategy(), ALERT_POLL_MS);
+    const timer = window.setInterval(() => loadStrategy(), 60_000);
     return () => {
       strategyRequest.current?.abort();
       window.clearInterval(timer);
