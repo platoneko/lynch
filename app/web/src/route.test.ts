@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   anomaliesHash, axisHash, candidatesHash, chatHash, chatsHash, docHash, earningsHash, newChatHash, newDiscoverHash, parseRoute,
-  watchHash,
+  strategiesHash, watchHash,
 } from './route';
 
 describe('route', () => {
@@ -43,5 +43,10 @@ describe('route', () => {
     expect(anomaliesHash()).toBe('#/anomalies');
     expect(parseRoute('#/watch')).toEqual({ page: 'watch' });
     expect(watchHash()).toBe('#/watch');
+  });
+  it('opens the strategy page and returns home for unknown strategy routes', () => {
+    expect(strategiesHash()).toBe('#/strategies');
+    expect(parseRoute(strategiesHash())).toEqual({ page: 'strategies' });
+    expect(parseRoute('#/strategies/unknown')).toEqual({ page: 'home' });
   });
 });

@@ -25,8 +25,11 @@ import { HomePage } from './home/HomePage';
 import { DEFAULT_FILTER, type HomeFilter } from './home/listModel';
 import {
   anomaliesHash, axisHash, candidatesHash, chatHash, chatsHash, docHash, earningsHash, newChatHash, newDiscoverHash,
-  parseRoute, watchHash, type Route,
+  parseRoute, strategiesHash, watchHash, type Route,
 } from './route';
+import { fetchStrategy } from './strategy/api';
+import type { StrategySnapshot } from './strategy/model';
+import { StrategyPage } from './strategy/StrategyPage';
 import type { Catalog } from './types';
 import { documentAxisNames } from './doc/buildDoc';
 import { fetchWatch, removeWatch } from './watch/api';
@@ -123,6 +126,36 @@ export function App() {
     const timer = window.setInterval(loadWatch, ALERT_POLL_MS);
     return () => window.clearInterval(timer);
   }, [route.page, loadWatch, offline]);
+  const [strategy, setStrategy] = useState<StrategySnapshot | null>(null);
+  const [strategyError, setStrategyError] = useState(false);
+  const [strategyRefreshing, setStrategyRefreshing] = useState(false);
+  const strategyRequest = useRef<AbortController | null>(null);
+  const loadStrategy = useCallback((confirm = false) => {
+    if (confirm) setStrategyRefreshing(true);
+    strategyRequest.current?.abort();
+    const request = new AbortController();
+    strategyRequest.current = request;
+    fetchStrategy(request.signal).then((data) => {
+      if (request.signal.aborted) return;
+      setStrategy(data);
+      setStrategyError(false);
+      setStrategyRefreshing(false);
+    }, () => {
+      if (!request.signal.aborted) {
+        setStrategyError(true);
+        setStrategyRefreshing(false);
+      }
+    });
+  }, []);
+  useEffect(() => {
+    if (route.page !== 'strategies') return;
+    loadStrategy(true);
+    const timer = window.setInterval(() => loadStrategy(), 60_000);
+    return () => {
+      strategyRequest.current?.abort();
+      window.clearInterval(timer);
+    };
+  }, [route.page, loadStrategy]);
   const [chatOptions, setChatOptions] = useState<ChatOptions | null>(null);
   // A new conversation's first message, handed from its blank page to its own page.
   const [firstMessage, setFirstMessage] = useState<{ id: string; text: string; clientId: string } | null>(null);
@@ -153,7 +186,7 @@ export function App() {
   // Each visit to a page showing anchors asks again, so a framework edited in a chat is current on the way back.
   // The server refetches quotes every 5 minutes; the home list also asks at that pace while it is on screen.
   useEffect(() => {
-    if (showsAnchors(route) || catalogTag.current === null) load();
+    if (showsAnchors(route) || (catalogTag.current === null && route.page !== 'strategies')) load();
     if (route.page !== 'home') return;
     const timer = window.setInterval(load, ALERT_POLL_MS);
     return () => window.clearInterval(timer);
@@ -172,6 +205,7 @@ export function App() {
   // Back in the foreground on such a page: edits made meanwhile (a terminal session, a git pull) show without a tap.
   useOnForeground(() => {
     if (showsAnchors(route)) load();
+    if (route.page === 'strategies') loadStrategy(true);
   });
 
   useEffect(() => {
@@ -202,6 +236,9 @@ export function App() {
   // One object per catalog, so a document is not rebuilt on every render.
   const targets = useMemo(() => ({ pool, axes: documentAxisNames(catalog?.axis_documents, catalog?.axes ?? []) }), [pool, catalog]);
 
+  if (route.page === 'strategies') {
+    return <StrategyPage snapshot={strategy} error={strategyError || offline} refreshing={strategyRefreshing} onBack={goBack} />;
+  }
   if (!catalog) {
     return (
       <div className="status-screen">
@@ -316,7 +353,8 @@ export function App() {
         chatCount={chatList?.running_count ?? 0} onOpenChats={() => openFromHome(chatsHash())}
         earnings={earnings} onOpenEarnings={() => openFromHome(earningsHash())}
         anomalies={anomalies} onOpenAnomalies={() => openFromHome(anomaliesHash())}
-        watch={watch} onOpenWatch={() => openFromHome(watchHash())} connection={connection} />
+        watch={watch} onOpenWatch={() => openFromHome(watchHash())}
+        onOpenStrategies={() => openFromHome(strategiesHash())} connection={connection} />
     </>
   );
 }

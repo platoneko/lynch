@@ -25,7 +25,8 @@ const MARKETS: { id: string; label: string }[] = [
 ];
 
 export function HomePage({ catalog, filter, onFilter, onOpen, onOpenAxis,
-  chatCount, onOpenChats, earnings, onOpenEarnings, anomalies, onOpenAnomalies, watch, onOpenWatch, connection }: {
+  chatCount, onOpenChats, earnings, onOpenEarnings, anomalies, onOpenAnomalies, watch, onOpenWatch, onOpenStrategies,
+  connection }: {
   catalog: Catalog;
   filter: HomeFilter;
   onFilter: (f: HomeFilter) => void;
@@ -39,6 +40,7 @@ export function HomePage({ catalog, filter, onFilter, onOpen, onOpenAxis,
   onOpenAnomalies: () => void;
   watch: WatchList | null;
   onOpenWatch: () => void;
+  onOpenStrategies: () => void;
   connection: Connection;
 }) {
   const { offline } = connection;
@@ -94,6 +96,7 @@ export function HomePage({ catalog, filter, onFilter, onOpen, onOpenAxis,
           {menu && (
             <Menu onClose={() => setMenu(false)} items={[
               ...alertRows,
+              { label: '策略', onSelect: onOpenStrategies },
               chatRow,
               {
                 label: filter.showArchived ? '隐藏归档' : `展示归档${archivedCount > 0 ? `（${archivedCount}）` : ''}`,

@@ -9,6 +9,7 @@ export type Route =
   | { page: 'candidates' }
   | { page: 'earnings' }
   | { page: 'anomalies' }
+  | { page: 'strategies' }
   | { page: 'watch' };
 
 export function parseRoute(hash: string): Route {
@@ -20,6 +21,7 @@ export function parseRoute(hash: string): Route {
   if (hash === '#/candidates') return { page: 'candidates' };
   if (hash === '#/earnings') return { page: 'earnings' };
   if (hash === '#/anomalies') return { page: 'anomalies' };
+  if (hash === '#/strategies') return { page: 'strategies' };
   if (hash === '#/watch') return { page: 'watch' };
   // Checked before chat ids: `new-discover` would otherwise read as one (ids are uuids).
   if (hash === '#/chat/new-discover') return { page: 'chat-new-discover' };
@@ -65,6 +67,10 @@ export function earningsHash(): string {
 
 export function anomaliesHash(): string {
   return '#/anomalies';
+}
+
+export function strategiesHash(): string {
+  return '#/strategies';
 }
 
 export function watchHash(): string {
