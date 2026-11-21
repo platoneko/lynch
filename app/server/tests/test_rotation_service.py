@@ -6,7 +6,7 @@ import pytest
 
 from lynch_reader import rotation_service
 from lynch_reader.rotation import Bands, MonthInputs, PriceBasisChange, PriceBasisChanges
-from lynch_reader.rotation_service import ClosingReturn, RotationService
+from lynch_reader.rotation_service import BACKTEST_POLICY, ClosingReturn, RotationService
 
 TZ = ZoneInfo("Asia/Shanghai")
 FRIDAY = date(2026, 11, 20)
@@ -47,7 +47,8 @@ def seeded(tmp_path, market):
         "growth": {FRIDAY.isoformat(): 100},
         "dividend": {FRIDAY.isoformat(): 100},
         "sessions": [d.isoformat() for d in market.sessions(FRIDAY, WEDNESDAY)],
-        "backtests": [],
+        "backtests": [{"label": "当前规则"}],
+        "backtests_policy": BACKTEST_POLICY,
     }
     def month(execution_day, *_):
         return MonthInputs(execution_day.replace(day=1), date(2026, 10, 30), .35,
@@ -61,10 +62,13 @@ def test_ex_date_open_rebases_bands_before_creating_close_signal(tmp_path):
     service.refresh(at(FRIDAY, 16))
     original = service.snapshot(at(FRIDAY, 16))
     assert original["current_bands"]["dividend"]["middle"] == 100
+    assert original["backtests_policy"] == BACKTEST_POLICY
+    assert original["backtests"] == [{"label": "当前规则 · 红利超上沿 5% 清仓"}]
     market.ex_date = True
     service.refresh(at(MONDAY, 9, 14))
     mid = service.snapshot(at(MONDAY, 11))
     assert mid["current_bands"]["dividend"]["middle"] == 98
+    assert mid["current_bands"]["dividend"]["exit"] == pytest.approx(115.5 * .98)
     assert mid["recommendation"] == original["recommendation"]
     assert mid["current_bands"]["basis_date"] == "2026-11-23"
     market.prices[MONDAY] = (ClosingReturn(100, 100, 100), ClosingReturn(98, 98, 98))
@@ -92,6 +96,67 @@ def test_missing_history_is_processed_in_order_after_restart(tmp_path):
     committed = (tmp_path / "rotation.json").read_bytes()
     restarted.refresh(at(TUESDAY, 16))
     assert (tmp_path / "rotation.json").read_bytes() == committed
+
+
+def test_adopts_rule_from_legacy_checkpoint_and_preserves_exit_on_restart(tmp_path):
+    market = Market()
+    service = seeded(tmp_path, market)
+    service.refresh(at(FRIDAY, 16))
+    checkpoint = tmp_path / "rotation.json"
+    legacy = json.loads(checkpoint.read_text())
+    legacy["recommendation"].pop("dividend_exited", None)
+    legacy.pop("backtests_policy")
+    legacy["recommendation"]["bands"]["dividend"].pop("exit")
+    legacy["current_bands"]["dividend"].pop("exit")
+    legacy["backtests"] = [{"label": "旧规则"}]
+    checkpoint.write_text(json.dumps(legacy))
+    market.prices[MONDAY] = (ClosingReturn(110, 100, 110), ClosingReturn(116, 100, 116))
+    migrated = seeded(tmp_path, market)
+    migrated.refresh(at(MONDAY, 16))
+    snapshot = migrated.snapshot(at(MONDAY, 16))
+    assert snapshot["backtests"] == []
+    assert snapshot["backtests_policy"] is None
+    assert snapshot["recommendation"]["dividend_exited"]
+    assert snapshot["recommendation"]["target"] == {"growth": 0, "dividend": 0, "cash": 1}
+    assert snapshot["current_bands"]["dividend"]["exit"] == pytest.approx(115.5)
+    assert "dividend_exited" not in json.loads(checkpoint.read_text())["state"]
+
+    market.prices[TUESDAY] = (ClosingReturn(111, 110, 111), ClosingReturn(112, 116, 112))
+    restarted = seeded(tmp_path, market)
+    restarted.refresh(at(TUESDAY, 16))
+    held = restarted.snapshot(at(TUESDAY, 16))["recommendation"]
+    assert held["action"] == "hold" and held["dividend_exited"]
+    assert held["target"]["cash"] == 1
+
+    market.prices[WEDNESDAY] = (ClosingReturn(111, 111, 111), ClosingReturn(109, 112, 109))
+    restarted.refresh(at(WEDNESDAY, 16))
+    restored = restarted.snapshot(at(WEDNESDAY, 16))["recommendation"]
+    assert not restored["dividend_exited"]
+    assert restored["target"]["dividend"] == 1
+
+
+def test_resume_when_old_engine_preserved_zero_dividend_target_without_marker(tmp_path):
+    market = Market()
+    service = seeded(tmp_path, market)
+    service.refresh(at(FRIDAY, 16))
+    checkpoint = tmp_path / "rotation.json"
+    legacy = json.loads(checkpoint.read_text())
+    for value in (legacy["state"], legacy["recommendation"]):
+        value["target"] = {"growth": .35, "dividend": 0, "cash": .65}
+    legacy["recommendation"].pop("dividend_exited")
+    checkpoint.write_text(json.dumps(legacy))
+    market.prices[MONDAY] = (ClosingReturn(100, 100, 100), ClosingReturn(112, 100, 112))
+    resumed = seeded(tmp_path, market)
+    resumed.refresh(at(MONDAY, 16))
+    held = resumed.snapshot(at(MONDAY, 16))["recommendation"]
+    assert held["dividend_exited"]
+    assert held["target"]["dividend"] == 0
+
+    market.prices[TUESDAY] = (ClosingReturn(100, 100, 100), ClosingReturn(109, 112, 109))
+    resumed.refresh(at(TUESDAY, 16))
+    recovered = resumed.snapshot(at(TUESDAY, 16))["recommendation"]
+    assert recovered["reasons"] == ("dividend_overheat_reentry",)
+    assert recovered["target"]["dividend"] == .65
 
 
 def test_missing_adjustment_hides_stale_bands_and_keeps_target(tmp_path):

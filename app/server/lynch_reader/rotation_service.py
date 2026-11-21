@@ -21,6 +21,7 @@ TZ = MARKET_TZ["A"]
 CHECK_ACTIONS_AT = time(9)
 FINAL_OPEN_CHECK = time(9, 13)
 STATE_VERSION = 1
+BACKTEST_POLICY = "dividend_exit_5pct"
 
 
 @dataclass(frozen=True)
@@ -127,12 +128,15 @@ class RotationService:
                 waiting = "adjustment"
             elif next_session < today or local.time() >= LIVE_HOURS["A"][1][1]:
                 waiting = "closes"
+        backtests_policy = BACKTEST_POLICY if data.get("backtests_policy") == BACKTEST_POLICY else None
+        backtests = data.get("backtests", []) if backtests_policy is not None else []
         return {
             "status": "empty" if recommendation is None else "waiting" if waiting else "ready",
             "recommendation": recommendation,
             "waiting_reason": waiting,
             "current_bands": None if waiting in ("adjustment", "calendar") else data.get("current_bands"),
-            "backtests": data.get("backtests", []),
+            "backtests_policy": backtests_policy,
+            "backtests": [{**row, "label": f"{row['label']} · 红利超上沿 5% 清仓"} for row in backtests],
         }
 
     def refresh(self, now: datetime) -> None:
@@ -220,11 +224,12 @@ class RotationService:
             month = self._inputs(execution, growth, dividend, calendar)
             result = _decision(state, month, day, execution, i, (growth[day], dividend[day]),
                                (growth[day], dividend[day]))
-            state = _state(result["state"])
+            state = _state(result)
         if not result:
             self._waiting = "history"
             return {}
         return {**result, "version": STATE_VERSION, "backtests": source.get("backtests", []),
+                "backtests_policy": source.get("backtests_policy"),
                 "growth": _encode_history(growth), "dividend": _encode_history(dividend),
                 "sessions": [day.isoformat() for day in dates]}
 
@@ -288,7 +293,7 @@ class RotationService:
             execution = calendar.days[i + 1]
             month = self._inputs(execution, growth, dividend, calendar)
             basis = data.get("basis_date") if data["current_bands"]["anchor_date"] == month.anchor_date.isoformat() else None
-            result = _decision(_state(data["state"]), month, day, execution, i,
+            result = _decision(_state(data), month, day, execution, i,
                                (growth[day], dividend[day]), raw, basis)
         except (OSError, ValueError) as exc:
             log.warning("rotation closing decision unavailable: %s", exc)
@@ -313,8 +318,12 @@ def _encode_history(history):
     return {day.isoformat(): close for day, close in history.items()}
 
 
-def _state(data):
-    return RotationState(**{**data, "target": Target(**data["target"])})
+def _state(snapshot):
+    data = snapshot["state"]
+    target = Target(**data["target"])
+    # An older writer can preserve a zero-dividend target while dropping the new flag.
+    exited = snapshot["recommendation"].get("dividend_exited", target.dividend == 0)
+    return RotationState(**{**data, "target": target, "dividend_exited": exited})
 
 
 def _decision(state, month, day, execution, i, closes, raw, basis_date=None):
@@ -327,11 +336,18 @@ def _decision(state, month, day, execution, i, closes, raw, basis_date=None):
         "anchor_date": month.anchor_date.isoformat(),
         "basis_date": basis_date,
     }
+    if display.dividend is not None:
+        bands["dividend"]["exit"] = display.dividend_exit
+    state_data = asdict(decision.state)
+    # Keep the v1 engine-state fields readable by older deployments. The recommendation
+    # and its exit status are committed together with this state and the target.
+    dividend_exited = state_data.pop("dividend_exited")
     return {
-        "state": asdict(decision.state),
+        "state": state_data,
         "recommendation": {
             "signal_date": day.isoformat(), "execution_date": execution.isoformat(),
             "action": decision.action, "reasons": decision.reasons, "stage": decision.stage,
+            "dividend_exited": dividend_exited,
             "target": asdict(decision.target), "regular_growth": month.regular_growth,
             "growth_close": raw[0], "dividend_close": raw[1], "bands": bands,
         },
