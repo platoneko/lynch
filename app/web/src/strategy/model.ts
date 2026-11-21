@@ -1,6 +1,6 @@
 export type Target = { growth: number; dividend: number; cash: number };
 export type Stage = 'regular' | 'high_exit' | 'reentry_quarter' | 'reentry_half' | 'low_45' | 'low_55' | 'low_65';
-type Band = { lower: number; middle: number; upper: number };
+type Band = { lower: number; middle: number; upper: number; exit?: number };
 
 export interface Recommendation {
   signal_date: string;
@@ -13,6 +13,7 @@ export interface Recommendation {
   regular_growth: number;
   growth_close: number;
   dividend_close: number;
+  dividend_exited?: boolean;
   bands?: CurrentBands;
 }
 
@@ -42,6 +43,7 @@ export interface StrategySnapshot {
   recommendation: Recommendation | null;
   current_bands: CurrentBands | null;
   waiting_reason: 'closes' | 'adjustment' | 'calendar' | 'history' | null;
+  backtests_policy?: string | null;
   backtests: Backtest[];
 }
 
@@ -79,6 +81,8 @@ export function reasonText(recommendation: Recommendation): string {
   const reasons: Readonly<Record<string, string>> = {
     month_start: '月初按最新常态配比和当前策略状态调整仓位。',
     growth_upper: '创业板收盘触及上沿，退出创业板。',
+    dividend_overheat_exit: '红利低波收盘达到上沿的 105%，清仓红利低波，资金留现金。',
+    dividend_overheat_reentry: '红利低波收盘跌回上沿以下，恢复按规则配仓。',
     diversification_to_cash: '红利低波暂不加仓，腾出的资金留作现金。',
     diversification_to_dividend: '红利低波低于上沿，腾出的资金转入红利低波。',
     reentry_quarter: `创业板收盘跌至中枢，买回常态仓位的四分之一，目标仓位为 ${growth}。`,
@@ -87,7 +91,7 @@ export function reasonText(recommendation: Recommendation): string {
     low_45: `创业板收盘触及下沿，目标仓位为 ${growth}。`,
     low_55: `创业板进入低位第二档，目标仓位为 ${growth}。`,
     low_65: `创业板进入低位第三档，目标仓位为 ${growth}。`,
-    low_reset: '创业板收盘回到中枢，恢复常态配比。',
+    low_reset: '创业板收盘回到中枢，恢复其常态仓位。',
   };
   return recommendation.reasons.map((reason) => reasons[reason]).filter(Boolean).join('') || '策略触发调仓。';
 }

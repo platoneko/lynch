@@ -1,4 +1,7 @@
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import { StrategyPage } from './StrategyPage';
 import { executionText, reasonText, targetLabels, waitingText, type Recommendation, type StrategySnapshot } from './model';
 
 const recommendation: Recommendation = {
@@ -30,6 +33,28 @@ describe('strategy summary', () => {
   it('shows multiple relevant reasons when an exit leaves money in cash', () => {
     expect(reasonText({ ...recommendation, reasons: ['growth_upper', 'diversification_to_cash'] }))
       .toBe('创业板收盘触及上沿，退出创业板。红利低波暂不加仓，腾出的资金留作现金。');
+  });
+
+  it('explains the dividend exit and recovery signals', () => {
+    expect(reasonText({ ...recommendation, reasons: ['dividend_overheat_exit'] }))
+      .toBe('红利低波收盘达到上沿的 105%，清仓红利低波，资金留现金。');
+    expect(reasonText({ ...recommendation, reasons: ['dividend_overheat_reentry'] }))
+      .toBe('红利低波收盘跌回上沿以下，恢复按规则配仓。');
+  });
+
+  it('reports only growth returning to its usual weight while dividend is out', () => {
+    expect(reasonText({ ...recommendation, dividend_exited: true, reasons: ['low_reset'] }))
+      .toBe('创业板收盘回到中枢，恢复其常态仓位。');
+  });
+
+  it('shows only backtests tagged with the adopted strategy version', () => {
+    const metrics = { annual: .12, sharpe: .8, drawdown: -.2 };
+    const backtests = [{ label: '样本回测', start: '2024-05-06', end: '2026-11-20', candidate: metrics, baseline: metrics }];
+    const page = (value: StrategySnapshot) => renderToStaticMarkup(createElement(StrategyPage, {
+      snapshot: value, error: false, refreshing: false, onBack: () => {},
+    }));
+    expect(page({ ...snapshot, backtests })).not.toContain('样本回测');
+    expect(page({ ...snapshot, backtests, backtests_policy: 'dividend_exit_5pct' })).toContain('样本回测');
   });
 
   it('keeps the displayed allocation at 100% for thirds and fractional targets', () => {

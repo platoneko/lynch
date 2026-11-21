@@ -103,6 +103,36 @@ def test_exit_redirect_changes_with_dividend_upper(dividend):
         assert red.target == cash.target
 
 
+def test_dividend_exit_at_five_percent_above_upper_and_restore_below_upper():
+    rules = month(regular_growth=0.4)
+    before = advance(RotationState(), signal(1, 100, math.nextafter(126, 0)), rules)
+    assert before.target == Target(0.4, 0.6, 0)
+    exit_ = advance(before.state, signal(2, 100, 126), rules)
+    assert exit_.target == Target(0.4, 0, 0.6)
+    assert exit_.reasons == ("dividend_overheat_exit",)
+
+    both = advance(exit_.state, signal(3, 120, 120), rules)
+    assert both.target == Target(0, 0, 1)
+    stay_out = advance(both.state, signal(4, 121, 123), rules)
+    assert stay_out.action == "hold"
+    assert stay_out.target == both.target
+    back = advance(stay_out.state, signal(5, 121, math.nextafter(120, 0)), rules)
+    assert back.target == Target(0, 1, 0)
+    assert "dividend_overheat_reentry" in back.reasons
+
+
+def test_fixed_offset_rebases_the_dividend_exit_without_triggering_it():
+    rules = month(regular_growth=0.4)
+    before = advance(RotationState(), signal(1, 100, 125.75), rules)
+    shifted = rebase_month_inputs(rules, PriceBasisChanges("example", dividend=PriceBasisChange(1, -10)))
+    assert shifted.dividend_exit == pytest.approx(116)
+    equivalent = advance(before.state, signal(2, 100, 115.75), shifted)
+    assert equivalent.action == "hold"
+    assert equivalent.target == before.target
+    reached = advance(equivalent.state, signal(3, 100, 116), shifted)
+    assert reached.target == Target(0.4, 0, 0.6)
+
+
 def test_dividend_rebases_all_frozen_triggers_without_creating_a_buy():
     rules = month(regular_growth=0.4)
     initial = advance(RotationState(), signal(1, 84), rules)

@@ -9,6 +9,8 @@ from typing import Literal, Protocol
 
 import pandas as pd
 
+DIVIDEND_EXIT_MULTIPLIER = 1.05
+
 
 class SessionCalendar(Protocol):
     def sessions(self, start: date, end: date) -> Sequence[date]: ...
@@ -29,6 +31,7 @@ class RotationState:
     last_add_session: int | None = None
     redirect_to_dividend: bool = False
     target: Target | None = None
+    dividend_exited: bool = False
 
 
 @dataclass(frozen=True)
@@ -62,6 +65,13 @@ class MonthInputs:
     growth: Bands | None
     dividend: Bands | None
     applied_events: tuple[str, ...] = ()
+    rebased_dividend_exit: float | None = None
+
+    @property
+    def dividend_exit(self) -> float | None:
+        if self.rebased_dividend_exit is not None:
+            return self.rebased_dividend_exit
+        return self.dividend.upper * DIVIDEND_EXIT_MULTIPLIER if self.dividend is not None else None
 
 
 @dataclass(frozen=True)
@@ -127,11 +137,15 @@ def rebase_month_inputs(month: MonthInputs, adjustments: PriceBasisChanges) -> M
     """Move saved triggers onto the new price basis without refitting or moving strategy state."""
     if adjustments.event_id in month.applied_events:
         return month
+    dividend_exit = month.dividend_exit
+    if dividend_exit is not None and adjustments.dividend is not None:
+        dividend_exit = adjustments.dividend.convert(dividend_exit)
     return replace(
         month,
         growth=_rebase_bands(month.growth, adjustments.growth),
         dividend=_rebase_bands(month.dividend, adjustments.dividend),
         applied_events=(*month.applied_events, adjustments.event_id),
+        rebased_dividend_exit=dividend_exit,
     )
 
 
@@ -150,6 +164,15 @@ def advance(state: RotationState, signal: SignalDay, month: MonthInputs) -> Deci
     low, last_add = state.low, state.last_add_session
     growth, price = month.growth, signal.growth_close
     redirect = month.dividend is not None and signal.dividend_close < month.dividend.upper
+    dividend_exited = state.dividend_exited
+    dividend_exit = month.dividend_exit
+    if dividend_exit is not None:
+        if dividend_exited and redirect:
+            dividend_exited = False
+            reasons.append("dividend_overheat_reentry")
+        elif not dividend_exited and signal.dividend_close >= dividend_exit:
+            dividend_exited = True
+            reasons.append("dividend_overheat_exit")
 
     if growth is not None:
         if price >= growth.upper:
@@ -184,7 +207,9 @@ def advance(state: RotationState, signal: SignalDay, month: MonthInputs) -> Deci
     target = state.target
     if reasons:
         target = _allocate(month.regular_growth, high, rebuild, low, redirect)
-    next_state = RotationState(high, rebuild, low, last_add, redirect, target)
+        if dividend_exited:
+            target = Target(target.growth, 0.0, 1.0 - target.growth)
+    next_state = RotationState(high, rebuild, low, last_add, redirect, target, dividend_exited)
     stage = HIGH_STAGES[rebuild] if high else LOW_STAGES[low - 1] if low else "regular"
     return Decision(next_state, "rebalance" if reasons else "hold", tuple(reasons), stage)
 
