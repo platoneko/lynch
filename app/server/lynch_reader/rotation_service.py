@@ -165,6 +165,10 @@ class RotationService:
                     end = date(first.year, 12, 31)
                     calendar = SessionList((*calendar.days, *self.market.sessions(first, end)))
                     coverage = end
+                    if data:
+                        data = {**data, "calendar_through": coverage.isoformat(),
+                                "sessions": [day.isoformat() for day in calendar.days]}
+                        self._commit(data)
                     first = end + timedelta(days=1)
                 if calendar.days[-1] <= need_after:
                     raise ValueError("no confirmed next trading session")

@@ -1,4 +1,5 @@
 from datetime import date, datetime, timedelta
+import json
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -172,3 +173,30 @@ def test_failed_month_end_publication_refits_corrected_close(tmp_path, monkeypat
     market.prices[month_end] = (ClosingReturn(102, 100, 102), ClosingReturn(100, 100, 100))
     service.refresh(at(month_end, 16))
     assert service.snapshot(at(month_end, 16))["current_bands"]["growth"]["middle"] == 102
+
+
+def test_verified_calendar_tail_survives_waiting_for_next_year(tmp_path):
+    dec29, dec30, dec31 = (date(2026, 12, d) for d in (29, 30, 31))
+    market = Market()
+    known = market.sessions
+
+    def sessions(start, end):
+        if start.year == 2027:
+            raise ValueError("next exchange calendar unavailable")
+        return known(start, end)
+
+    market.sessions = sessions
+    seed = {
+        "replay_start": dec29.isoformat(), "sessions": [dec29.isoformat(), dec30.isoformat()],
+        "calendar_through": dec30.isoformat(), "growth": {dec29.isoformat(): 100},
+        "dividend": {dec29.isoformat(): 100},
+    }
+    service = RotationService(tmp_path / "rotation.json", market, lambda: seed,
+                              build_month=lambda execution, *_: MonthInputs(
+                                  execution.replace(day=1), date(2026, 11, 30), .35, None, None))
+    service.refresh(at(dec29, 16))
+    service.refresh(at(dec31, 10))
+    stored = json.loads((tmp_path / "rotation.json").read_text())
+    assert stored["calendar_through"] == dec31.isoformat()
+    assert stored["sessions"][-1] == dec31.isoformat()
+    assert service.snapshot(at(dec31, 10))["current_bands"] is None
