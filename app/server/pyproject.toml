@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "HTTP surface for the lynch mobile app: reader and chats"
 requires-python = ">=3.12"
 dependencies = [
+    "numpy>=2.5.5",
+    "pandas>=3.1.1",
     "starlette>=0.47",
     "tree-sitter>=0.25,<0.27",
     "tree-sitter-bash>=0.25,<0.26",

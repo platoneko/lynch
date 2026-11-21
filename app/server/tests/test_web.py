@@ -98,6 +98,26 @@ def test_lifespan_starts_and_stops_the_poller(repo, tmp_path, quotes):
     assert p.stopped
 
 
+def test_strategy_requires_pairing_and_only_reads_snapshot(repo, tmp_path, quotes):
+    calls = []
+
+    class Rotation:
+        def snapshot(self, now):
+            calls.append(now)
+            return {"status": "empty", "recommendation": None}
+
+    devices, cookies = paired_devices(tmp_path)
+    app = create_app(repo, tmp_path / "dist", quotes, devices,
+                     FrameworkArchive(tmp_path / "archive.json"), rotation=Rotation())
+    path = "/api/strategies/chinext-dividend-rotation"
+    assert TestClient(app).get(path).status_code == 401
+    c = TestClient(app, cookies=cookies)
+    response = c.get(path)
+    assert response.json() == {"status": "empty", "recommendation": None}
+    assert len(calls) == 1
+    assert c.get(path, headers={"If-None-Match": response.headers["etag"]}).status_code == 304
+
+
 def test_earnings_lists_pool_tickers(repo, tmp_path, quotes):
     body = client(repo, tmp_path, quotes).get("/api/earnings").json()
     assert body["error"] is None and body["fetched_day"] == "2026-09-21"

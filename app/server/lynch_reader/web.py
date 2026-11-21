@@ -14,7 +14,7 @@ import logging
 import os
 import shutil
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import uvicorn
@@ -48,6 +48,8 @@ from lynch_reader.chat.watch import WATCH_FILE, WatchStore
 from lynch_reader.earnings import (
     CALENDAR_FILE, IGNORED_FILE, CalendarCache, Earnings, IgnoreStore, revised_by,
 )
+from lynch_reader.rotation_market import EtfRotationMarket
+from lynch_reader.rotation_service import TZ as ROTATION_TZ, RotationService
 
 from eval.lib.axes import list_axis_paths  # noqa: E402 — after catalog, which puts the repo root on sys.path
 from eval.lib.frameworks import list_framework_paths  # noqa: E402 — after catalog, which puts the repo root on sys.path
@@ -98,11 +100,14 @@ def active_pool(frameworks_dir: Path, archive: FrameworkArchive) -> list[str]:
     return [p.stem for p in list_framework_paths(frameworks_dir) if p.stem not in hidden]
 
 
-def app_lifespan(chat: ChatService | None, poller: QuotePoller | None):
+def app_lifespan(chat: ChatService | None, poller: QuotePoller | None,
+                 rotation: RotationService | None = None):
     @asynccontextmanager
     async def lifespan(app):
         if poller is not None:
             poller.start()
+        if rotation is not None:
+            rotation.start()
         try:
             if chat is not None:
                 async with chat_lifespan(chat)(app):
@@ -110,6 +115,8 @@ def app_lifespan(chat: ChatService | None, poller: QuotePoller | None):
             else:
                 yield
         finally:
+            if rotation is not None:
+                await asyncio.to_thread(rotation.stop)
             if poller is not None:
                 await asyncio.to_thread(poller.stop)  # joins the thread: keep the event loop free meanwhile
     return lifespan
@@ -119,7 +126,8 @@ def create_app(frameworks_dir: Path, web_dist: Path, quotes: QuoteCache, devices
                archive: FrameworkArchive, chat: ChatService | None = None,
                earnings: Earnings | None = None, anomalies: Anomalies | None = None,
                poller: QuotePoller | None = None, *,
-               valuation_provider: ValuationProvider | None = None) -> Starlette:
+               valuation_provider: ValuationProvider | None = None,
+               rotation: RotationService | None = None) -> Starlette:
     pool = lambda: active_pool(frameworks_dir, archive)  # noqa: E731
     if anomalies is not None:
         quotes.subscribe(lambda batch: anomalies.observe(batch, pool()))
@@ -153,6 +161,9 @@ def create_app(frameworks_dir: Path, web_dist: Path, quotes: QuoteCache, devices
         if path is None:
             return PlainTextResponse("unknown axis", status_code=404)
         return unless_held(request, Response(path.read_text(encoding="utf-8"), media_type="text/markdown; charset=utf-8"))
+
+    def rotation_snapshot(request: Request) -> Response:
+        return unless_held(request, JSONResponse(rotation.snapshot(datetime.now(ROTATION_TZ))))
 
     def offline_manifest(request: Request) -> Response:
         # Every doc the app may open offline, archived frameworks included; tagged as their endpoints tag them.
@@ -229,10 +240,12 @@ def create_app(frameworks_dir: Path, web_dist: Path, quotes: QuoteCache, devices
         ]
     if chat is not None:
         routes += chat_routes(chat, frameworks_dir)
+    if rotation is not None:
+        routes.append(Route("/api/strategies/chinext-dividend-rotation", rotation_snapshot))
     if web_dist.is_dir():
         routes.append(Mount("/", WebDist(directory=web_dist, html=True)))
     return Starlette(routes=routes, middleware=[Middleware(DeviceAuth, devices=devices)],
-                     lifespan=app_lifespan(chat, poller))
+                     lifespan=app_lifespan(chat, poller, rotation))
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -265,9 +278,10 @@ def main(argv: list[str] | None = None) -> None:
     anomalies = Anomalies(AnomalyStore(EVENTS_FILE), BaselineCache(BASELINE_FILE), calendar)
     poller = QuotePoller(quotes, lambda: quote_pool(FRAMEWORKS_DIR),
                          after=lambda: anomalies.upkeep(active_pool(FRAMEWORKS_DIR, archive)))
+    rotation = RotationService.at(output / "strategies" / "chinext-dividend-rotation", EtfRotationMarket())
     uvicorn.run(create_app(FRAMEWORKS_DIR, WEB_DIST, quotes, devices, archive, chat=chat,
                            earnings=Earnings(calendar, IgnoreStore(IGNORED_FILE)), anomalies=anomalies,
-                           poller=poller, valuation_provider=valuation_provider),
+                           poller=poller, valuation_provider=valuation_provider, rotation=rotation),
                 host=args.host, port=args.port, timeout_graceful_shutdown=5)
 
 
