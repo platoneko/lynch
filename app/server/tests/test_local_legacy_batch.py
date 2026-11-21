@@ -74,10 +74,29 @@ class LocalBatch(unittest.TestCase):
     def test_axis_supplement_attaches_only_to_historical_result(self):
         from eval.lib.axis_history import accept_history
         from eval.lib.axis_projection import project_axes
-        from eval.lib.test_axis_history_synthetic import payload
         self.service.accept_legacy_batch(self.auth, archive=self.archive, snapshots=self.snapshots, evidence=self.evidence)
-        axes = payload()
-        axes['axis_metadata']['example']['priced_mounts'] = ['FAKE.US']
+        axis_document = b'# _AXIS.example - Example scenario\n'
+        axis_digest = hashlib.sha256(axis_document).hexdigest()
+        axes = {
+            'complete': True,
+            'relationship_to_result': 'unverified',
+            'axis_metadata': {'example': {
+                'axis_id': 'example',
+                'logical_id': '_AXIS.example',
+                'axis_type': 'shared_scenario_axis',
+                'label': 'Example',
+                'title': 'Example scenario',
+                'role': 'priced',
+                'priced_mounts': ['FAKE.US'],
+                'reference_mounts': [],
+            }},
+            'source_versions': {'axis:example': axis_digest},
+            'sources': [{
+                'reference': 'axes/example.md',
+                'content_base64': base64.b64encode(axis_document).decode('ascii'),
+                'sha256': axis_digest,
+            }],
+        }
         with self.service._db() as con:
             version = self.service._version(con, 'FAKE.US')
             accept_history(con, 'FAKE.US', version, axes)
@@ -86,6 +105,8 @@ class LocalBatch(unittest.TestCase):
         projected = project_axes('FAKE.US', saved)
         self.assertEqual(projected['status'], 'known')
         self.assertEqual(projected['axes'][0]['name'], 'example')
+        self.assertTrue(projected['axes'][0]['historical_supplement'])
+        self.assertIsNone(self.service.current('NEXT.US')['axis_supplement'])
 
     def setUp(self):
         temp = TemporaryDirectory()
