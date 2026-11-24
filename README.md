@@ -96,6 +96,8 @@ Claude 原生与 app 四类研究模型的统一记录用 `claude-jsonl`，Codex
 
 首页「⋯ → 策略」显示创业板、红利低波 100 和现金的目标配比，比例按策略资金计算。除权日开盘前换算区间，收盘后生成下一交易日的建议。实际账户、成交和仓位由用户管理。
 
+首页「创业板 / 红利低波 100 调仓规则」和策略页「规则与回测」显示 [同一份策略文档](app/web/src/strategy/rotation-rules.md)。
+
 首次启动策略需要在 `output/strategies/chinext-dividend-rotation/history.json` 放入已核对的初始数据。文件包含 `replay_start`、`growth` 和 `dividend`（日期到前复权拼接价格的映射）、`sessions`（从拟合历史到已确认后续交易日）、`calendar_through`（交易日历已核验到的自然日）及可选的 `backtests`。每只 ETF 缺少上市前价格的区段用对应全收益指数回推。日更由服务端负责，并将已发布的建议与策略状态写入同目录的 `checkpoint.json`。备份和迁移时一并保留两份文件。
 
 ## 五档价带（项目统一）

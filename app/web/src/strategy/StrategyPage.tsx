@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { StrategyRules } from './StrategyRules';
 import { STAGE_LABELS, executionClose, executionText, percent, reasonText, targetLabels, waitingText,
   type Backtest, type BacktestMetrics, type CurrentBands, type StrategySnapshot, type Target } from './model';
 
@@ -142,13 +143,7 @@ export function StrategyPage({ snapshot, error, refreshing, onBack }: {
         )}
         <details className="strategy-panel">
           <summary>规则与回测</summary>
-          <ul className="strategy-rules">
-            <li>策略在月末拟合下月区间，按近 63 个交易日波动率的倒数分配常态仓位。每只 ETF 的常态仓位在 20% 至 80% 之间。</li>
-            <li>创业板触及上沿时退出。红利低波低于自身上沿时承接资金，否则留现金。创业板回落至中枢后先买回到常态仓位的四分之一，继续回落至中枢与下沿的几何中点后买回到常态仓位的一半，到下沿结束分批买回。</li>
-            <li>红利低波收盘达到自身上沿的 105% 时清仓，资金留现金，收盘跌回上沿以下后恢复配仓。两只 ETF 同时处于清仓状态时持有全现金。</li>
-            <li>创业板到下沿、下沿以下 10% 和 20% 时，目标分别至少为 45%、55% 和 65%。策略每隔至少五个交易日最多加一档，回到中枢时恢复常态。</li>
-            <li>策略用两只 ETF 的前复权日线判断，早期价格由全收益指数回推。除权日开盘前换算区间，收盘后判断，下一交易日收盘执行。</li>
-          </ul>
+          <StrategyRules />
           {backtests.map((backtest) => (
             <BacktestTable key={`${backtest.label}-${backtest.start}-${backtest.end}`} backtest={backtest} />
           ))}
