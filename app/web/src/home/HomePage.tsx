@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Menu, type MenuItem } from '../Menu';
 import type { Connection } from '../offline/connection';
 import { offlineLabel } from '../offline/label';
+import { StrategyRules } from '../strategy/StrategyRules';
 import { menuLabel as anomalyMenuLabel, pendingCount as anomalyPendingCount } from '../anomalies/model';
 import type { AnomalyList } from '../anomalies/types';
 import { menuLabel, pendingCount } from '../earnings/model';
@@ -165,6 +166,10 @@ export function HomePage({ catalog, filter, onFilter, onOpen, onOpenAxis,
       </header>
       {catalog.quote_error && <p className="banner-muted">{catalog.quote_error}</p>}
       <main className="cards">
+        <details className="strategy-panel">
+          <summary>创业板 / 红利低波 100 调仓规则</summary>
+          <StrategyRules />
+        </details>
         {rows.map((r) => (
           <TickerCard key={r.ticker} row={r} label={(id) => labels.get(id) ?? id} axes={axes}
             onOpen={onOpen} onOpenAxis={onOpenAxis} />
